@@ -25,6 +25,7 @@ COPY apps/worker/package.json apps/worker/
 COPY packages/ai/package.json packages/ai/
 COPY packages/connectors/package.json packages/connectors/
 COPY packages/db/package.json packages/db/
+COPY packages/resume/package.json packages/resume/
 COPY packages/settings/package.json packages/settings/
 COPY packages/shared/package.json packages/shared/
 
