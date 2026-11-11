@@ -34,6 +34,7 @@ Para parar: `Ctrl+C` no `pnpm dev` e `docker compose down` (os dados ficam no vo
 Crie um projeto no Supabase, copie a connection string em *Project Settings > Database* e coloque-a em `DATABASE_URL` no `.env`, no lugar da URL do Postgres local. Depois rode `pnpm db:migrate` (o `pnpm dev` também migra).
 
 - A string do pooler funciona, tanto a do *Transaction pooler* (porta 6543) quanto a do *Session pooler* (porta 5432): o app desliga os prepared statements.
+- A conexão é criptografada (TLS) por padrão sempre que o host do `DATABASE_URL` não é local, como o do Supabase; não é preciso acrescentar `sslmode` à URL. Hosts locais (`localhost`, `127.0.0.1`, `::1`, `host.docker.internal` ou um nome sem ponto, como o de um serviço do Docker) ficam sem TLS. Para um Postgres em rede privada que não fala TLS, acrescente `?sslmode=disable` à URL; para também validar o certificado do servidor, `?sslmode=verify-full`. Um `sslmode` explícito na URL (ou a variável `PGSSLMODE`) sempre prevalece.
 - Todas as tabelas têm RLS habilitado e nenhuma policy. A chave pública (`anon`) da API do Supabase não lê nem escreve nada; o app acessa o banco como dono das tabelas, pelo `DATABASE_URL`, e por isso não é afetado. Não adicione policies.
 - Nunca commite o `.env`. O `.gitignore` já o ignora.
 
@@ -49,9 +50,11 @@ Crie um projeto no Supabase, copie a connection string em *Project Settings > Da
 
 No `pnpm dev` o Vite repassa `/api` para a API. O worker nunca é chamado por HTTP: a API grava os pedidos de busca na tabela `runs` e o worker os lê.
 
-**Worker.** Ao iniciar, ele busca na hora se não houve nenhuma busca bem-sucedida na última hora; depois busca a cada hora cheia (10:00, 11:00, ...). Para cada perfil ativo há um run por fonte, executado com timeout de 60 s e uma nova tentativa. A fila é verificada a cada 5 s. Uma vaga que já existe (mesma URL, ou mesmo hash de empresa + título + local, mesmo vindo de outra fonte) é ignorada; as novas entram em **Descobertas**. Runs que ficaram "em execução" quando o worker caiu viram erro no próximo start.
+A API não envia cabeçalhos CORS: o web está sempre na mesma origem que ela (proxy do Vite em dev, a própria API quando serve o `apps/web/dist`), então outros sites abertos no navegador não conseguem ler as respostas. Requisições que alteram dados (`POST`, `PATCH`, `PUT`, `DELETE`) com um cabeçalho `Origin` de outro host são recusadas com 403; chamadas sem `Origin` (curl, scripts) passam.
 
-**Buscar agora.** O botão enfileira um run por fonte do perfil; o worker os pega em até 5 s. Enquanto isso o quadro, os contadores e a saúde das fontes são recarregados a cada 2 s por 30 s; depois voltam ao intervalo normal (15 s). Fontes do perfil que já têm um run na fila ou em andamento são puladas; se todas já têm, a interface avisa que há uma busca em andamento.
+**Worker.** Ao iniciar, ele busca na hora se não houve nenhuma busca bem-sucedida na última hora; depois busca a cada hora cheia (10:00, 11:00, ...). Para cada perfil ativo há um run por fonte, executado com timeout de 60 s e uma nova tentativa (a tentativa que estoura o tempo é cancelada antes de a seguinte começar). A fila é verificada a cada 5 s: cada fonte executa um run por vez (os runs da mesma fonte, de perfis diferentes, rodam em sequência), fontes diferentes rodam em paralelo, até 4 runs ao mesmo tempo, e os pedidos manuais passam na frente dos horários. Se o banco estiver fora do ar na hora cheia, a busca daquela hora é enfileirada assim que ele voltar. Uma vaga que já existe (mesma URL, ou mesmo hash de empresa + título + local, mesmo vindo de outra fonte) é ignorada; as novas entram no topo de **Descobertas**. Runs que ficaram "em execução" quando o worker caiu viram erro no próximo start; os que ficaram assim com o worker ainda rodando (a conexão com o banco caiu no meio do run) viram erro em cerca de 5 minutos, na própria verificação da fila, e a fonte volta a ser buscada.
+
+**Buscar agora.** O botão enfileira um run por fonte do perfil; o worker inicia em até 5 s os das fontes que estão livres. O de uma fonte que está no meio de outro run (a busca horária de outro perfil, por exemplo) espera esse run terminar, o que pode levar até cerca de 2 minutos, e o mesmo vale quando já há 4 runs em andamento. Enquanto isso o quadro, os contadores e a saúde das fontes são recarregados a cada 2 s por 30 s; depois voltam ao intervalo normal (15 s). Fontes do perfil que já têm um run na fila ou em andamento são puladas; se todas já têm, a interface avisa que há uma busca em andamento.
 
 **Filtros do perfil.** Uma vaga passa se alguma das stacks aparece no título, nas stacks detectadas ou na descrição; o nível é lido do título (títulos sem nível aparente passam); região e idade máxima também são aplicados. Nas fontes que buscam por palavra-chave (Gupy, Himalayas, LinkedIn e Indeed), só as **três primeiras stacks** do perfil viram termos de busca; sem stacks, a busca usa "developer" ("desenvolvedor" no Gupy). As demais fontes baixam o feed inteiro e o filtro é local.
 
@@ -77,7 +80,7 @@ schtasks /Query /TN KanbanVagasWorker   # conferir
 
 **Linux e macOS.** O comando só imprime as instruções do `pm2`; nada é instalado.
 
-O worker lê o `DATABASE_URL` do `.env` na raiz do repo, então crie o `.env` e rode `pnpm db:migrate` antes. Ele não migra o banco. Com o Postgres do Docker, o Docker precisa estar ligado (o container sobe sozinho com ele). Com o worker instalado, não é preciso o worker do `pnpm dev`; rodar os dois duplica as buscas (as vagas não duplicam, a deduplicação cobre).
+O worker lê o `DATABASE_URL` do `.env` na raiz do repo, então crie o `.env` e rode `pnpm db:migrate` antes. Ele não migra o banco. Com o Postgres do Docker, o Docker precisa estar ligado (o container sobe sozinho com ele); se o worker iniciar antes de o banco responder, como no logon do Windows com o Docker Desktop ainda subindo, ele tenta de novo por até 5 minutos antes de desistir. A API faz a mesma espera. Banco sem tabelas não é esperado: o erro pede `pnpm db:migrate` na hora. Com o worker instalado, não é preciso o worker do `pnpm dev`; rodar os dois duplica as buscas (as vagas não duplicam, a deduplicação cobre).
 
 ## Fontes
 
@@ -165,7 +168,7 @@ O workflow `.github/workflows/ci.yml` roda em push para a `main` e em pull reque
 O alvo é **um serviço** construído pelo `Dockerfile`. Um container roda a API (que também serve o web já buildado) e o worker, iniciados por `scripts/start-prod.mjs`.
 
 - **Banco:** defina a variável `DATABASE_URL` do serviço com a connection string do Postgres (Supabase, por exemplo). Ela nunca fica no repositório.
-- **Migrations:** o `start-prod.mjs` aplica as migrations pendentes antes de subir a API e o worker. API e worker não migram.
+- **Migrations:** o `start-prod.mjs` aplica as migrations pendentes antes de subir a API e o worker. API e worker não migram. Se o banco ainda não aceita conexões (redeploy junto com o banco), as migrations, a API e o worker esperam por ele até 5 minutos cada antes de sair com erro.
 - **Healthcheck:** `/api/stats`, que consulta o banco.
 - **Uma réplica só.** O worker e as migrations do start não foram feitos para rodar em paralelo; com mais de uma réplica as buscas rodariam em dobro e duas réplicas poderiam migrar ao mesmo tempo.
 - Se a API ou o worker cair, o container sai com erro e o Railway o reinicia.
