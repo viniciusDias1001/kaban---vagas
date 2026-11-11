@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  # Push só na main: os branches de PR já rodam pelo evento pull_request (evita execução dupla).
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# Um push novo no mesmo branch (ou PR) cancela a execução anterior, que ficou obsoleta.
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Typecheck, testes unitários e e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # Postgres real só para o e2e; os testes unitários usam PGlite (em memória) e fixtures, sem rede.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: kanban_e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d kanban_e2e"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # Versão do pnpm vem do campo "packageManager" do package.json.
+      - name: Instalar pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Instalar Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Instalar dependências
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Testes unitários
+        run: pnpm test
+        timeout-minutes: 10
+
+      # Zod no bundle do navegador viola a CSP da API; o web importa de @kv/shared/client (sem Zod).
+      - name: Build do web sem Zod
+        run: |
+          pnpm --filter @kv/web build
+          if grep -rlE 'ZodError|\$ZodType' apps/web/dist/assets; then echo 'Zod entrou no bundle do web' >&2; exit 1; fi
+
+      - name: Instalar Chromium do Playwright
+        run: pnpm --filter @kv/web exec playwright install --with-deps chromium
+        timeout-minutes: 10
+
+      - name: Testes e2e
+        run: pnpm e2e
+        timeout-minutes: 10
+        env:
+          # O nome do banco precisa terminar em _e2e ou _test (o preparo do e2e apaga os dados).
+          E2E_DATABASE_URL: postgres://postgres:postgres@localhost:5432/kanban_e2e
+
+      - name: Guardar relatório do Playwright
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report
+          path: |
+            apps/web/playwright-report
+            apps/web/test-results
+          if-no-files-found: ignore
+          retention-days: 7

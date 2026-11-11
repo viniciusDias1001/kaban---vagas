@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600" width="800" height="600">
+  <title>Quadro vazio</title>
+  <!-- Empty board: four quiet columns with dashed slots waiting for cards, while a search
+       lens drifts over the last column and brings the first job card into focus.
+       Transparent background, tuned for the #0b0d12 page and display at 192 px tall,
+       so strokes are >= 3 units and nothing touches the canvas edge. -->
+  <defs>
+    <radialGradient id="halo">
+      <stop offset="0" stop-color="#7c9cff" stop-opacity=".16"/>
+      <stop offset=".5" stop-color="#7c9cff" stop-opacity=".06"/>
+      <stop offset="1" stop-color="#7c9cff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="board-fill" x1="0" y1="118" x2="0" y2="468" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#181d29"/>
+      <stop offset="1" stop-color="#11151d"/>
+    </linearGradient>
+    <linearGradient id="board-edge" x1="0" y1="118" x2="0" y2="468" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#38425a"/>
+      <stop offset="1" stop-color="#20263a"/>
+    </linearGradient>
+    <linearGradient id="ring" x1="470" y1="190" x2="680" y2="400" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#b3c4ff"/>
+      <stop offset=".5" stop-color="#7c9cff"/>
+      <stop offset="1" stop-color="#5670e0"/>
+    </linearGradient>
+    <linearGradient id="handle-fill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3b4664"/>
+      <stop offset="1" stop-color="#1c2230"/>
+    </linearGradient>
+    <radialGradient id="glass" cx="572" cy="296" r="92" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#151b29"/>
+      <stop offset="1" stop-color="#1b2339"/>
+    </radialGradient>
+    <clipPath id="lens-clip">
+      <circle cx="572" cy="296" r="92"/>
+    </clipPath>
+    <filter id="lens-shadow" x="-30%" y="-30%" width="160%" height="170%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="14" stdDeviation="14" flood-color="#04060a" flood-opacity=".75"/>
+    </filter>
+    <filter id="soft" x="-50%" y="-50%" width="200%" height="200%" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="12"/>
+    </filter>
+  </defs>
+
+  <ellipse id="ambient" cx="400" cy="300" rx="380" ry="280" fill="url(#halo)"/>
+
+  <g id="board">
+    <rect x="56" y="118" width="540" height="350" rx="30" fill="url(#board-fill)" stroke="url(#board-edge)" stroke-width="3"/>
+    <g id="columns" fill="#1c2230" fill-opacity=".85">
+      <rect x="80" y="142" width="111" height="302" rx="18"/>
+      <rect x="207" y="142" width="111" height="302" rx="18"/>
+      <rect x="334" y="142" width="111" height="302" rx="18"/>
+      <rect x="461" y="142" width="111" height="302" rx="18"/>
+    </g>
+    <g id="column-heads">
+      <g fill="#3d4862">
+        <circle cx="102" cy="168" r="7"/>
+        <circle cx="229" cy="168" r="7"/>
+        <circle cx="356" cy="168" r="7"/>
+        <circle cx="483" cy="168" r="7"/>
+      </g>
+      <g fill="#2d3549">
+        <rect x="117" y="163" width="52" height="10" rx="5"/>
+        <rect x="244" y="163" width="40" height="10" rx="5"/>
+        <rect x="371" y="163" width="46" height="10" rx="5"/>
+        <rect x="498" y="163" width="36" height="10" rx="5"/>
+      </g>
+    </g>
+    <g id="slots" fill="none" stroke="#38425a" stroke-width="4" stroke-dasharray="12 9" stroke-linecap="round">
+      <rect x="94" y="194" width="83" height="62" rx="14"/>
+      <rect x="94" y="270" width="83" height="62" rx="14"/>
+      <rect x="221" y="194" width="83" height="62" rx="14"/>
+      <rect x="348" y="194" width="83" height="62" rx="14"/>
+    </g>
+  </g>
+
+  <g id="lens" filter="url(#lens-shadow)">
+    <g id="lens-handle" transform="rotate(45 572 296)">
+      <rect x="676" y="281" width="104" height="30" rx="15" fill="url(#handle-fill)"/>
+      <rect x="672" y="283" width="26" height="26" rx="7" fill="#46537a"/>
+    </g>
+    <circle id="glass" cx="572" cy="296" r="92" fill="url(#glass)"/>
+    <g id="found-card" clip-path="url(#lens-clip)">
+      <ellipse cx="572" cy="300" rx="84" ry="54" fill="#7c9cff" opacity=".26" filter="url(#soft)"/>
+      <rect x="500" y="252" width="144" height="92" rx="16" fill="#1f2638" stroke="#7c9cff" stroke-width="3.5"/>
+      <circle cx="530" cy="283" r="13" fill="#7c9cff" fill-opacity=".38"/>
+      <rect x="553" y="274" width="70" height="10" rx="5" fill="#d3dbee" fill-opacity=".8"/>
+      <rect x="553" y="291" width="44" height="8" rx="4" fill="#8b95a9" fill-opacity=".65"/>
+      <rect x="516" y="316" width="36" height="11" rx="5.5" fill="#7c9cff" fill-opacity=".5"/>
+      <circle cx="626" cy="321" r="6" fill="#4ade80"/>
+    </g>
+    <circle cx="572" cy="296" r="89" fill="none" stroke="#7c9cff" stroke-opacity=".14" stroke-width="6"/>
+    <path id="glint" d="M509.6 239.8A84 84 0 0 1 560.3 212.8" fill="none" stroke="#ffffff" stroke-opacity=".32" stroke-width="5" stroke-linecap="round"/>
+    <circle id="ring" cx="572" cy="296" r="100" fill="none" stroke="url(#ring)" stroke-width="16"/>
+  </g>
+
+  <g id="sparks" fill="#a9bdff">
+    <path d="M690 160l4 11 11 4-11 4-4 11-4-11-11-4 11-4z" opacity=".85"/>
+    <circle cx="722" cy="222" r="4" opacity=".5"/>
+    <path d="M452 82l3 8 8 3-8 3-3 8-3-8-8-3 8-3z" opacity=".4"/>
+  </g>
+</svg>

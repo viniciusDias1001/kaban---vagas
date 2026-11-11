@@ -1,0 +1,6 @@
+node_modules/
+dist/
+worker.cmd
+test-results/
+playwright-report/
+.env

@@ -1,0 +1,29 @@
+{
+  "name": "kanban-vagas",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.30.3",
+  "scripts": {
+    "dev": "pnpm db:migrate && concurrently -n api,worker,web -c blue,magenta,green \"pnpm --filter @kv/api dev\" \"pnpm --filter @kv/worker dev\" \"pnpm --filter @kv/web dev\"",
+    "db:migrate": "pnpm --filter @kv/db migrate",
+    "db:generate": "pnpm --filter @kv/db generate",
+    "test": "vitest run",
+    "typecheck": "pnpm -r exec tsc --noEmit",
+    "e2e": "pnpm --filter @kv/web exec playwright test",
+    "start:prod": "node scripts/start-prod.mjs",
+    "worker:install": "node scripts/install-worker.mjs"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "concurrently": "^10.0.7",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
+  }
+}

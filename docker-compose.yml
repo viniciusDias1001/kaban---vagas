@@ -1,0 +1,25 @@
+# Postgres local para desenvolvimento. Credenciais iguais às do .env.example — não use em produção.
+# Porta 5433 no host (não a 5432 padrão) para não colidir com um Postgres instalado na máquina.
+#   docker compose up -d      sobe o banco
+#   pnpm db:migrate           cria/atualiza as tabelas
+#   docker compose down       para (os dados ficam no volume); `down -v` apaga os dados
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: kanban
+    ports:
+      - "5433:5432"
+    volumes:
+      - kanban_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d kanban"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  kanban_pgdata:
