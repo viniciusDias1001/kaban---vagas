@@ -8,6 +8,7 @@ import { LIMITS } from '@kv/shared';
 import { createAiContext, type AiContextOptions } from './ai-context';
 import { aiRoutes } from './routes/ai';
 import { jobAiRoutes } from './routes/job-ai';
+import { tailoredRoutes } from './routes/tailored';
 import { jobRoutes } from './routes/jobs';
 import { metaRoutes } from './routes/meta';
 import { profileRoutes } from './routes/profiles';
@@ -128,6 +129,7 @@ export function buildApp(db: Db, opts: AppOptions = {}) {
     metaRoutes(scope, db);
     aiRoutes(scope, db, ctx);
     jobAiRoutes(scope, db, ctx);
+    tailoredRoutes(scope, db, ctx);
   };
   app.register(routes);
   app.register(routes, { prefix: API_PREFIX });
