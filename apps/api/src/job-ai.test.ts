@@ -76,8 +76,7 @@ describe('moving a job to selecionadas', () => {
     expect(await taskTypes()).toEqual(['tier1:queued', 'tier2:queued']);
   });
 
-  // habilitar na Task 20 (PATCH /settings)
-  it.skip('respects the "automatic analysis" setting: off means the move queues nothing, an explicit request still does', async () => {
+  it('respects the "automatic analysis" setting: off means the move queues nothing, an explicit request still does', async () => {
     await saveProfile(db, 'pt-BR', SAMPLE_PROFILE, 'extraido');
     const job = await seedJob(db);
     const off = await app.inject({ method: 'PATCH', url: '/settings', payload: { tier2Auto: false } });
