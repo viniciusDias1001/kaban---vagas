@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 const CATCH_UP_EVERY_MS = 2_000;
 const CATCH_UP_FOR_MS = 30_000;
-const KEYS = ['jobs', 'stats', 'health'] as const;
+const KEYS = ['jobs', 'stats', 'health', 'jobs-ai'] as const;
 
 /**
  * Depois de "Buscar agora", o worker leva alguns segundos para pegar a fila e as vagas novas só apareceriam

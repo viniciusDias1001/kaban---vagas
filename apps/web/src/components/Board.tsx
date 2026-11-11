@@ -5,16 +5,18 @@ import {
   type DropAnimation, type UniqueIdentifier,
 } from '@dnd-kit/core';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { CloudOff, LoaderCircle, RotateCw, Rows2, Rows4, Search, X } from 'lucide-react';
+import { ArrowDownWideNarrow, CloudOff, LoaderCircle, RotateCw, Rows2, Rows4, Search, X } from 'lucide-react';
 import { motion, useReducedMotion } from 'motion/react';
 import { memo, useCallback, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { COLUMNS, COLUMN_LABELS, LIMITS, type Column, type JobListItemDto } from '@kv/shared/client';
 import { api } from '../api';
-import { LAYOUT_ANIMATED, PAGE_SIZE, countJobs, filterByColumn, groupByColumn, normalizeText, remainingAfter, type ByColumn } from '../lib/board';
+import type { ColumnSort, ScoreMap } from '../lib/ai';
+import { LAYOUT_ANIMATED, PAGE_SIZE, countJobs, displayColumn, filterByColumn, groupByColumn, normalizeText, remainingAfter, type ByColumn } from '../lib/board';
 import { COLUMN_COLOR } from '../lib/columns';
 import { useDebouncedValue, useScrollEdges } from '../lib/hooks';
 import { spring, springSnap } from '../lib/motion';
 import { cn } from '../lib/utils';
+import { useAiStatus, useJobScores } from '../useAi';
 import { JOBS_KEY, MOVE_KEY, useMoveJob } from '../useMoveJob';
 import { JobCard, JobCardBody } from './JobCard';
 import { StatsBar } from './StatsBar';
@@ -36,6 +38,19 @@ function readDensity(): Density {
     return 'comfortable';
   }
 }
+
+type SortByColumn = Record<Column, ColumnSort>;
+const SORT_KEY = 'kv.board.sort';
+const BOARD_ORDER = Object.fromEntries(COLUMNS.map((c) => [c, 'board'])) as SortByColumn;
+function readSort(): SortByColumn {
+  try {
+    const stored = JSON.parse(localStorage.getItem(SORT_KEY) ?? '{}') as Partial<Record<Column, unknown>>;
+    return Object.fromEntries(COLUMNS.map((c) => [c, stored?.[c] === 'score' ? 'score' : 'board'])) as SortByColumn;
+  } catch {
+    return BOARD_ORDER;
+  }
+}
+const SORT_HINT = 'Com a ordem por nota ligada, arrastar muda só a coluna.';
 
 const transformOf = (t: { x: number; y: number; scaleX: number; scaleY: number }, scale = 1) =>
   `translate3d(${t.x}px, ${t.y}px, 0) scaleX(${t.scaleX * scale}) scaleY(${t.scaleY * scale})`;
@@ -95,14 +110,23 @@ interface ColumnProps {
   onOpen: (id: number) => void;
   compact: boolean;
   isTarget: boolean;
+  /** Notas por vaga (vazio sem IA configurada). */
+  scores: ScoreMap;
+  sort: ColumnSort;
+  /** A IA está configurada e existe ao menos uma nota: o botão de ordenar aparece. */
+  canSort: boolean;
+  onToggleSort: (column: Column) => void;
 }
 
-const ColumnView = memo(function ColumnView({ column, index, jobs, total, filtered, onOpen, compact, isTarget }: ColumnProps) {
+const ColumnView = memo(function ColumnView({ column, index, jobs, total, filtered, onOpen, compact, isTarget, scores, sort, canSort, onToggleSort }: ColumnProps) {
   const { setNodeRef } = useDroppable({ id: `col:${column}` });
   // Só uma "página" de cards vai para o DOM; o resto entra em passos com "Mostrar mais". Soltar um card na
   // coluna continua valendo o fim de verdade: a posição é calculada sobre a coluna completa (useMoveJob).
   const [limit, setLimit] = useState(PAGE_SIZE);
-  const visible = useMemo(() => (jobs.length > limit ? jobs.slice(0, limit) : jobs), [jobs, limit]);
+  // Ordem de exibição: depois do filtro de texto, antes da paginação. A posição gravada não muda.
+  const byScore = canSort && sort === 'score';
+  const shown = useMemo(() => displayColumn(jobs, byScore ? 'score' : 'board', scores), [jobs, byScore, scores]);
+  const visible = useMemo(() => (shown.length > limit ? shown.slice(0, limit) : shown), [shown, limit]);
   const order = useMemo(() => visible.map((j) => j.id).join(','), [visible]);
   const remaining = remainingAfter(jobs.length, limit);
   const label = COLUMN_LABELS[column];
@@ -122,7 +146,22 @@ const ColumnView = memo(function ColumnView({ column, index, jobs, total, filter
       <header className="flex items-center gap-2.5 px-3.5 pb-2.5 pt-3">
         <span aria-hidden className="kv-dot" />
         <h2 className="text-sm font-semibold text-ink">{label}</h2>
-        <span className="kv-count ml-auto">
+        {canSort && (
+          <Tooltip label={byScore ? `Ordenado por nota. ${SORT_HINT}` : `Ordenar por nota. ${SORT_HINT}`}>
+            <button
+              type="button" data-testid={`sort-${column}`} aria-pressed={byScore} aria-label={`Ordenar ${label} por nota`}
+              onClick={() => onToggleSort(column)}
+              className={cn(
+                '-my-1 ml-auto grid size-7 shrink-0 cursor-pointer place-items-center rounded-lg transition-colors duration-150 active:scale-95',
+                'focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-accent/45',
+                byScore ? 'bg-(--col)/16 text-ink ring-1 ring-inset ring-(color:--col)/40' : 'text-faint hover:bg-surface-3 hover:text-ink',
+              )}
+            >
+              <ArrowDownWideNarrow aria-hidden className="size-3.5" />
+            </button>
+          </Tooltip>
+        )}
+        <span className={cn('kv-count', !canSort && 'ml-auto')}>
           <span aria-hidden>{filtered ? `${jobs.length}/${total}` : total}</span>
           <span className="sr-only">
             {filtered ? `${jobs.length} de ${total} vagas com o filtro` : `${total} ${plural(total, 'vaga', 'vagas')}`}
@@ -134,7 +173,7 @@ const ColumnView = memo(function ColumnView({ column, index, jobs, total, filter
         {visible.map((j, i) => (
           <JobCard
             key={j.id} job={j} onOpen={onOpen} order={i < LAYOUT_ANIMATED ? order : ''} index={i} compact={compact}
-            animateLayout={i < LAYOUT_ANIMATED}
+            animateLayout={i < LAYOUT_ANIMATED} ai={scores.get(j.id)} insertable={!byScore}
           />
         ))}
         {remaining > 0 && (
@@ -217,7 +256,23 @@ export const Board = memo(function Board({ onOpen }: { onOpen: (id: number) => v
   });
   const jobs = data ?? NO_JOBS;
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
-  const { moveTo } = useMoveJob();
+  const { moveTo, moveToColumn } = useMoveJob();
+  // Notas da IA: chegam por uma consulta própria (GET /jobs/ai) e são juntadas às vagas pelo id.
+  const aiConfigured = useAiStatus().data?.configured === true;
+  const { scores } = useJobScores(aiConfigured);
+  const canSort = aiConfigured && scores.size > 0;
+  const [sort, setSort] = useState<SortByColumn>(readSort);
+  const toggleSort = useCallback((column: Column) => {
+    setSort((prev) => {
+      const next = { ...prev, [column]: prev[column] === 'score' ? 'board' : 'score' } as SortByColumn;
+      try {
+        localStorage.setItem(SORT_KEY, JSON.stringify(next));
+      } catch {
+        // sem armazenamento local: a escolha vale só para esta sessão
+      }
+      return next;
+    });
+  }, []);
 
   // Coluna real e completa, na ordem do quadro. Colunas que não mudaram mantêm o mesmo array entre
   // refetches (e a ColumnView delas, memoizada, não re-renderiza).
@@ -294,6 +349,14 @@ export const Board = memo(function Board({ onOpen }: { onOpen: (id: number) => v
       const target = byId.get(beforeId);
       if (!target) return;
       column = target.column;
+    }
+    // Coluna ordenada por nota: a ordem exibida não é a das posições gravadas, então soltar ali muda só a
+    // coluna (sem posição calculada); soltar na própria coluna não faz nada.
+    if (canSort && sort[column] === 'score') {
+      if (byId.get(id)?.column === column) return;
+      setSettled(true);
+      moveToColumn(id, column);
+      return;
     }
     setSettled(true);
     // Antes do card visível `beforeId` na ordem real, ou no fim de verdade da coluna — mesmo com filtro
@@ -417,6 +480,7 @@ export const Board = memo(function Board({ onOpen }: { onOpen: (id: number) => v
                 <ColumnView
                   key={c} column={c} index={i} jobs={matched[c]} total={byColumn[c].length} filtered={hasFilter}
                   onOpen={onOpen} compact={compact} isTarget={overColumn === c}
+                  scores={scores} sort={sort[c]} canSort={canSort} onToggleSort={toggleSort}
                 />
               ))}
             </motion.div>
@@ -433,7 +497,7 @@ export const Board = memo(function Board({ onOpen }: { onOpen: (id: number) => v
                 transition={springSnap}
                 className="job-card job-card--lifted"
               >
-                <JobCardBody job={active} compact={compact} />
+                <JobCardBody job={active} compact={compact} ai={scores.get(active.id)} />
               </motion.article>
             )}
           </DragOverlay>
