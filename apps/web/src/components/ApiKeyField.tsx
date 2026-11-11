@@ -57,6 +57,8 @@ interface ApiKeyFieldProps {
   dto: SettingsDto;
   /** É o provedor escolhido no formulário: o bloco vem primeiro e destacado. */
   selected: boolean;
+  /** É o provedor em vigor (o SALVO, não o que está escolhido no formulário e ainda não foi salvo). */
+  inUse: boolean;
   defaultOpen: boolean;
 }
 
@@ -65,7 +67,7 @@ interface ApiKeyFieldProps {
  * entra em estado React), é lido uma vez no envio e apagado em seguida. Depois de gravada, a tela só
  * conhece o que a API devolve: os quatro últimos caracteres e a data.
  */
-export function ApiKeyField({ provider, meta, dto, selected, defaultOpen }: ApiKeyFieldProps) {
+export function ApiKeyField({ provider, meta, dto, selected, inUse, defaultOpen }: ApiKeyFieldProps) {
   const qc = useQueryClient();
   const label = AI_PROVIDER_LABELS[provider];
   const view = keyView(meta, dto.ai.canStoreKeys);
@@ -147,7 +149,10 @@ export function ApiKeyField({ provider, meta, dto, selected, defaultOpen }: ApiK
       <label htmlFor={inputId} className="sr-only">Chave de API de {label}</label>
       <div className="flex flex-wrap items-center gap-2">
         <Input
-          ref={input} id={inputId} type="password" autoComplete="off" spellCheck={false} disabled={disabled || busy}
+          // Não é uma senha de login: `new-password` e os atributos dos gerenciadores (1Password, LastPass, Bitwarden)
+          // evitam que o navegador ou a extensão ofereça guardar a chave ou preencha o campo com outra coisa.
+          ref={input} id={inputId} type="password" autoComplete="new-password" data-1p-ignore="true" data-lpignore="true" data-bwignore="true"
+          spellCheck={false} autoCapitalize="off" autoCorrect="off" disabled={disabled || busy}
           data-testid={`key-input-${provider}`} maxLength={SETTINGS_LIMITS.apiKeyMax}
           placeholder={disabled ? 'Indisponível sem APP_SECRET' : 'Cole a chave de API aqui'}
           onChange={() => problem && setProblem(null)}
@@ -266,7 +271,7 @@ export function ApiKeyField({ provider, meta, dto, selected, defaultOpen }: ApiK
         ) : (
           <p>
             Os recursos de IA que usam {label} (notas das vagas, análises e currículos adaptados) param de funcionar até outra chave ser gravada.
-            {!selected && ` ${label} não é o provedor em uso agora.`}
+            {!inUse && ` ${label} não é o provedor em uso agora.`}
           </p>
         )}
       </ConfirmDialog>
