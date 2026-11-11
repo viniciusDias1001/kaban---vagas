@@ -1,5 +1,5 @@
 import { mkdirSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
@@ -66,11 +66,20 @@ CREATE TABLE IF NOT EXISTS runs (
   finished_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS runs_status_idx ON runs (status);
+CREATE UNIQUE INDEX IF NOT EXISTS runs_pending_idx ON runs (profile_id, source) WHERE status IN ('queued','running');
 `;
 
+const REPO_ROOT = resolve(fileURLToPath(new URL('../../../', import.meta.url)));
+
+/**
+ * DB_PATH absoluto e ':memory:' passam direto; relativo é resolvido a partir da raiz do repo
+ * (não do cwd), para API e worker — que rodam com cwds diferentes — abrirem o mesmo arquivo.
+ */
 export function defaultDbPath(): string {
-  if (process.env.DB_PATH) return process.env.DB_PATH;
-  return resolve(fileURLToPath(new URL('../../../data/kanban.db', import.meta.url)));
+  const env = process.env.DB_PATH;
+  if (!env) return resolve(REPO_ROOT, 'data/kanban.db');
+  if (env === ':memory:' || isAbsolute(env)) return env;
+  return resolve(REPO_ROOT, env);
 }
 
 export function openDb(path: string = defaultDbPath()) {
