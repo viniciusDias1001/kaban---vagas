@@ -4,6 +4,7 @@ import type {
   TailoredStateDto, TestConnectionDto,
 } from '@kv/shared/client';
 import { ApiError, NETWORK_ERROR, errorMessage } from './apiError';
+import { parsePdfFailure, type PdfFailure } from './lib/ai';
 
 /**
  * Chamadas das rotas de IA. Mesmo tratamento de erro do cliente do Core (`ApiError` + `errorMessage`).
@@ -64,4 +65,44 @@ export const aiApi = {
 
 /** Links de download: mesma origem, abertos pelo navegador (não passam pelo `fetch`). */
 export const tailoredPdfUrl = (jobId: number) => `/api/jobs/${jobId}/tailored.pdf`;
+
+/**
+ * Confere se o PDF sairia, ANTES de mandar o navegador baixá-lo. A rota pode recusar (409 `verification_failed`,
+ * 409 `profile_missing`, 422 `pdf_unavailable`), e um link de download que recebe um erro salvaria o JSON do
+ * erro como se fosse o arquivo, ou tiraria o usuário da página. Então: um `fetch` na mesma origem (permitido
+ * pela CSP, `connect-src 'self'`) lê a resposta; se deu certo, quem chama dispara o download pela mesma URL
+ * (`startDownload`), e é o navegador que grava o arquivo, com o nome do `content-disposition`.
+ *
+ * De propósito sem `blob:`: a CSP das páginas (apps/api/src/app.ts) não cita `blob:` em diretiva nenhuma, e
+ * salvar por um object URL dependeria de como cada navegador trata isso. O custo é o servidor desenhar o PDF
+ * duas vezes (o currículo é pequeno; a rota já desenha um de cada vez).
+ *
+ * Devolve null quando o PDF está disponível, ou a falha pronta para a tela.
+ */
+export async function checkTailoredPdf(jobId: number): Promise<PdfFailure | null> {
+  let res: Response;
+  try {
+    res = await fetch(tailoredPdfUrl(jobId), { cache: 'no-store' });
+  } catch {
+    return parsePdfFailure(0, '');
+  }
+  if (res.ok) {
+    // Lê até o fim: abandonar o corpo pela metade aparece como requisição abortada no navegador.
+    await res.arrayBuffer().catch(() => undefined);
+    return null;
+  }
+  return parsePdfFailure(res.status, await res.text().catch(() => ''));
+}
+
+/** Manda o navegador baixar uma URL da mesma origem, sem sair da página (um link `download` clicado em código). */
+export function startDownload(url: string): void {
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = '';
+  link.rel = 'noopener';
+  link.hidden = true;
+  document.body.append(link);
+  link.click();
+  link.remove();
+}
 export const resumeFileUrl = (lang: ResumeLang) => `/api/ai/resumes/${lang}/file`;

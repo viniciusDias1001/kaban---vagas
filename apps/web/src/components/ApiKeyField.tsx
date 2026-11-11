@@ -102,6 +102,11 @@ export function ApiKeyField({ provider, meta, dto, selected, defaultOpen }: ApiK
           setReplacing(false);
           showToast(`Chave de ${label} gravada.`, 'info');
         },
+        // A recusa da API (400 para chave vazia ou inválida, 409 sem APP_SECRET) aparece junto do campo.
+        onError: (e) => {
+          setProblem(e.message);
+          input.current?.focus();
+        },
         onSettled: () => {
           if (input.current) input.current.value = '';
           // Solta as variáveis da mutação (elas levam a chave) do cache do React Query.
@@ -156,7 +161,7 @@ export function ApiKeyField({ provider, meta, dto, selected, defaultOpen }: ApiK
           </Button>
         )}
       </div>
-      {problem && <p id={problemId} role="alert" className="text-xs text-bad">{problem}</p>}
+      {problem && <p id={problemId} role="alert" data-testid={`key-problem-${provider}`} className="break-words text-xs leading-snug text-bad">{problem}</p>}
     </div>
   );
 

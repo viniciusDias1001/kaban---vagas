@@ -17,6 +17,8 @@ export const AI_KEYS = {
 };
 
 const PENDING_TASK = new Set(['queued', 'running']);
+/** Mutação cujo erro a própria tela mostra junto do campo: o `MutationCache` (main.tsx) não abre o aviso flutuante. */
+const INLINE_ERROR = { inlineError: true } as const;
 
 /** Provedor, modelos e orçamento do dia. Toda área de IA consulta isto para saber se mostra o aviso de configuração. */
 export function useAiStatus() {
@@ -39,6 +41,8 @@ export function useProfileOverview() {
 export function useUploadResume() {
   const qc = useQueryClient();
   return useMutation({
+    // O erro (arquivo ilegível, currículo longo demais...) aparece no próprio cartão do idioma.
+    meta: INLINE_ERROR,
     mutationFn: (v: { lang: ResumeLang; file: File }) => aiApi.uploadResume(v.lang, v.file),
     onSuccess: () => qc.invalidateQueries({ queryKey: AI_KEYS.profile }),
   });
@@ -108,7 +112,13 @@ export function useSaveSettings() {
  */
 export function useSaveApiKey() {
   const refresh = useSettingsRefresh();
-  return useMutation({ gcTime: 0, mutationFn: (v: { provider: AiProviderId; key: string }) => aiApi.saveApiKey(v.provider, v.key), onSuccess: refresh });
+  return useMutation({
+    gcTime: 0,
+    // O erro (chave vazia, gravação bloqueada...) aparece junto do campo da chave.
+    meta: INLINE_ERROR,
+    mutationFn: (v: { provider: AiProviderId; key: string }) => aiApi.saveApiKey(v.provider, v.key),
+    onSuccess: refresh,
+  });
 }
 
 export function useDeleteApiKey() {

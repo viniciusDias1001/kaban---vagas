@@ -6,7 +6,7 @@ import {
   type ResumeMetaDto,
 } from '@kv/shared/client';
 import { resumeFileUrl } from '../aiApi';
-import { layerMessage, resumeFileProblem } from '../lib/ai';
+import { layerMessage, resumeFileProblem, retryNote, taskErrorText } from '../lib/ai';
 import { spring } from '../lib/motion';
 import { cn } from '../lib/utils';
 import { useAiStatus, useConfirmTask, useProfileOverview, useTranslateProfile, useUploadResume } from '../useAi';
@@ -73,14 +73,16 @@ function LangCard({ lang, resume, profile, other, task, canUpload, index }: Lang
     setProblem(found);
     if (found) return;
     if (profile?.origin === 'editado' && !window.confirm('Enviar outro arquivo substitui o perfil que você editou.')) return;
-    upload.mutate({ lang, file });
+    // A recusa da API (arquivo ilegível, currículo longo demais, tipo errado) aparece aqui, junto do botão. O
+    // currículo e o perfil que já existiam não mudam: a consulta só é refeita quando o envio dá certo.
+    upload.mutate({ lang, file }, { onError: (e) => setProblem(e.message) });
   }
 
   let state: ReactNode = null;
   if (upload.isPending) {
     state = <Progress>Enviando o arquivo…</Progress>;
   } else if (task && isActive(task)) {
-    state = <Progress>{translating ? 'Traduzindo o perfil...' : 'Lendo o currículo...'} <span className="text-faint">{task.attempts > 0 ? layerMessage('queued', task) : ''}</span></Progress>;
+    state = <Progress>{translating ? 'Traduzindo o perfil...' : 'Lendo o currículo...'} <span className="text-faint">{retryNote(task)}</span></Progress>;
   } else if (task?.status === 'blocked_budget') {
     state = (
       <Notice tone="warn" title={layerMessage('blocked_budget', task)} action={
@@ -96,7 +98,7 @@ function LangCard({ lang, resume, profile, other, task, canUpload, index }: Lang
           <RotateCw aria-hidden /> Tentar de novo
         </Button>
       }>
-        <p className="break-words">{task.error ?? 'Erro sem detalhe.'}</p>
+        <p data-testid="task-error" className="break-words">{taskErrorText(task.error)}</p>
       </Notice>
     );
   }
@@ -164,7 +166,7 @@ function LangCard({ lang, resume, profile, other, task, canUpload, index }: Lang
         )}
         <span className="text-xs text-faint">PDF ou DOCX, até 5 MB.</span>
       </div>
-      {problem && <p id={problemId} role="alert" className="mt-2 text-xs text-bad">{problem}</p>}
+      {problem && <p id={problemId} role="alert" data-testid={`resume-problem-${lang}`} className="mt-2 max-w-prose break-words text-xs leading-snug text-bad">{problem}</p>}
 
       <div data-testid={`profile-task-${lang}`} aria-live="polite" className={cn(state && 'mt-3.5')}>{state}</div>
     </motion.section>

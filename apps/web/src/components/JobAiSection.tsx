@@ -1,9 +1,9 @@
 import type { UseQueryResult } from '@tanstack/react-query';
-import { CircleCheck, CircleHelp, FileText, GraduationCap, Info, LoaderCircle, RotateCw, ShieldAlert, Sparkles, Target, WandSparkles } from 'lucide-react';
+import { CircleCheck, CircleHelp, FileText, GraduationCap, Info, LoaderCircle, RotateCw, Sparkles, Target, WandSparkles } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useEffect, useId, useState, type ReactNode } from 'react';
 import type { AiStatusDto, JobAiDetailDto } from '@kv/shared/client';
-import { isPending, layerMessage } from '../lib/ai';
+import { isPending, layerMessage, taskErrorText } from '../lib/ai';
 import { spring } from '../lib/motion';
 import { cn } from '../lib/utils';
 import { useAnalyzeJob, useConfirmTask, useProfileOverview, useRequestTailored, useTailored } from '../useAi';
@@ -18,7 +18,6 @@ import { Skeleton } from './ui/skeleton';
 const EYEBROW = 'text-[11px] font-semibold uppercase tracking-[0.08em] text-faint';
 /** Com a análise automática ligada, o pedido sai sozinho ao abrir; o botão manual só aparece se nada acontecer. */
 const MANUAL_FALLBACK_MS = 4_000;
-const VERIFIER_PREFIX = 'verificação de não invenção bloqueou o resultado:';
 
 function Working({ children }: { children: ReactNode }) {
   return (
@@ -78,21 +77,12 @@ function AnalysisSkeleton() {
   );
 }
 
-/** Texto de erro de uma tarefa (vem do servidor/IA): só texto, uma linha por "; ". */
+/**
+ * Texto de erro de uma tarefa (`ai_tasks.error`, escrito pelo worker): entra só como texto, inteiro. Nada é
+ * presumido sobre o formato dele (prefixo, separadores, quantas tentativas houve).
+ */
 function TaskError({ error }: { error: string | null | undefined }) {
-  if (!error) return <p>Falhou.</p>;
-  const blocked = error.startsWith(VERIFIER_PREFIX);
-  const lines = (blocked ? error.slice(VERIFIER_PREFIX.length) : error).split('; ').map((l) => l.trim()).filter(Boolean);
-  return (
-    <>
-      <p>{blocked ? `Falhou: ${VERIFIER_PREFIX}` : lines.length > 1 ? 'Falhou:' : `Falhou: ${lines[0]}`}</p>
-      {(blocked || lines.length > 1) && (
-        <ul className="mt-1 space-y-1">
-          {lines.map((line, i) => <li key={i} className="break-words">{line}</li>)}
-        </ul>
-      )}
-    </>
-  );
+  return <p data-testid="task-error" className="break-words">{taskErrorText(error)}</p>;
 }
 
 function Tailored({ jobId }: { jobId: number }) {
@@ -140,7 +130,7 @@ function Tailored({ jobId }: { jobId: number }) {
           </Notice>
         )}
         {data && state === 'error' && (
-          <Notice tone="bad" icon={data.task?.error?.startsWith(VERIFIER_PREFIX) ? <ShieldAlert /> : undefined}>
+          <Notice tone="bad" title="O currículo adaptado não foi gerado">
             <TaskError error={data.task?.error} />
             {data.tailored && <p className="mt-1 text-muted">O currículo abaixo é o da última geração que passou na verificação.</p>}
           </Notice>
@@ -265,7 +255,7 @@ export function JobAiSection({ jobId, status, detail, onOpenSettings, index }: P
             </Notice>
           )}
           {state === 'error' && (
-            <Notice tone="bad" action={
+            <Notice tone="bad" title="A análise desta vaga falhou" action={
               <Button type="button" size="sm" disabled={analyze.isPending} onClick={() => analyze.mutate()}><RotateCw aria-hidden /> Tentar de novo</Button>
             }>
               <TaskError error={tier2?.task?.error} />

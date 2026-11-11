@@ -1,12 +1,14 @@
-import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Download, Eye, LoaderCircle, Lock, X } from 'lucide-react';
-import { useId, useRef, useState, type MouseEvent, type ReactNode } from 'react';
+import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Download, Eye, LoaderCircle, Lock, ShieldAlert, X } from 'lucide-react';
+import { useId, useRef, useState, type ReactNode } from 'react';
 import { LIMITS, draftOf, type TailoredDto, type TailoredResume, type TailoredSaveDto, type Violation } from '@kv/shared/client';
-import { tailoredPdfUrl } from '../aiApi';
+import { checkTailoredPdf, startDownload, tailoredPdfUrl } from '../aiApi';
+import { pdfBlockers, type PdfFailure } from '../lib/ai';
 import { cn } from '../lib/utils';
 import { useSaveTailored } from '../useAi';
 import { Button } from './ui/button';
 import { Textarea } from './ui/input';
 import { Notice } from './ui/notice';
+import { ViolationList } from './ViolationList';
 
 const EYEBROW = 'text-[11px] font-semibold uppercase tracking-[0.08em] text-faint';
 const LABEL = 'block text-xs font-medium text-muted';
@@ -100,6 +102,9 @@ export function TailoredResumeEditor({ jobId, tailored }: { jobId: number; tailo
   const save = useSaveTailored(jobId);
   const pending = useRef<Promise<TailoredSaveDto> | null>(null);
   const summaryId = useId();
+  const pdfWarningId = useId();
+  const [downloading, setDownloading] = useState(false);
+  const [pdfFailure, setPdfFailure] = useState<PdfFailure | null>(null);
   const dirty = signature(content) !== signature(tailored.content);
 
   const setList = <K extends ListKey>(key: K, next: TailoredResume[K]) => setContent((c) => ({ ...c, [key]: next }));
@@ -126,19 +131,43 @@ export function TailoredResumeEditor({ jobId, tailored }: { jobId: number; tailo
   }
 
   // O erro já vira aviso pelo MutationCache global; aqui só evita a rejeição sem tratamento.
-  const onSave = () => void saveNow().catch(() => {});
+  const onSave = () => {
+    setPdfFailure(null);
+    void saveNow().catch(() => {});
+  };
 
-  /** Com alterações não salvas, "baixar" salva primeiro e só então navega para o PDF (mesma origem). */
-  async function onDownload(e: MouseEvent<HTMLAnchorElement>) {
-    if (!dirty && !pending.current) return; // segue o link normalmente
-    e.preventDefault();
+  /**
+   * Baixar o PDF. Com alterações não salvas, salva primeiro. Depois confere a rota com um `fetch` na mesma
+   * origem (`checkTailoredPdf`): se ela recusar, o motivo aparece aqui, com as violações; só quando ela
+   * responde com o PDF é que o navegador é mandado baixar a mesma URL. Nunca se salva um JSON de erro como
+   * arquivo nem se sai da página.
+   */
+  async function onDownload() {
+    if (downloading) return;
+    setDownloading(true);
+    setPdfFailure(null);
     try {
-      await saveNow();
-      window.location.assign(tailoredPdfUrl(jobId));
-    } catch {
-      // o aviso com o motivo já apareceu; nada é baixado
+      let current = tailored;
+      if (dirty || pending.current) {
+        try {
+          current = (await saveNow()).tailored;
+        } catch {
+          return; // o aviso com o motivo já apareceu; nada é baixado
+        }
+      }
+      // O que acabou de ser salvo ainda não pode virar PDF: o aviso acima dos botões explica o porquê.
+      if (pdfBlockers(current.pdfWarnings)) return;
+      const failure = await checkTailoredPdf(jobId);
+      if (failure) setPdfFailure(failure);
+      else startDownload(tailoredPdfUrl(jobId));
+    } finally {
+      setDownloading(false);
     }
   }
+
+  // Os avisos são do que está SALVO: com edição pendente, "Salvar e baixar" continua disponível para corrigir.
+  const blockers = pdfBlockers(tailored.pdfWarnings);
+  const downloadBlocked = blockers !== null && !dirty;
 
   return (
     <div data-testid="tailored-editor" className="space-y-4 rounded-2xl border border-line bg-surface-2/35 p-4">
@@ -251,9 +280,32 @@ export function TailoredResumeEditor({ jobId, tailored }: { jobId: number; tailo
 
       {warnings !== null && warnings.length > 0 && (
         <Notice tone="warn" role="status" data-testid="tailored-warnings" title="Salvo, com avisos (confira se é isso mesmo):">
-          <ul className="mt-1 space-y-1">
-            {warnings.map((w, i) => <li key={i} className="break-words">{w.message}</li>)}
-          </ul>
+          <ViolationList violations={warnings} />
+        </Notice>
+      )}
+
+      {blockers && (
+        <Notice id={pdfWarningId} tone="warn" role="status" data-testid="tailored-pdf-warning" title="Este currículo ainda não pode virar PDF">
+          {blockers.characters.length > 0 && (
+            <p className="break-words">
+              A fonte do PDF não tem {blockers.characters.length + blockers.more === 1 ? 'este caractere' : 'estes caracteres'}:{' '}
+              <span data-testid="tailored-pdf-characters" className="font-mono text-xs text-ink">{blockers.characters.join(', ')}</span>
+              {blockers.more > 0 && ` e mais ${blockers.more}`}. Troque ou remova (no resumo e nas realizações, aqui; nos demais campos, em Meu perfil) e salve.
+            </p>
+          )}
+          {blockers.tooLong && <p>O texto é longo demais para o PDF. Encurte o resumo e as realizações, ou tire itens deste currículo, e salve.</p>}
+        </Notice>
+      )}
+
+      {pdfFailure && (
+        <Notice tone="bad" role="alert" data-testid="tailored-pdf-error" icon={pdfFailure.violations.length > 0 ? <ShieldAlert /> : undefined} title={pdfFailure.title}>
+          <ViolationList violations={pdfFailure.violations} />
+          {pdfFailure.characters.length > 0 && (
+            <p className="mt-1 break-words">
+              Caracteres sem desenho na fonte: <span className="font-mono text-xs text-ink">{pdfFailure.characters.join(', ')}</span>
+            </p>
+          )}
+          {pdfFailure.hint && <p className={cn(pdfFailure.violations.length > 0 && 'mt-2')}>{pdfFailure.hint}</p>}
         </Notice>
       )}
 
@@ -262,16 +314,20 @@ export function TailoredResumeEditor({ jobId, tailored }: { jobId: number; tailo
           {save.isPending && <LoaderCircle aria-hidden className="animate-spin" />}
           {save.isPending ? 'Salvando…' : 'Salvar currículo'}
         </Button>
-        <Button asChild>
-          <a href={tailoredPdfUrl(jobId)} download data-testid="tailored-download" onClick={onDownload}>
-            <Download aria-hidden /> {dirty ? 'Salvar e baixar PDF' : 'Baixar PDF'}
-          </a>
+        <Button
+          type="button" data-testid="tailored-download" disabled={downloadBlocked || downloading} onClick={() => void onDownload()}
+          aria-describedby={blockers ? pdfWarningId : undefined}
+        >
+          {downloading ? <LoaderCircle aria-hidden className="animate-spin" /> : <Download aria-hidden />}
+          {downloading ? 'Preparando o PDF…' : dirty ? 'Salvar e baixar PDF' : 'Baixar PDF'}
         </Button>
         {dirty && !save.isPending && (
           <Button type="button" variant="ghost" onClick={() => setContent(tailored.content)}>Descartar</Button>
         )}
-        <span aria-live="polite" className={cn('text-xs', dirty ? 'text-warn' : 'text-faint')}>
-          {dirty ? 'Há alterações não salvas.' : warnings !== null && warnings.length === 0 ? 'Salvo.' : ''}
+        <span aria-live="polite" className={cn('text-xs', dirty || downloadBlocked ? 'text-warn' : 'text-faint')}>
+          {dirty ? 'Há alterações não salvas.'
+            : downloadBlocked ? 'O download fica disponível depois de corrigir o aviso acima.'
+            : warnings !== null && warnings.length === 0 ? 'Salvo.' : ''}
         </span>
       </div>
       <p className="text-xs text-faint">PDF de uma coluna, com texto selecionável, sem tabelas nem imagens.</p>

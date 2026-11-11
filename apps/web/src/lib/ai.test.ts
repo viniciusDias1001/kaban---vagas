@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { ProfileWireSchema, type AiTaskDto, type JobAiSummaryDto } from '@kv/shared';
+import { ProfileWireSchema, VIOLATION_CODES, type AiTaskDto, type JobAiSummaryDto, type Violation, type ViolationCode } from '@kv/shared';
 import {
-  blankItem, cardTitle, formatUsd, isPending, languageBadge, layerMessage, pollMs, resumeFileProblem, scoreTone,
-  sortByScore, toScoreMap,
+  VIOLATION_LABELS, blankItem, cardTitle, drawerTitle, formatUsd, isPending, languageBadge, layerMessage, parsePdfFailure, pdfBlockers,
+  pollMs, resumeFileProblem, retryNote, scoreTone, sortByScore, taskErrorText, toScoreMap, violationPlace, violationView,
 } from './ai';
 
 const summary = (jobId: number, score: number | null, titlePt: string | null = null): JobAiSummaryDto => ({
@@ -50,13 +50,152 @@ describe('layer state helpers', () => {
   it('describes every state, including retries, budget and the error text', () => {
     expect(layerMessage('none', null)).toBe('Ainda não processado.');
     expect(layerMessage('queued', task())).toBe('Na fila.');
-    expect(layerMessage('queued', task({ attempts: 1 }))).toBe('Nova tentativa agendada (tentativa 2 de 3).');
+    expect(layerMessage('queued', task({ attempts: 1 }))).toBe('Nova tentativa agendada.');
     expect(layerMessage('running', task())).toBe('Processando...');
     expect(layerMessage('stale', null)).toMatch(/versão anterior do seu perfil/);
     expect(layerMessage('blocked_budget', task())).toMatch(/limite de gasto/);
-    expect(layerMessage('error', task({ error: 'limite de taxa' }))).toBe('Falhou: limite de taxa');
-    expect(layerMessage('error', null)).toBe('Falhou.');
+    expect(layerMessage('error', task({ error: 'limite de taxa' }))).toBe('Limite de taxa.');
+    expect(layerMessage('error', null)).toBe('Falhou, sem detalhe.');
     expect(layerMessage('ok', null)).toBe('Pronto.');
+  });
+});
+
+describe('drawer title', () => {
+  it('puts the translated title first and keeps the original for a second line, like the card', () => {
+    expect(drawerTitle('Senior React Engineer', 'Engenheira React Sênior')).toEqual({ title: 'Engenheira React Sênior', original: 'Senior React Engineer' });
+    expect(drawerTitle('Dev React', ' dev react ')).toEqual({ title: 'Dev React', original: null });
+    expect(drawerTitle('Dev React', null)).toEqual({ title: 'Dev React', original: null });
+    expect(drawerTitle('Dev React', undefined)).toEqual({ title: 'Dev React', original: null });
+    expect(drawerTitle('Dev React', '   ')).toEqual({ title: 'Dev React', original: null });
+  });
+});
+
+describe('task error text', () => {
+  it('shows the stored message as one clean sentence, whatever its prefix, punctuation or number of attempts', () => {
+    expect(taskErrorText(null)).toBe('Falhou, sem detalhe.');
+    expect(taskErrorText('   ')).toBe('Falhou, sem detalhe.');
+    expect(taskErrorText('falha de rede')).toBe('Falha de rede.');
+    expect(taskErrorText('não há perfil em inglês: envie o currículo')).toBe('Não há perfil em inglês: envie o currículo.');
+    // As mensagens fixas do worker já são frases completas, com "; " dentro dos parênteses: ficam como estão.
+    const blocked =
+      'A IA propôs um currículo com informações que não estão no seu perfil (números que não estão no perfil; termos que não estão no perfil) e o resultado foi descartado. ' +
+      'Confira se o perfil tem tudo o que você quer destacar, edite-o se faltar algo, e peça a adaptação de novo.';
+    expect(taskErrorText(blocked)).toBe(blocked);
+    expect(taskErrorText('Tente de novo?')).toBe('Tente de novo?');
+    expect(layerMessage('error', task({ error: blocked, attempts: 2 }))).toBe(blocked);
+  });
+
+  it('says a retry is scheduled without counting attempts, and only for a queued task', () => {
+    expect(layerMessage('queued', task({ attempts: 2 }))).toBe('Nova tentativa agendada.');
+    expect(retryNote(task({ status: 'queued', attempts: 1 }))).toBe('Nova tentativa agendada.');
+    // "running" já conta a tentativa em curso: a primeira execução não é uma nova tentativa.
+    expect(retryNote(task({ status: 'running', attempts: 1 }))).toBe('');
+    expect(retryNote(task({ status: 'queued', attempts: 0 }))).toBe('');
+    expect(retryNote(undefined)).toBe('');
+  });
+});
+
+describe('verifier violations', () => {
+  const violation = (over: Partial<Violation>): Violation => ({ code: 'novel_term', path: 'summary', message: 'm', ...over });
+
+  it('has a label and an explanation for every violation code the API can send', () => {
+    expect(Object.keys(VIOLATION_LABELS).sort()).toEqual([...VIOLATION_CODES].sort());
+    for (const code of VIOLATION_CODES) {
+      expect(VIOLATION_LABELS[code].label.trim(), code).not.toBe('');
+      expect(VIOLATION_LABELS[code].help.trim().length, code).toBeGreaterThan(20);
+    }
+    expect(new Set(VIOLATION_CODES.map((c) => VIOLATION_LABELS[c].label)).size).toBe(VIOLATION_CODES.length);
+  });
+
+  it('describes a violation with label, offending term and place', () => {
+    expect(violationView(violation({ detail: 'Kubernetes', path: 'experiences[0].achievements[1].text' }))).toEqual({
+      label: VIOLATION_LABELS.novel_term.label, help: VIOLATION_LABELS.novel_term.help, term: 'Kubernetes', place: 'Experiência 1, realização 2',
+    });
+    expect(violationView(violation({ code: 'unrelated_text', path: 'experiences[2].achievements[0].text' }))).toMatchObject({
+      label: VIOLATION_LABELS.unrelated_text.label, term: null, place: 'Experiência 3, realização 1',
+    });
+    expect(violationView(violation({ code: 'limit', path: 'summary' }))).toMatchObject({ label: VIOLATION_LABELS.limit.label, place: 'Resumo' });
+    expect(violationView(violation({ code: 'foreign_company', detail: 'Acme Fictícia' })).term).toBe('Acme Fictícia');
+  });
+
+  it('shows numbers the way a person writes them and hides internal identities', () => {
+    expect(violationView(violation({ code: 'new_number', detail: '40' })).term).toBe('40');
+    expect(violationView(violation({ code: 'new_number', detail: 'd:2018-3' })).term).toBe('03/2018');
+    expect(violationView(violation({ code: 'new_number', detail: 'q:tens' })).term).toBeNull();
+    expect(violationView(violation({ detail: '   ' })).term).toBeNull();
+    expect(violationView(violation({ detail: 'x'.repeat(500) })).term).toHaveLength(121);
+  });
+
+  it('names the place for every list of the draft and gives up politely on an unknown path', () => {
+    expect([
+      'experiences[1]', 'experiences[0].achievements[3]', 'experiences', 'educationIds[0]', 'skillIds[4]', 'languageIds[1]',
+      'certificationIds[0]', 'linkIds[2]', 'skillIds', 'algo.novo[9]', '',
+    ].map(violationPlace)).toEqual([
+      'Experiência 2', 'Experiência 1, realização 4', 'Experiências', 'Formação 1', 'Habilidade 5', 'Idioma 2', 'Certificação 1', 'Link 3',
+      'Habilidades', null, null,
+    ]);
+  });
+
+  it('falls back to the message of the API for a code this build does not know', () => {
+    const view = violationView({ code: 'futuro' as ViolationCode, path: 'summary', message: 'algo novo divergiu' });
+    expect(view).toEqual({ label: 'Divergência', help: 'Algo novo divergiu.', term: null, place: 'Resumo' });
+  });
+});
+
+describe('pdf warnings and download failures', () => {
+  it('tells which characters cannot be printed and whether the text is too long', () => {
+    expect(pdfBlockers({ unsupportedCharacters: [], tooLong: false })).toBeNull();
+    expect(pdfBlockers(undefined)).toBeNull();
+    expect(pdfBlockers({ unsupportedCharacters: ['😀', 'ก'], tooLong: false })).toEqual({
+      characters: ['"😀" (U+1F600)', '"ก" (U+0E01)'], more: 0, tooLong: false,
+    });
+    expect(pdfBlockers({ unsupportedCharacters: [], tooLong: true })).toEqual({ characters: [], more: 0, tooLong: true });
+    const many = pdfBlockers({ unsupportedCharacters: Array.from({ length: 30 }, (_, i) => String.fromCodePoint(0x4e00 + i)), tooLong: false });
+    expect(many?.characters).toHaveLength(12);
+    expect(many?.more).toBe(18);
+  });
+
+  it('reads a 409 verification_failed with its violations', () => {
+    const body = JSON.stringify({
+      error: 'verification_failed',
+      message: 'O currículo não confere mais com o seu perfil e não pode virar PDF: summary: o número "40" não está no perfil. Revise.',
+      violations: [{ code: 'new_number', path: 'summary', message: 'o número "40" não está no perfil', detail: '40' }, { code: 1 }, null, 'x'],
+    });
+    expect(parsePdfFailure(409, body)).toEqual({
+      title: 'O currículo não confere mais com o seu perfil e não pode virar PDF.',
+      hint: 'Revise o texto e salve, ou adapte o currículo de novo.',
+      violations: [{ code: 'new_number', path: 'summary', message: 'o número "40" não está no perfil', detail: '40' }],
+      characters: [],
+    });
+  });
+
+  it('reads 409 profile_missing and 422 pdf_unavailable with the characters', () => {
+    expect(parsePdfFailure(409, JSON.stringify({ error: 'profile_missing', message: 'o perfil deste idioma não existe mais' }))).toEqual({
+      title: 'O perfil deste idioma não existe mais.',
+      hint: 'Envie o currículo ou gere o perfil de novo em Meu perfil e adapte o currículo outra vez.',
+      violations: [], characters: [],
+    });
+    const glyph = parsePdfFailure(422, JSON.stringify({
+      error: 'pdf_unavailable', code: 'unsupported_characters',
+      message: 'O PDF não pode ser gerado: a fonte do documento não tem o caractere "😀" (U+1F600). Edite o currículo e troque ou remova esses caracteres.',
+      characters: ['😀', 7],
+    }));
+    expect(glyph).toMatchObject({ title: expect.stringContaining('O PDF não pode ser gerado'), violations: [], characters: ['"😀" (U+1F600)'] });
+    const long = parsePdfFailure(422, JSON.stringify({
+      error: 'pdf_unavailable', code: 'too_long',
+      message: 'O currículo tem texto demais para virar PDF (90000 caracteres; o limite é 60000). Encurte o resumo e as realizações.',
+    }));
+    expect(long).toMatchObject({ title: expect.stringContaining('texto demais'), characters: [], hint: null });
+  });
+
+  it('never shows a proxy page, an unknown body or a 5xx detail', () => {
+    expect(parsePdfFailure(502, '<html>Bad Gateway</html>').title).toBe('A API falhou ao responder (erro 502). Tente de novo em instantes.');
+    expect(parsePdfFailure(404, JSON.stringify({ error: 'not_found', message: 'esta vaga ainda não tem currículo adaptado' })).title)
+      .toBe('Esta vaga ainda não tem currículo adaptado.');
+    expect(parsePdfFailure(409, '{"error":"verification_failed","violations":"x"}')).toMatchObject({
+      violations: [], title: expect.stringContaining('não confere'),
+    });
+    expect(parsePdfFailure(0, '').title).toMatch(/Não foi possível falar com a API/);
   });
 });
 
