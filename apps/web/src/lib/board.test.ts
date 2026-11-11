@@ -8,7 +8,7 @@ const job = (id: number, over: Partial<JobListItemDto> = {}): JobListItemDto => 
   id, source: 'gupy', externalId: String(id), url: `https://example.com/${id}`, title: `Vaga ${id}`, company: 'Acme',
   location: 'SP', country: 'BR', remote: false, level: null, stacks: [], postedAt: null, discoveredAt: 1,
   profileId: null, column: 'descobertas', position: id, appliedBy: null, needsHuman: false, needsHumanReason: null,
-  notes: '', ...over,
+  notes: '', descriptionFetchedAt: null, ...over,
 });
 
 describe('normalizeText / matchesFilter', () => {

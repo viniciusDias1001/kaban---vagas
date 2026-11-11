@@ -26,6 +26,8 @@ export interface JobDto {
   needsHuman: boolean;
   needsHumanReason: string | null;
   notes: string;
+  /** Quando a descrição foi buscada sob demanda; nulo se veio na busca ou nunca foi buscada. */
+  descriptionFetchedAt: number | null;
 }
 
 /** Item de `GET /jobs` (o quadro): a vaga sem a descrição, que só vem em `GET /jobs/:id`. */
