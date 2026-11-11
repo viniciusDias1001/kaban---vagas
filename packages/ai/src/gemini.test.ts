@@ -63,7 +63,19 @@ describe('gemini adapter', () => {
     const blockedAnswer = response({ candidates: [{ content: { role: 'model', parts: [] }, finishReason: 'SAFETY', index: 0 }] });
     await expect(setup({ json: blockedAnswer }).call()).rejects.toMatchObject({ kind: 'refused' });
     const cut = response({ candidates: [{ content: { role: 'model', parts: [{ text: '{"score":8' }] }, finishReason: 'MAX_TOKENS', index: 0 }] });
-    await expect(setup({ json: cut }).call()).rejects.toMatchObject({ kind: 'invalid_output' });
+    await expect(setup({ json: cut }).call()).rejects.toMatchObject({ kind: 'truncated' });
+  });
+
+  it('carries the billed usage and the model on every failure that happens after the response', async () => {
+    const billed = { usage: { inputTokens: 640, outputTokens: 25 }, model: 'gemini-3.5-flash-lite' };
+    const blockedAnswer = response({ candidates: [{ content: { role: 'model', parts: [] }, finishReason: 'SAFETY', index: 0 }] });
+    await expect(setup({ json: blockedAnswer }).call()).rejects.toMatchObject({ kind: 'refused', ...billed });
+    const cut = response({ candidates: [{ content: { role: 'model', parts: [{ text: '{"score":8' }] }, finishReason: 'MAX_TOKENS', index: 0 }] });
+    await expect(setup({ json: cut }).call()).rejects.toMatchObject({ kind: 'truncated', ...billed });
+    const wrong = response({ candidates: [{ content: { role: 'model', parts: [{ text: '{"score":"alta"}' }] }, finishReason: 'STOP', index: 0 }] });
+    await expect(setup({ json: wrong }).call()).rejects.toMatchObject({ kind: 'invalid_output', ...billed });
+    const failed = await setup(apiError(500)).call().catch((e: unknown) => e);
+    expect((failed as { usage?: unknown }).usage).toBeUndefined();
   });
 
   it('validates the json with the caller schema', async () => {
@@ -109,10 +121,10 @@ describe('gemini adapter', () => {
     expect(inspect(error, { depth: 8, showHidden: true }) + String((error as Error).stack)).not.toContain('g-test');
   });
 
-  it('does not let the sdk continue a response by itself: one request, CONTINUATION is an incomplete answer', async () => {
+  it('does not let the sdk continue a response by itself: one request, CONTINUATION is a cut answer', async () => {
     const partial = response({ candidates: [{ content: { role: 'model', parts: [{ text: '{"score":8' }] }, finishReason: 'CONTINUATION', continuationToken: 'dG9rZW4=', index: 0 }] });
     const { call, requests } = setup({ json: partial }, { json: response() });
-    await expect(call()).rejects.toMatchObject({ kind: 'invalid_output' });
+    await expect(call()).rejects.toMatchObject({ kind: 'truncated' });
     expect(requests).toHaveLength(1);
   });
 

@@ -1,6 +1,20 @@
 import type { ZodType } from 'zod';
+import type { AiUsage } from './types';
 
-export type AiErrorKind = 'rate_limited' | 'refused' | 'invalid_output' | 'config' | 'transient' | 'other';
+/**
+ * `truncated`: a resposta parou no teto de tokens (repetir a mesma chamada dá o mesmo corte e a mesma
+ * cobrança). `input`: a entrada foi recusada ANTES de chamar o modelo (ex.: currículo longo demais).
+ */
+export type AiErrorKind =
+  | 'rate_limited' | 'refused' | 'invalid_output' | 'truncated' | 'input' | 'config' | 'transient' | 'other';
+
+/** O que um erro pode carregar além de tipo e mensagem. */
+export interface AiErrorExtra {
+  /** Uso cobrado pela chamada que falhou (recusa, corte ou saída inválida vêm DEPOIS da resposta paga). */
+  usage?: AiUsage;
+  /** Modelo que respondeu, quando o provedor informou. */
+  model?: string;
+}
 
 /** Detalhe de um erro `config`, para o "Testar conexão" dizer o que está errado. */
 export type AiErrorDetail = 'auth' | 'model' | 'billing';
@@ -14,13 +28,28 @@ export type AiErrorDetail = 'auth' | 'model' | 'billing';
  */
 export class AiError extends Error {
   override name = 'AiError';
+  /** Presente quando o provedor respondeu (e cobrou) antes de a chamada falhar: quem chama deve contabilizar. */
+  usage?: AiUsage;
+  model?: string;
   constructor(
     readonly kind: AiErrorKind,
     message: string,
     readonly detail?: AiErrorDetail,
+    extra: AiErrorExtra = {},
   ) {
     super(message);
+    if (extra.usage) this.usage = extra.usage;
+    if (extra.model) this.model = extra.model;
   }
+}
+
+/** Anexa o uso cobrado a um erro que ainda não o tem (o primeiro uso informado vale) e devolve o mesmo erro. */
+export function withUsage<E>(error: E, extra: AiErrorExtra): E {
+  if (error instanceof AiError) {
+    if (!error.usage && extra.usage) error.usage = extra.usage;
+    if (!error.model && extra.model) error.model = extra.model;
+  }
+  return error;
 }
 
 /** Formatos comuns de chave de API (inclusive mascaradas com `*`), para o caso de o provedor ecoar outra chave. */
@@ -33,8 +62,19 @@ export function scrubSecrets(text: string, secrets: readonly string[] = []): str
   return out.replace(KEY_SHAPES, '[chave removida]');
 }
 
-/** Chave ou modelo errado não se resolve tentando de novo; todo o resto é tentado até o limite da fila. */
-export const isRetryable = (kind: AiErrorKind): boolean => kind !== 'config';
+const NOT_RETRYABLE: ReadonlySet<string> = new Set<AiErrorKind>(['config', 'truncated', 'refused', 'input']);
+
+/**
+ * Vale a pena repetir a chamada? Não para erro determinístico: chave ou modelo errado (`config`), resposta
+ * cortada no teto de tokens (`truncated`), recusa do modelo ou filtro de segurança (`refused`) e entrada
+ * recusada antes da chamada (`input`). Repetir esses casos só cobra de novo. O resto (rede, limite de taxa,
+ * saída fora do schema, que varia entre chamadas) é tentado até o limite da fila.
+ * Aceita o tipo (como sempre) ou o próprio erro.
+ */
+export function isRetryable(kindOrError: AiErrorKind | Error): boolean {
+  const kind = typeof kindOrError === 'string' ? kindOrError : kindOrError instanceof AiError ? kindOrError.kind : 'other';
+  return !NOT_RETRYABLE.has(kind);
+}
 
 /** Classificação por status HTTP, usada pelos três adaptadores depois dos casos específicos de cada SDK. */
 export function kindFromStatus(status: number | undefined): AiErrorKind {

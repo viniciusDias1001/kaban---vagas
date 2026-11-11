@@ -75,11 +75,35 @@ describe('openai adapter', () => {
     const refusal = response({
       output: [{ id: 'msg_01', type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'refusal', refusal: 'não posso ajudar' }] }],
     });
-    await expect(setup({ json: refusal }).call()).rejects.toMatchObject({ kind: 'refused', message: expect.stringContaining('não posso ajudar') });
+    // A3: o texto da recusa é escrito pelo modelo; a mensagem do erro é fixa.
+    await expect(setup({ json: refusal }).call()).rejects.toMatchObject({ kind: 'refused', message: 'o modelo recusou o pedido' });
+    const long = response({
+      output: [{ id: 'msg_01', type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'refusal', refusal: 'x'.repeat(100_000) }] }],
+    });
+    const error = await setup({ json: long }).call().catch((e: unknown) => e);
+    expect((error as Error).message.length).toBeLessThan(100);
     const filtered = response({ status: 'incomplete', incomplete_details: { reason: 'content_filter' }, output: [] });
     await expect(setup({ json: filtered }).call()).rejects.toMatchObject({ kind: 'refused' });
     const cut = response({ status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' }, output: [] });
-    await expect(setup({ json: cut }).call()).rejects.toMatchObject({ kind: 'invalid_output' });
+    await expect(setup({ json: cut }).call()).rejects.toMatchObject({ kind: 'truncated' });
+    const odd = response({ status: 'incomplete', incomplete_details: { reason: 'texto do provedor' }, output: [] });
+    await expect(setup({ json: odd }).call()).rejects.toMatchObject({ kind: 'invalid_output', message: 'resposta incompleta (motivo desconhecido)' });
+  });
+
+  it('carries the billed usage and the model on every failure that happens after the response', async () => {
+    const billed = { usage: { inputTokens: 640, outputTokens: 25 }, model: 'gpt-6-luna' };
+    const refusal = response({
+      output: [{ id: 'msg_01', type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'refusal', refusal: 'não' }] }],
+    });
+    await expect(setup({ json: refusal }).call()).rejects.toMatchObject({ kind: 'refused', ...billed });
+    const cut = response({ status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' }, output: [] });
+    await expect(setup({ json: cut }).call()).rejects.toMatchObject({ kind: 'truncated', ...billed });
+    const wrong = response({
+      output: [{ id: 'm', type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: '{"score":"alta"}', annotations: [] }] }],
+    });
+    await expect(setup({ json: wrong }).call()).rejects.toMatchObject({ kind: 'invalid_output', ...billed });
+    const failed = await setup(apiError(500)).call().catch((e: unknown) => e);
+    expect((failed as { usage?: unknown }).usage).toBeUndefined();
   });
 
   it('validates the json with the caller schema', async () => {

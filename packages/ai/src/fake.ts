@@ -1,5 +1,5 @@
 import type { CandidateProfile, ProfileWire, TailoredDraft, Tier1Result, Tier2Output } from '@kv/shared';
-import { AiError, parseOutput } from './errors';
+import { AiError, parseOutput, withUsage } from './errors';
 import { readBlock, readTask } from './prompts';
 import type { AiProvider } from './types';
 
@@ -33,15 +33,17 @@ export function createFakeProvider(): AiProvider {
       const profile = readBlock<unknown>(req.system, 'perfil');
       if (!task || !data) throw new AiError('other', 'provedor falso: prompt sem <tarefa> ou <dados>');
       const raw = respond(task, data, profile);
-      const out = parseOutput(req.schema, raw);
-      return {
-        data: out,
-        model: `fake-${req.tier}`,
-        usage: {
-          inputTokens: Math.ceil((req.system.length + req.prompt.length) / 4),
-          outputTokens: Math.ceil(JSON.stringify(raw).length / 4),
-        },
+      const model = `fake-${req.tier}`;
+      const usage = {
+        inputTokens: Math.ceil((req.system.length + req.prompt.length) / 4),
+        outputTokens: Math.ceil(JSON.stringify(raw).length / 4),
       };
+      try {
+        return { data: parseOutput(req.schema, raw), model, usage };
+      } catch (e) {
+        // Como nos provedores de verdade: a saída inválida também foi "cobrada".
+        throw withUsage(e, { usage, model });
+      }
     },
   };
 }

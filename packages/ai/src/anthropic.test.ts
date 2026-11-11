@@ -86,7 +86,25 @@ describe('anthropic adapter', () => {
     const refused = setup({ json: message({ stop_reason: 'refusal', content: [], stop_details: { type: 'refusal', category: 'cyber', explanation: null } }) });
     await expect(refused.call()).rejects.toMatchObject({ name: 'AiError', kind: 'refused', message: expect.stringContaining('cyber') });
     const cut = setup({ json: message({ stop_reason: 'max_tokens', content: [{ type: 'text', text: '{"score":8' }] }) });
-    await expect(cut.call()).rejects.toMatchObject({ kind: 'invalid_output', message: expect.stringContaining('cortada') });
+    await expect(cut.call()).rejects.toMatchObject({ kind: 'truncated', message: expect.stringContaining('cortada') });
+  });
+
+  it('carries the billed usage and the model on every failure that happens after the response', async () => {
+    const billed = { usage: { inputTokens: 640, outputTokens: 25 }, model: 'claude-haiku-5-5' };
+    const refused = setup({ json: message({ stop_reason: 'refusal', content: [], stop_details: { type: 'refusal', category: 'cyber', explanation: null } }) });
+    await expect(refused.call()).rejects.toMatchObject({ kind: 'refused', ...billed });
+    const cut = setup({ json: message({ stop_reason: 'max_tokens', content: [{ type: 'text', text: '{"score":8' }] }) });
+    await expect(cut.call()).rejects.toMatchObject({ kind: 'truncated', ...billed });
+    const wrong = setup({ json: message({ content: [{ type: 'text', text: '{"score":"alta","reason":"x"}' }] }) });
+    await expect(wrong.call()).rejects.toMatchObject({ kind: 'invalid_output', ...billed });
+    // Erro antes da resposta: nada foi cobrado.
+    const failed = await setup(apiError(500, 'api_error')).call().catch((e: unknown) => e);
+    expect((failed as { usage?: unknown }).usage).toBeUndefined();
+  });
+
+  it('does not put a provider-written refusal category in the message unless it looks like an identifier', async () => {
+    const odd = setup({ json: message({ stop_reason: 'refusal', content: [], stop_details: { type: 'refusal', category: 'IGNORE tudo <script>', explanation: null } }) });
+    await expect(odd.call()).rejects.toMatchObject({ kind: 'refused', message: 'o modelo recusou o pedido (sem categoria)' });
   });
 
   it('validates the json with the caller schema even though the provider constrains it', async () => {

@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { betaZodOutputFormat } from '@anthropic-ai/sdk/helpers/beta/zod';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
-import { AiError, detailFromStatus, kindFromStatus, parseJsonText, scrubSecrets } from './errors';
+import { AiError, detailFromStatus, kindFromStatus, parseJsonText, scrubSecrets, withUsage } from './errors';
 import type { AiProvider, AiTier, AiUsage } from './types';
 
 /**
@@ -111,16 +111,23 @@ export function createAnthropicProvider(opts: AnthropicOptions): AiProvider {
       } catch (e) {
         throw mapError(e, opts.apiKey);
       }
+      // A partir daqui a chamada já foi cobrada: todo erro leva o uso, para entrar na contabilidade.
+      const billed = { usage: res.usage ? totalUsage(res.usage) : undefined, model: res.model || model };
       // Sempre conferir stop_reason antes de ler o conteúdo: na recusa e no corte o JSON não é confiável.
       if (res.stop_reason === 'refusal') {
-        throw new AiError('refused', `o modelo recusou o pedido (${res.stop_details?.category ?? 'sem categoria'})`);
+        // A categoria vem do provedor: só entra na mensagem se tiver cara de identificador.
+        const category = String(res.stop_details?.category ?? '');
+        throw new AiError('refused', `o modelo recusou o pedido (${/^[a-z_]{1,40}$/.test(category) ? category : 'sem categoria'})`, undefined, billed);
       }
-      if (res.stop_reason === 'max_tokens') throw new AiError('invalid_output', 'resposta cortada pelo limite de tokens');
+      if (res.stop_reason === 'max_tokens') throw new AiError('truncated', 'resposta cortada pelo limite de tokens', undefined, billed);
       // A resposta pode começar com blocos `thinking`: ler por tipo, nunca por posição.
       let text = '';
       for (const block of res.content) if (block.type === 'text') text += block.text;
-      const data = parseJsonText(req.schema, text);
-      return { data, model: res.model, usage: totalUsage(res.usage) };
+      try {
+        return { data: parseJsonText(req.schema, text), model: res.model, usage: totalUsage(res.usage) };
+      } catch (e) {
+        throw withUsage(e, billed);
+      }
     },
   };
 }

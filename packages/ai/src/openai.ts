@@ -1,6 +1,6 @@
 import OpenAI from 'openai';
 import { zodTextFormat } from 'openai/helpers/zod';
-import { AiError, detailFromStatus, kindFromStatus, parseJsonText, scrubSecrets } from './errors';
+import { AiError, detailFromStatus, kindFromStatus, parseJsonText, scrubSecrets, withUsage } from './errors';
 import type { AiProvider, AiTier } from './types';
 
 const EFFORT = { fast: 'low', strong: 'medium' } as const;
@@ -83,26 +83,31 @@ export function createOpenAiProvider(opts: OpenAiOptions): AiProvider {
       } catch (e) {
         throw mapError(e, opts.apiKey);
       }
+      const usage = { inputTokens: res.usage?.input_tokens ?? 0, outputTokens: res.usage?.output_tokens ?? 0 };
+      // A partir daqui a chamada já foi cobrada: todo erro leva o uso, para entrar na contabilidade.
+      const billed = { usage: res.usage ? usage : undefined, model: res.model || model };
       if (res.status === 'incomplete') {
         const reason = res.incomplete_details?.reason;
-        if (reason === 'content_filter') throw new AiError('refused', 'a OpenAI bloqueou a resposta (content_filter)');
-        throw new AiError('invalid_output', `resposta incompleta (${reason ?? 'motivo desconhecido'})`);
+        if (reason === 'content_filter') throw new AiError('refused', 'a OpenAI bloqueou a resposta (content_filter)', undefined, billed);
+        if (reason === 'max_output_tokens') throw new AiError('truncated', 'resposta cortada pelo limite de tokens', undefined, billed);
+        throw new AiError('invalid_output', 'resposta incompleta (motivo desconhecido)', undefined, billed);
       }
       let text = '';
       for (const item of res.output) {
         if (item.type !== 'message') continue;
         for (const part of item.content) {
-          // A recusa vem em um campo próprio, fora do schema.
-          if (part.type === 'refusal') throw new AiError('refused', `o modelo recusou o pedido: ${part.refusal}`);
+          // A recusa vem em um campo próprio, fora do schema. O texto dela é escrito pelo modelo (sem limite
+          // de tamanho e influenciável pelos dados da vaga): NÃO entra na mensagem, que vai para
+          // `ai_tasks.error` e para a interface.
+          if (part.type === 'refusal') throw new AiError('refused', 'o modelo recusou o pedido', undefined, billed);
           if (part.type === 'output_text') text += part.text;
         }
       }
-      const data = parseJsonText(req.schema, text);
-      return {
-        data,
-        model: res.model,
-        usage: { inputTokens: res.usage?.input_tokens ?? 0, outputTokens: res.usage?.output_tokens ?? 0 },
-      };
+      try {
+        return { data: parseJsonText(req.schema, text), model: res.model, usage };
+      } catch (e) {
+        throw withUsage(e, billed);
+      }
     },
   };
 }

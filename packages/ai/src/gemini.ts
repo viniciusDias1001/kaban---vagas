@@ -1,6 +1,6 @@
 import { ApiError, FinishReason, GoogleGenAI } from '@google/genai';
 import { z } from 'zod';
-import { AiError, detailFromStatus, kindFromStatus, parseJsonText } from './errors';
+import { AiError, detailFromStatus, kindFromStatus, parseJsonText, withUsage } from './errors';
 import type { AiProvider, AiTier } from './types';
 
 /** Tokens de raciocínio ("thoughts") contam em `maxOutputTokens`. */
@@ -67,22 +67,26 @@ export function createGeminiProvider(opts: GeminiOptions): AiProvider {
       } catch (e) {
         throw mapError(e);
       }
-      const blockReason = res.promptFeedback?.blockReason;
-      if (blockReason) throw new AiError('refused', `o Gemini bloqueou o pedido (${blockReason})`);
-      const finish = res.candidates?.[0]?.finishReason;
-      if (finish && BLOCKED.has(finish)) throw new AiError('refused', `o Gemini bloqueou a resposta (${finish})`);
-      if (finish === FinishReason.MAX_TOKENS) throw new AiError('invalid_output', 'resposta cortada pelo limite de tokens');
-      if (finish === FinishReason.CONTINUATION) throw new AiError('invalid_output', 'resposta incompleta (pede continuação)');
-      const data = parseJsonText(req.schema, res.text);
       const u = res.usageMetadata;
-      return {
-        data,
-        model: res.modelVersion ?? model,
-        usage: {
-          inputTokens: u?.promptTokenCount ?? 0,
-          outputTokens: (u?.candidatesTokenCount ?? 0) + (u?.thoughtsTokenCount ?? 0),
-        },
+      const usage = {
+        inputTokens: u?.promptTokenCount ?? 0,
+        outputTokens: (u?.candidatesTokenCount ?? 0) + (u?.thoughtsTokenCount ?? 0),
       };
+      // A partir daqui a chamada já foi cobrada (quando há `usageMetadata`): todo erro leva o uso.
+      const billed = { usage: u ? usage : undefined, model: res.modelVersion ?? model };
+      // Os motivos vêm do provedor: só entram na mensagem se tiverem cara de identificador.
+      const label = (value: unknown) => (/^[A-Z_]{1,40}$/.test(String(value)) ? String(value) : 'motivo desconhecido');
+      const blockReason = res.promptFeedback?.blockReason;
+      if (blockReason) throw new AiError('refused', `o Gemini bloqueou o pedido (${label(blockReason)})`, undefined, billed);
+      const finish = res.candidates?.[0]?.finishReason;
+      if (finish && BLOCKED.has(finish)) throw new AiError('refused', `o Gemini bloqueou a resposta (${label(finish)})`, undefined, billed);
+      if (finish === FinishReason.MAX_TOKENS) throw new AiError('truncated', 'resposta cortada pelo limite de tokens', undefined, billed);
+      if (finish === FinishReason.CONTINUATION) throw new AiError('truncated', 'resposta incompleta (pede continuação)', undefined, billed);
+      try {
+        return { data: parseJsonText(req.schema, res.text), model: res.modelVersion ?? model, usage };
+      } catch (e) {
+        throw withUsage(e, billed);
+      }
     },
   };
 }

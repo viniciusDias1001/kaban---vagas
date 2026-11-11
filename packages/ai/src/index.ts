@@ -7,3 +7,5 @@ export * from './fake';
 export * from './provider';
 export * from './tasks';
 export * from './verify';
+export * from './translation';
+export { foldText, normalizeText, numberIds } from './text';
