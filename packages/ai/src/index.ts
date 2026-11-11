@@ -6,3 +6,4 @@ export * from './prompts';
 export * from './fake';
 export * from './provider';
 export * from './tasks';
+export * from './verify';
