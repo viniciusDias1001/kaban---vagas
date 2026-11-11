@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "concurrently -n api,worker,web -c blue,magenta,green \"pnpm --filter @kv/api dev\" \"pnpm --filter @kv/worker dev\" \"pnpm --filter @kv/web dev\"",
+    "dev": "pnpm db:migrate && concurrently -n api,worker,web -c blue,magenta,green \"pnpm --filter @kv/api dev\" \"pnpm --filter @kv/worker dev\" \"pnpm --filter @kv/web dev\"",
+    "db:migrate": "pnpm --filter @kv/db migrate",
+    "db:generate": "pnpm --filter @kv/db generate",
     "test": "vitest run",
     "typecheck": "pnpm -r exec tsc --noEmit",
     "e2e": "pnpm --filter @kv/web exec playwright test",
@@ -13,9 +15,6 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "esbuild"
-    ],
-    "ignoredBuiltDependencies": [
-      "better-sqlite3"
     ]
   },
   "devDependencies": {
