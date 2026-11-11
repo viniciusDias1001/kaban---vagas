@@ -1,0 +1,17 @@
+{
+  "name": "@kv/ai",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./testing": "./src/testing.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.8.0",
+    "@google/genai": "^3.2.0",
+    "@kv/shared": "workspace:*",
+    "openai": "^7.55.0",
+    "zod": "^4.6.7"
+  }
+}
