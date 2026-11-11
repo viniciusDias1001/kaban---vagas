@@ -1,6 +1,6 @@
 import { and, desc, eq, gt, gte, inArray, isNotNull, lt, sql } from 'drizzle-orm';
 import {
-  AI_LAYERS, type AiLayer, type AiTaskDto, type AiTaskType, type CandidateProfile, type ProfileOrigin,
+  AI_LAYERS, otherLang, type AiLayer, type AiTaskDto, type AiTaskType, type CandidateProfile, type ProfileOrigin,
   type ResumeLang, type UsageByLayer,
 } from '@kv/shared';
 import type { Db } from './client';
@@ -203,23 +203,26 @@ export async function saveProfile(
 export const ESTIMATED_MODEL_SUFFIX = ' (estimativa)';
 
 /**
- * Apaga o currículo e o perfil de um idioma, os currículos adaptados escritos nesse idioma e as tarefas de perfil
- * do idioma (pendentes ou não). Notas e análises das vagas ficam: passam a contar como desatualizadas, porque a
- * versão do perfil com que foram calculadas não existe mais. Devolve false se não havia nada para apagar.
+ * Apaga o currículo e o perfil de um idioma, os currículos adaptados escritos nesse idioma, as tarefas de perfil
+ * do idioma (pendentes ou não) e a tradução pendente do OUTRO idioma (ela leria o perfil que está sendo apagado).
+ * Notas e análises das vagas ficam: passam a contar como desatualizadas, porque a versão do perfil com que foram
+ * calculadas não existe mais. Devolve false se não havia currículo, perfil nem currículo adaptado para apagar.
  * No mesmo lock das gravações de perfil: uma tarefa do worker que termine depois encontra a própria linha apagada
  * e não grava nada (ver `guard` em `saveProfile`).
  */
 export async function deleteResumeData(db: Db, lang: ResumeLang): Promise<boolean> {
   return db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(${sql.raw(String(PROFILE_VERSION_LOCK))})`);
-    const tasks = await tx
+    await tx
       .delete(aiTasks)
-      .where(and(eq(aiTasks.subject, langSubject(lang)), inArray(aiTasks.type, ['profile_extract', 'profile_translate'])))
-      .returning({ id: aiTasks.id });
+      .where(and(eq(aiTasks.subject, langSubject(lang)), inArray(aiTasks.type, ['profile_extract', 'profile_translate'])));
+    await tx
+      .delete(aiTasks)
+      .where(and(eq(aiTasks.subject, langSubject(otherLang(lang))), eq(aiTasks.type, 'profile_translate'), inArray(aiTasks.status, [...AI_PENDING])));
     const files = await tx.delete(resumes).where(eq(resumes.lang, lang)).returning({ id: resumes.id });
     const profiles = await tx.delete(candidateProfiles).where(eq(candidateProfiles.lang, lang)).returning({ id: candidateProfiles.id });
     const tailored = await tx.delete(tailoredResumes).where(eq(tailoredResumes.lang, lang)).returning({ id: tailoredResumes.id });
-    return tasks.length + files.length + profiles.length + tailored.length > 0;
+    return files.length + profiles.length + tailored.length > 0;
   });
 }
 

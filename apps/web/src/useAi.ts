@@ -64,6 +64,29 @@ export function useSaveProfile() {
   });
 }
 
+/** Depois de apagar dados pessoais, tudo o que as telas de IA mostram precisa ser relido. */
+function useAiDataRefresh() {
+  const qc = useQueryClient();
+  return () => {
+    void qc.invalidateQueries({ queryKey: AI_KEYS.profile });
+    void qc.invalidateQueries({ queryKey: AI_KEYS.scores });
+    void qc.invalidateQueries({ queryKey: ['job-ai'] });
+    void qc.invalidateQueries({ queryKey: ['tailored'] });
+  };
+}
+
+/** Apaga o currículo, o perfil e os currículos adaptados de um idioma. */
+export function useDeleteResume() {
+  const refresh = useAiDataRefresh();
+  return useMutation({ mutationFn: (lang: ResumeLang) => aiApi.deleteResume(lang), onSuccess: refresh });
+}
+
+/** "Apagar todos os dados de IA". */
+export function useDeleteAiData() {
+  const refresh = useAiDataRefresh();
+  return useMutation({ mutationFn: () => aiApi.deleteAiData(), onSuccess: refresh });
+}
+
 export function useTranslateProfile() {
   const qc = useQueryClient();
   return useMutation({

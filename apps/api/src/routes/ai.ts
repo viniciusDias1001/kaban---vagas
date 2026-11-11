@@ -3,7 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { RESUME_TEXT_MAX_CHARS, dayStartMs, resumeTextChars } from '@kv/ai';
 import {
-  ProfileConflictError, aiSpentSince, candidateProfiles, confirmAiTask, enqueueAiTask, langSubject, latestAiTasks, profileFor, providerWait, resumes,
+  ProfileConflictError, aiSpentSince, candidateProfiles, confirmAiTask, deleteAllAiData, deleteResumeData, enqueueAiTask, langSubject, latestAiTasks, profileFor, providerWait, resumes,
   saveProfile, toAiTaskDto, usageByLayer, type CandidateProfileRow, type Db,
 } from '@kv/db';
 import { EXTRACT_LIMITS, RESUME_MIME, sniffResume, type ExtractFailure, type ResumeKind } from '@kv/resume';
@@ -160,6 +160,27 @@ export function aiRoutes(app: FastifyInstance, db: Db, ctx: AiContext) {
       .header('content-security-policy', "default-src 'none'; sandbox")
       .header('cache-control', 'no-store')
       .send(row.content);
+  });
+
+  /**
+   * Apaga os dados pessoais de UM idioma: o arquivo do currículo, o texto extraído, o perfil estruturado, os
+   * currículos adaptados escritos nesse idioma e as tarefas de perfil do idioma. Notas e análises das vagas ficam,
+   * marcadas como desatualizadas. Não tem volta. 404 se não havia nada nesse idioma.
+   */
+  app.delete('/ai/resumes/:lang', async (req, reply) => {
+    const lang = langParam(req);
+    if (!(await deleteResumeData(db, lang))) return reply.code(404).send({ error: 'not_found', message: 'não há currículo nem perfil neste idioma' });
+    return reply.code(204).send();
+  });
+
+  /**
+   * "Apagar todos os dados de IA": currículos, perfis, currículos adaptados, notas e análises das vagas e a fila
+   * de tarefas. Ficam o histórico de gasto (`ai_usage`, que não tem conteúdo pessoal e mantém o limite do dia
+   * valendo), as configurações, as chaves de API e as vagas. Não tem volta.
+   */
+  app.delete('/ai/data', async (_req, reply) => {
+    await deleteAllAiData(db);
+    return reply.code(204).send();
   });
 
   /**

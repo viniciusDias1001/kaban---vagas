@@ -1,4 +1,4 @@
-import { CloudOff, Download, FileText, FileUp, Languages, LoaderCircle, RotateCw, ShieldCheck, UserRound } from 'lucide-react';
+import { CloudOff, Download, FileText, FileUp, Languages, LoaderCircle, RotateCw, ShieldCheck, Trash2, UserRound } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useCallback, useId, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
 import {
@@ -9,13 +9,16 @@ import { resumeFileUrl } from '../aiApi';
 import { layerMessage, resumeFileProblem, retryNote, taskErrorText } from '../lib/ai';
 import { spring } from '../lib/motion';
 import { cn } from '../lib/utils';
-import { bottomBarRef } from '../toast';
-import { useAiStatus, useConfirmTask, useProfileOverview, useTranslateProfile, useUploadResume } from '../useAi';
+import { bottomBarRef, showToast } from '../toast';
+import {
+  useAiStatus, useConfirmTask, useDeleteAiData, useDeleteResume, useProfileOverview, useTranslateProfile, useUploadResume,
+} from '../useAi';
 import { AiNotConfigured } from './AiNotConfigured';
-import { ProfileEditor } from './ProfileEditor';
+import { ProfileEditor, forgetProfileDraft } from './ProfileEditor';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { CheckChip } from './ui/check-chip';
+import { ConfirmDialog } from './ui/confirm-dialog';
 import { Notice } from './ui/notice';
 import { Segmented } from './ui/segmented';
 import { Skeleton } from './ui/skeleton';
@@ -61,7 +64,12 @@ function LangCard({ lang, resume, profile, other, task, canUpload, index }: Lang
   const upload = useUploadResume();
   const translate = useTranslateProfile();
   const confirm = useConfirmTask();
+  const remove = useDeleteResume();
+  /** Arquivo escolhido que substituiria um perfil editado: espera a confirmação na caixa do app. */
+  const [replacing, setReplacing] = useState<File | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const text = LANG[lang];
+  const langName = lang === 'pt-BR' ? 'português' : 'inglês';
   const working = isActive(task) || upload.isPending;
   const translating = task?.type === 'profile_translate';
   const canTranslate = !!other && (!profile || profile.origin === 'traduzido') && !working;
@@ -73,10 +81,27 @@ function LangCard({ lang, resume, profile, other, task, canUpload, index }: Lang
     const found = resumeFileProblem(file);
     setProblem(found);
     if (found) return;
-    if (profile?.origin === 'editado' && !window.confirm('Enviar outro arquivo substitui o perfil que você editou.')) return;
+    // Perfil editado à mão: enviar outro arquivo o substitui. A confirmação é a caixa do app, não a do navegador.
+    if (profile?.origin === 'editado') return setReplacing(file);
+    send(file);
+  }
+
+  function send(file: File) {
     // A recusa da API (arquivo ilegível, currículo longo demais, tipo errado) aparece aqui, junto do botão. O
     // currículo e o perfil que já existiam não mudam: a consulta só é refeita quando o envio dá certo.
     upload.mutate({ lang, file }, { onError: (e) => setProblem(e.message) });
+  }
+
+  function removeAll() {
+    remove.mutate(lang, {
+      onSuccess: () => {
+        forgetProfileDraft(lang);
+        setProblem(null);
+        showToast(`Currículo e perfil em ${langName} apagados.`, 'info');
+      },
+      // Com erro o aviso flutuante diz o motivo; a caixa fecha nos dois casos.
+      onSettled: () => setDeleting(false),
+    });
   }
 
   let state: ReactNode = null;
@@ -166,10 +191,48 @@ function LangCard({ lang, resume, profile, other, task, canUpload, index }: Lang
           </Button>
         )}
         <span className="text-xs text-faint">PDF ou DOCX, até 5 MB.</span>
+        {(resume || profile) && (
+          <Button
+            type="button" variant="ghost" size="sm" data-testid={`resume-delete-${lang}`} disabled={upload.isPending || remove.isPending}
+            onClick={() => setDeleting(true)} aria-label={`Apagar o currículo e o perfil em ${langName}`}
+            className="ml-auto text-muted hover:bg-bad/12 hover:text-bad"
+          >
+            <Trash2 aria-hidden /> Apagar
+          </Button>
+        )}
       </div>
       {problem && <p id={problemId} role="alert" data-testid={`resume-problem-${lang}`} className="mt-2 max-w-prose break-words text-xs leading-snug text-bad">{problem}</p>}
 
       <div data-testid={`profile-task-${lang}`} aria-live="polite" className={cn(state && 'mt-3.5')}>{state}</div>
+
+      <ConfirmDialog
+        open={replacing !== null} onOpenChange={(open) => !open && setReplacing(null)} testId={`resume-replace-dialog-${lang}`}
+        title={`Substituir o perfil em ${langName} que você editou?`} confirmLabel="Enviar e substituir"
+        onConfirm={() => {
+          if (replacing) send(replacing);
+          setReplacing(null);
+        }}
+      >
+        <p>
+          O perfil em {langName} foi editado por você. Enviar <span className="font-medium text-ink">{replacing?.name}</span> faz a IA ler o arquivo
+          novo e gravar um perfil novo no lugar: as suas edições neste idioma serão perdidas.
+        </p>
+        <p>O arquivo enviado antes também é substituído.</p>
+      </ConfirmDialog>
+
+      <ConfirmDialog
+        open={deleting} onOpenChange={setDeleting} busy={remove.isPending} testId={`resume-delete-dialog-${lang}`}
+        title={`Apagar o currículo e o perfil em ${langName}?`} confirmLabel={remove.isPending ? 'Apagando…' : 'Apagar'} onConfirm={removeAll}
+      >
+        <p>Serão apagados deste app, sem volta:</p>
+        <ul className="list-disc space-y-0.5 pl-4">
+          <li>o arquivo do currículo em {langName} e o texto lido dele;</li>
+          <li>o perfil estruturado em {langName}, com tudo o que você editou;</li>
+          <li>os currículos adaptados escritos em {langName};</li>
+          <li>leituras e traduções de perfil que estejam na fila.</li>
+        </ul>
+        <p>As notas e análises das vagas ficam, marcadas como desatualizadas. O que já foi enviado ao provedor de IA não é apagado por aqui.</p>
+      </ConfirmDialog>
     </motion.section>
   );
 }
@@ -193,12 +256,24 @@ function Loaded({ overview, onOpenSettings }: { overview: ProfileOverviewDto; on
     return bottomBarRef(el);
   }, []);
   const langLabelId = useId();
+  const dataLabelId = useId();
   const configured = status.data?.configured === true;
   const notConfigured = status.data?.configured === false;
   const hasResume = overview.resumes.length > 0;
   const profileOf = (lang: ResumeLang) => overview.profiles.find((p) => p.lang === lang);
   const withProfile = RESUME_LANGS.filter((l) => profileOf(l));
   const [chosen, setChosen] = useState<ResumeLang>('pt-BR');
+  const wipe = useDeleteAiData();
+  const [wiping, setWiping] = useState(false);
+  function wipeAll() {
+    wipe.mutate(undefined, {
+      onSuccess: () => {
+        forgetProfileDraft();
+        showToast('Todos os dados de IA foram apagados.', 'info');
+      },
+      onSettled: () => setWiping(false),
+    });
+  }
   const activeLang = withProfile.includes(chosen) ? chosen : withProfile[0];
   const providerName = status.data?.provider
     ? (AI_PROVIDER_LABELS[status.data.provider as keyof typeof AI_PROVIDER_LABELS] ?? status.data.provider)
@@ -293,6 +368,36 @@ function Loaded({ overview, onOpenSettings }: { overview: ProfileOverviewDto; on
               ))}
             </div>
           </motion.section>
+
+          <section aria-labelledby={dataLabelId} className={cn(CARD, 'flex flex-wrap items-center gap-x-4 gap-y-3 px-5 py-4 sm:px-6')}>
+            <div className="min-w-56 flex-1">
+              <h3 id={dataLabelId} className="text-sm font-semibold text-ink">Seus dados</h3>
+              <p className="mt-0.5 text-[13px] leading-snug text-muted">
+                Currículos, perfis, currículos adaptados, notas e análises ficam guardados só no seu banco de dados. Você pode apagar um idioma
+                (botão Apagar em cada cartão acima) ou tudo de uma vez.
+              </p>
+            </div>
+            <Button type="button" variant="danger" data-testid="ai-data-delete" disabled={wipe.isPending} onClick={() => setWiping(true)}>
+              <Trash2 aria-hidden /> Apagar todos os dados de IA
+            </Button>
+          </section>
+
+          <ConfirmDialog
+            open={wiping} onOpenChange={setWiping} busy={wipe.isPending} testId="ai-data-delete-dialog"
+            title="Apagar todos os dados de IA?" confirmLabel={wipe.isPending ? 'Apagando…' : 'Apagar tudo'} onConfirm={wipeAll}
+          >
+            <p>Serão apagados deste app, sem volta:</p>
+            <ul className="list-disc space-y-0.5 pl-4">
+              <li>os currículos enviados (arquivos e texto lido) e os perfis estruturados dos dois idiomas;</li>
+              <li>todos os currículos adaptados;</li>
+              <li>as notas, os títulos traduzidos e as análises de todas as vagas;</li>
+              <li>a fila de tarefas da IA, inclusive o que está em andamento.</li>
+            </ul>
+            <p>
+              Ficam: as vagas e as suas anotações, o histórico de gasto estimado (sem conteúdo pessoal), as configurações e as chaves de API
+              (para removê-las, use a aba Configurações). O que já foi enviado ao provedor de IA não é apagado por aqui.
+            </p>
+          </ConfirmDialog>
 
           <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 pb-2 text-xs text-muted">
             {hasResume && <span>Currículo e vagas analisadas são enviados ao provedor de IA configurado ({providerName}).</span>}

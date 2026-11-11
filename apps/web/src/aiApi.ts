@@ -46,6 +46,10 @@ export const aiApi = {
   /** `version` = a versão do perfil em que o rascunho se baseia: a API responde 409 se o servidor já tem outra. */
   saveProfile: (lang: ResumeLang, data: ProfileWire, version: number) =>
     request<CandidateProfileDto>(`/ai/profile/${lang}`, json('PUT', { data, version })),
+  /** Apaga o currículo, o perfil e os currículos adaptados de um idioma. Não tem volta. */
+  deleteResume: (lang: ResumeLang) => request<void>(`/ai/resumes/${lang}`, { method: 'DELETE' }),
+  /** Apaga todos os dados da IA de perfil (currículos, perfis, currículos adaptados, notas, análises e tarefas). */
+  deleteAiData: () => request<void>('/ai/data', { method: 'DELETE' }),
   translateProfile: (lang: ResumeLang) => request<{ queued: boolean }>(`/ai/profile/${lang}/translate`, post()),
   confirmTask: (taskId: number) => request<{ queued: boolean }>(`/ai/tasks/${taskId}/confirm`, post()),
   jobScores: () => request<JobAiListItemDto[]>('/jobs/ai'),
