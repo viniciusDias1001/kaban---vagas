@@ -8,7 +8,7 @@ import { Tooltip } from './components/ui/tooltip';
 import { useMediaQuery } from './lib/hooks';
 import { spring, springSnap } from './lib/motion';
 import { cn } from './lib/utils';
-import { useToast } from './toast';
+import { useBottomBarHeight, useToast } from './toast';
 import { useRunCatchUp } from './useRunCatchUp';
 import { isWorkerStale } from './workerStale';
 
@@ -40,6 +40,7 @@ export function App() {
   const [view, setView] = useState<View>('quadro');
   const [openJob, setOpenJob] = useState<number | null>(null);
   const toast = useToast();
+  const bottomBar = useBottomBarHeight();
   const compactNav = useMediaQuery(COMPACT_NAV);
   const openSettings = useCallback(() => setView('config'), []);
   const catchUp = useRunCatchUp();
@@ -143,7 +144,12 @@ export function App() {
         <JobDrawer id={openJob} onClose={() => setOpenJob(null)} onOpenSettings={() => { setOpenJob(null); openSettings(); }} />
       </Suspense>
 
-      <div className="pointer-events-none fixed inset-x-0 bottom-6 z-[60] flex justify-center px-4">
+      {/* Acima de uma barra de ações fixa, quando a tela tem uma (Configurações, Meu perfil): nunca por cima dela. */}
+      <div
+        data-testid="toast-region"
+        className="pointer-events-none fixed inset-x-0 z-[60] flex justify-center px-4 transition-[bottom] duration-200 ease-out-soft"
+        style={{ bottom: `calc(${bottomBar}px + ${bottomBar > 0 ? '0.75rem' : '1.5rem'})` }}
+      >
         <AnimatePresence>
           {toast && (
             <motion.div

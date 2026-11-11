@@ -326,7 +326,7 @@ export function SettingsAiSection({ dto, form, errors, showErrors, dirty, ids, o
             )}
             <div className="space-y-2">
               {keyOrder.map((p) => (
-                <ApiKeyField key={p} provider={p} meta={metaOf(p)} dto={dto} selected={form.provider === p} defaultOpen={form.provider === p || !realProvider} />
+                <ApiKeyField key={p} provider={p} meta={metaOf(p)} dto={dto} selected={form.provider === p} defaultOpen={form.provider === p} />
               ))}
             </div>
           </Block>

@@ -1,6 +1,6 @@
 import { CloudOff, Download, FileText, FileUp, Languages, LoaderCircle, RotateCw, ShieldCheck, UserRound } from 'lucide-react';
 import { motion } from 'motion/react';
-import { useId, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
+import { useCallback, useId, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
 import {
   AI_PROVIDER_LABELS, RESUME_LANGS, otherLang, type AiTaskDto, type CandidateProfileDto, type ProfileOverviewDto, type ResumeLang,
   type ResumeMetaDto,
@@ -9,6 +9,7 @@ import { resumeFileUrl } from '../aiApi';
 import { layerMessage, resumeFileProblem, retryNote, taskErrorText } from '../lib/ai';
 import { spring } from '../lib/motion';
 import { cn } from '../lib/utils';
+import { bottomBarRef } from '../toast';
 import { useAiStatus, useConfirmTask, useProfileOverview, useTranslateProfile, useUploadResume } from '../useAi';
 import { AiNotConfigured } from './AiNotConfigured';
 import { ProfileEditor } from './ProfileEditor';
@@ -186,6 +187,11 @@ function Loaded({ overview, onOpenSettings }: { overview: ProfileOverviewDto; on
   const status = useAiStatus();
   const [accepted, setAccepted] = useState(readAccepted);
   const [footer, setFooter] = useState<HTMLElement | null>(null);
+  // O rodapé recebe os botões do editor (portal) e avisa o aviso flutuante da altura dele, para não ser coberto.
+  const footerRef = useCallback((el: HTMLElement | null) => {
+    setFooter(el);
+    return bottomBarRef(el);
+  }, []);
   const langLabelId = useId();
   const configured = status.data?.configured === true;
   const notConfigured = status.data?.configured === false;
@@ -297,7 +303,7 @@ function Loaded({ overview, onOpenSettings }: { overview: ProfileOverviewDto; on
           </p>
         </div>
       </div>
-      <div ref={setFooter} className={cn('shrink-0 border-t border-line bg-surface-2/95 px-4 py-3 sm:px-6', !activeLang && 'hidden')} />
+      <div ref={footerRef} data-testid="profile-footer" className={cn('shrink-0 border-t border-line bg-surface-2/95 px-4 py-3 sm:px-6', !activeLang && 'hidden')} />
     </div>
   );
 }

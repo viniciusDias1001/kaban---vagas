@@ -125,6 +125,8 @@ const ColumnView = memo(function ColumnView({ column, index, jobs, total, filter
   const [limit, setLimit] = useState(PAGE_SIZE);
   // Ordem de exibição: depois do filtro de texto, antes da paginação. A posição gravada não muda.
   const byScore = canSort && sort === 'score';
+  // Coluna sem cards à vista não tem o que ordenar: o botão some (a preferência gravada continua valendo).
+  const showSort = canSort && jobs.length > 0;
   const shown = useMemo(() => displayColumn(jobs, byScore ? 'score' : 'board', scores), [jobs, byScore, scores]);
   const visible = useMemo(() => (shown.length > limit ? shown.slice(0, limit) : shown), [shown, limit]);
   const order = useMemo(() => visible.map((j) => j.id).join(','), [visible]);
@@ -146,7 +148,7 @@ const ColumnView = memo(function ColumnView({ column, index, jobs, total, filter
       <header className="flex items-center gap-2.5 px-3.5 pb-2.5 pt-3">
         <span aria-hidden className="kv-dot" />
         <h2 className="text-sm font-semibold text-ink">{label}</h2>
-        {canSort && (
+        {showSort && (
           <Tooltip label={byScore ? `Ordenado por nota. ${SORT_HINT}` : `Ordenar por nota. ${SORT_HINT}`}>
             <button
               type="button" data-testid={`sort-${column}`} aria-pressed={byScore} aria-label={`Ordenar ${label} por nota`}
@@ -161,7 +163,7 @@ const ColumnView = memo(function ColumnView({ column, index, jobs, total, filter
             </button>
           </Tooltip>
         )}
-        <span className={cn('kv-count', !canSort && 'ml-auto')}>
+        <span className={cn('kv-count', !showSort && 'ml-auto')}>
           <span aria-hidden>{filtered ? `${jobs.length}/${total}` : total}</span>
           <span className="sr-only">
             {filtered ? `${jobs.length} de ${total} vagas com o filtro` : `${total} ${plural(total, 'vaga', 'vagas')}`}

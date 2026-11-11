@@ -12,6 +12,7 @@ import { showToast } from '../toast';
 import { AI_KEYS, useDeleteApiKey, useSaveApiKey } from '../useAi';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
+import { ConfirmDialog } from './ui/confirm-dialog';
 import { Input } from './ui/input';
 import { Notice } from './ui/notice';
 
@@ -70,6 +71,7 @@ export function ApiKeyField({ provider, meta, dto, selected, defaultOpen }: ApiK
   const view = keyView(meta, dto.ai.canStoreKeys);
   const [open, setOpen] = useState(defaultOpen);
   const [replacing, setReplacing] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
   const inputId = useId();
@@ -79,11 +81,12 @@ export function ApiKeyField({ provider, meta, dto, selected, defaultOpen }: ApiK
   const remove = useDeleteApiKey();
   const busy = save.isPending || remove.isPending;
 
-  // O bloco do provedor recém-escolhido abre sozinho.
+  // O bloco do provedor recém-escolhido abre sozinho, e o do que deixou de ser o escolhido fecha: só um aberto
+  // por vez, a menos que o usuário abra outro à mão.
   const [wasSelected, setWasSelected] = useState(selected);
   if (selected !== wasSelected) {
     setWasSelected(selected);
-    if (selected) setOpen(true);
+    setOpen(selected);
   }
 
   function submit() {
@@ -122,17 +125,21 @@ export function ApiKeyField({ provider, meta, dto, selected, defaultOpen }: ApiK
         setReplacing(false);
         showToast(`Chave de ${label} removida.`, 'info');
       },
+      // Com erro o aviso flutuante diz o motivo; a caixa fecha nos dois casos.
+      onSettled: () => setConfirming(false),
     });
   }
 
+  // Apagar a chave não tem volta (ela não pode ser lida de novo): o botão só abre a confirmação.
   const removeButton = (
     <Button
-      type="button" variant="danger" size="sm" disabled={busy} onClick={removeKey}
+      type="button" variant="danger" size="sm" disabled={busy} onClick={() => setConfirming(true)}
       data-testid={`key-remove-${provider}`} aria-label={`Remover a chave gravada de ${label}`}
     >
       <Trash2 aria-hidden /> Remover
     </Button>
   );
+  const last4 = meta.last4 ? <> (final <span className="font-mono text-ink">{meta.last4}</span>)</> : null;
 
   const field = (disabled: boolean, cancel: boolean) => (
     // Não é um <form>: o bloco vive dentro do formulário das configurações. Enter no campo salva só a chave.
@@ -248,6 +255,21 @@ export function ApiKeyField({ provider, meta, dto, selected, defaultOpen }: ApiK
           </motion.div>
         )}
       </AnimatePresence>
+
+      <ConfirmDialog
+        open={confirming} onOpenChange={setConfirming} busy={remove.isPending} testId={`key-remove-dialog-${provider}`}
+        title={`Remover a chave de API de ${label}?`} confirmLabel={remove.isPending ? 'Removendo…' : 'Remover chave'} onConfirm={removeKey}
+      >
+        <p>A chave gravada de {label}{last4} será apagada do banco. Ela não pode ser recuperada: para voltar a usá-la, será preciso colar a chave de novo.</p>
+        {view === 'env' ? (
+          <p>A chave definida pelo ambiente continua valendo: os recursos de IA não são afetados.</p>
+        ) : (
+          <p>
+            Os recursos de IA que usam {label} (notas das vagas, análises e currículos adaptados) param de funcionar até outra chave ser gravada.
+            {!selected && ` ${label} não é o provedor em uso agora.`}
+          </p>
+        )}
+      </ConfirmDialog>
     </div>
   );
 }

@@ -5,10 +5,11 @@ import { useId, useLayoutEffect, useRef, useState, type CSSProperties, type Reac
 import { COLUMNS, COLUMN_LABELS, LIMITS, type Column, type JobDto } from '@kv/shared/client';
 import { ageLabel } from '../age';
 import { api } from '../api';
+import { drawerTitle } from '../lib/ai';
 import { COLUMN_COLOR } from '../lib/columns';
 import { spring } from '../lib/motion';
 import { cn } from '../lib/utils';
-import { useAiStatus, useJobAi } from '../useAi';
+import { useAiStatus, useJobAi, useJobScores } from '../useAi';
 import { useJobNotes } from '../useJobNotes';
 import { useMoveJob } from '../useMoveJob';
 import { JobAiSection } from './JobAiSection';
@@ -207,6 +208,7 @@ function DrawerContent({ id, onOpenSettings }: { id: number; onOpenSettings: () 
   const aiStatus = useAiStatus();
   const aiConfigured = aiStatus.data?.configured === true;
   const ai = useJobAi(id, aiConfigured, aiStatus.data?.tier2Auto === true);
+  const { scores } = useJobScores(aiConfigured);
 
   if (!data && isError) {
     return (
@@ -230,6 +232,9 @@ function DrawerContent({ id, onOpenSettings }: { id: number; onOpenSettings: () 
   const hasDescription = job.description.trim() !== '';
   const hasStacks = job.stacks.length > 0;
   const translated = aiConfigured && ai.data?.descriptionPt?.trim() ? ai.data.descriptionPt : null;
+  // O mesmo título do card: a nota do quadro (já em cache) responde na hora; o detalhe da vaga confirma depois.
+  const titlePt = aiConfigured ? (scores.get(job.id)?.titlePt ?? ai.data?.summary?.titlePt) : null;
+  const shown = drawerTitle(job.title, titlePt);
   // Seções opcionais (stacks, descrição) não deixam buraco na cascata de entrada.
   let order = 0;
 
@@ -243,7 +248,13 @@ function DrawerContent({ id, onOpenSettings }: { id: number; onOpenSettings: () 
         <div className="relative flex items-start gap-3.5">
           <SourceMark source={job.source} size="lg" />
           <div className="min-w-0 flex-1">
-            <SheetTitle className="text-[19px] font-semibold leading-snug text-ink">{job.title}</SheetTitle>
+            {/* Como no card: o título traduzido primeiro; o original logo abaixo, identificado. Os dois como texto. */}
+            <SheetTitle data-testid="job-title" className="break-words text-[19px] font-semibold leading-snug text-ink">{shown.title}</SheetTitle>
+            {shown.original !== null && (
+              <p data-testid="job-original-title" className="mt-0.5 break-words text-xs leading-snug text-muted">
+                <span className="text-faint">Título original: </span>{shown.original}
+              </p>
+            )}
             {/* Cada fato aparece uma vez: aqui empresa e local; status, nível, fonte e idade ficam nos chips. */}
             <p className="mt-1 flex flex-wrap items-center gap-x-1.5 text-sm text-muted">
               <span className="text-ink-2">{job.company}</span>

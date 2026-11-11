@@ -7,7 +7,7 @@ import { api } from '../api';
 import { spring } from '../lib/motion';
 import { cn } from '../lib/utils';
 import { formFromSettings, isDirty, toSettingsPatch, validateSettings, type SettingsForm, type SettingsFormErrors } from '../settingsForm';
-import { showToast } from '../toast';
+import { bottomBarRef, showToast } from '../toast';
 import { AI_KEYS, useSaveSettings, useSettings } from '../useAi';
 import { isWorkerStale } from '../workerStale';
 import { CARD, ERROR, HINT, LABEL, SectionHeader, SettingsAiSection, SourceTag, type SettingsFieldIds } from './SettingsAiSection';
@@ -204,7 +204,7 @@ function SettingsLoaded({ dto }: { dto: SettingsDto }) {
     <form onSubmit={submit} noValidate className="contents">
       <PageShell
         footer={
-          <div className="shrink-0 border-t border-line bg-surface-2/95 px-4 py-3 sm:px-6">
+          <div ref={bottomBarRef} data-testid="settings-footer" className="shrink-0 border-t border-line bg-surface-2/95 px-4 py-3 sm:px-6">
             <div className="mx-auto flex max-w-[84rem] flex-wrap items-center justify-between gap-x-4 gap-y-2">
               <p aria-live="polite" className={cn('min-w-0 text-xs', dirty && !save.isPending ? 'text-warn' : 'text-faint')}>{footerHint}</p>
               <div className="ml-auto flex items-center gap-2">
