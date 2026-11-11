@@ -1,19 +1,22 @@
 import { useQuery } from '@tanstack/react-query';
-import { ArrowUpRight, CloudOff, Globe, Info, MapPin, RotateCw, Sparkles, X } from 'lucide-react';
+import { ArrowUpRight, CloudOff, Globe, Info, MapPin, RotateCw, X } from 'lucide-react';
 import { motion } from 'motion/react';
-import { useId, useLayoutEffect, useRef, type CSSProperties, type ReactNode } from 'react';
+import { useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { COLUMNS, COLUMN_LABELS, LIMITS, type Column, type JobDto } from '@kv/shared/client';
 import { ageLabel } from '../age';
 import { api } from '../api';
 import { COLUMN_COLOR } from '../lib/columns';
 import { spring } from '../lib/motion';
 import { cn } from '../lib/utils';
+import { useAiStatus, useJobAi } from '../useAi';
 import { useJobNotes } from '../useJobNotes';
 import { useMoveJob } from '../useMoveJob';
+import { JobAiSection } from './JobAiSection';
 import { SourceMark, sourceInfo } from './SourceMark';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Textarea } from './ui/input';
+import { Segmented } from './ui/segmented';
 import { Sheet, SheetClose, SheetContent, SheetTitle } from './ui/sheet';
 import { Skeleton } from './ui/skeleton';
 
@@ -168,8 +171,42 @@ function Notes({ jobId, serverNotes, index }: { jobId: number; serverNotes: stri
   );
 }
 
-function DrawerContent({ id }: { id: number }) {
+/**
+ * Descrição da vaga. Quando a IA já traduziu, um controle troca entre o texto original e o traduzido
+ * (padrão: traduzido). Os dois vêm de fora (site da vaga, IA): entram sempre como texto, nunca como HTML.
+ */
+function Description({ original, translated, index }: { original: string; translated: string | null; index: number }) {
+  const [show, setShow] = useState<'original' | 'traduzido'>('traduzido');
+  const labelId = useId();
+  const hasOriginal = original.trim() !== '';
+  const hasTranslation = !!translated && translated.trim() !== '';
+  if (!hasOriginal && !hasTranslation) return null;
+  const text = hasTranslation && (show === 'traduzido' || !hasOriginal) ? translated : original;
+  return (
+    <Section
+      title="Descrição" index={index}
+      aside={hasTranslation && (hasOriginal ? (
+        <div data-testid="description-toggle" className="-my-1.5">
+          <span id={labelId} className="sr-only">Idioma da descrição</span>
+          <Segmented
+            aria-labelledby={labelId} value={show} onValueChange={setShow}
+            options={[{ value: 'original', label: 'Original' }, { value: 'traduzido', label: 'Traduzido' }]}
+            className="w-48 p-0.5 [&>button]:h-7 [&>button]:text-xs"
+          />
+        </div>
+      ) : <span className="text-[11px] text-faint">traduzida pela IA</span>)}
+    >
+      <p lang={text === original ? undefined : 'pt-BR'} className="whitespace-pre-wrap break-words text-sm leading-relaxed text-ink-2">{text}</p>
+    </Section>
+  );
+}
+
+function DrawerContent({ id, onOpenSettings }: { id: number; onOpenSettings: () => void }) {
   const { data, isError } = useQuery({ queryKey: ['job', id], queryFn: () => api.job(id) });
+  // A análise mora na seção "Análise IA"; a consulta fica aqui porque a descrição usa a tradução.
+  const aiStatus = useAiStatus();
+  const aiConfigured = aiStatus.data?.configured === true;
+  const ai = useJobAi(id, aiConfigured, aiStatus.data?.tier2Auto === true);
 
   if (!data && isError) {
     return (
@@ -192,6 +229,7 @@ function DrawerContent({ id }: { id: number }) {
   const source = sourceInfo(job.source);
   const hasDescription = job.description.trim() !== '';
   const hasStacks = job.stacks.length > 0;
+  const translated = aiConfigured && ai.data?.descriptionPt?.trim() ? ai.data.descriptionPt : null;
   // Seções opcionais (stacks, descrição) não deixam buraco na cascata de entrada.
   let order = 0;
 
@@ -230,7 +268,7 @@ function DrawerContent({ id }: { id: number }) {
         </div>
       </header>
 
-      <div className="flex-1 space-y-6 overflow-y-auto p-5">
+      <div className="relative flex-1 space-y-6 overflow-y-auto p-5">
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2.5">
           <Button asChild variant="primary" size="lg">
             <a href={job.url} target="_blank" rel="noreferrer">
@@ -259,20 +297,9 @@ function DrawerContent({ id }: { id: number }) {
 
         <Notes jobId={job.id} serverNotes={job.notes} index={order++} />
 
-        {hasDescription && (
-          <Section title="Descrição" index={order++}>
-            <p className="whitespace-pre-wrap text-sm leading-relaxed text-ink-2">{job.description}</p>
-          </Section>
-        )}
+        {(hasDescription || translated) && <Description original={job.description} translated={translated} index={order++} />}
 
-        <Section title="Análise IA" index={order++}>
-          <div className="flex gap-3 rounded-2xl border border-dashed border-accent/30 bg-accent/6 p-4">
-            <Sparkles aria-hidden className="mt-0.5 size-4 shrink-0 text-accent" />
-            <p className="text-sm leading-relaxed text-muted">
-              Disponível quando o módulo de IA for instalado: pontos fortes do seu perfil para esta vaga e o que revisar antes da entrevista.
-            </p>
-          </div>
-        </Section>
+        <JobAiSection jobId={job.id} status={aiStatus} detail={ai} onOpenSettings={onOpenSettings} index={order++} />
 
         <Section title="Histórico" index={order++}>
           <ul className="relative space-y-3.5 before:absolute before:bottom-2 before:left-[4.5px] before:top-2 before:w-px before:bg-line">
@@ -297,12 +324,12 @@ function DrawerContent({ id }: { id: number }) {
   );
 }
 
-export function JobDrawer({ id, onClose }: { id: number | null; onClose: () => void }) {
+export function JobDrawer({ id, onClose, onOpenSettings }: { id: number | null; onClose: () => void; onOpenSettings: () => void }) {
   return (
     <Sheet open={id !== null} onOpenChange={(open) => !open && onClose()}>
       {id !== null && (
         <SheetContent>
-          <DrawerContent id={id} />
+          <DrawerContent id={id} onOpenSettings={onOpenSettings} />
         </SheetContent>
       )}
     </Sheet>

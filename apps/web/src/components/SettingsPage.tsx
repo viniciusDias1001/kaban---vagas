@@ -27,7 +27,7 @@ const time = (ms: number) => new Date(ms).toLocaleTimeString('pt-BR', { hour: '2
 function PageShell({ children, footer }: { children: ReactNode; footer?: ReactNode }) {
   return (
     <div className="flex h-full flex-col">
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="relative min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-[84rem] p-4 sm:p-6">
           <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={spring} className="mb-5">
             <h2 className="text-xl font-semibold">Configurações</h2>

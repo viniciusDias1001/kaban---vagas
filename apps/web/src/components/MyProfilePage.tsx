@@ -215,7 +215,7 @@ function Loaded({ overview, onOpenSettings }: { overview: ProfileOverviewDto; on
 
   return (
     <div className="flex h-full flex-col">
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="relative min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-6xl space-y-5 p-4 sm:p-6">
           <Heading />
 
@@ -315,7 +315,7 @@ export function MyProfilePage({ onOpenSettings }: { onOpenSettings: () => void }
   const overview = useProfileOverview();
   if (overview.data) return <Loaded overview={overview.data} onOpenSettings={onOpenSettings} />;
   return (
-    <div className="h-full overflow-y-auto">
+    <div className="relative h-full overflow-y-auto">
       <div className="mx-auto max-w-6xl space-y-5 p-4 sm:p-6">
         <Heading />
         {overview.isPending ? (

@@ -140,7 +140,7 @@ export function App() {
         </motion.div>
       </main>
       <Suspense fallback={null}>
-        <JobDrawer id={openJob} onClose={() => setOpenJob(null)} />
+        <JobDrawer id={openJob} onClose={() => setOpenJob(null)} onOpenSettings={() => { setOpenJob(null); openSettings(); }} />
       </Suspense>
 
       <div className="pointer-events-none fixed inset-x-0 bottom-6 z-[60] flex justify-center px-4">
