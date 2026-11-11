@@ -1,24 +1,41 @@
 import type { Level, NormalizedJob, SearchFilters } from '@kv/shared';
-import { fold, hasTerm } from './text';
+import { fold, hasTerm, isShortTerm } from './text';
 
 const DAY = 86_400_000;
 
-const SENIOR = /(?<![a-z])(sr|senior|staff|principal|lead|especialista|specialist)(?![a-z])/;
-const JUNIOR = /(?<![a-z])(jr|junior|estagio|estagiario|intern|internship|trainee|entry)(?![a-z])/;
-const PLENO = /(?<![a-z])(pl|pleno|mid|midlevel)(?![a-z])/;
+// `staff` e `lead` têm exceções para cargos que não são de senioridade (Chief of Staff, Staff Accountant,
+// Lead Generation); `pl` não vale em PL/SQL; `entry` só vale em "entry level" (não em "Data Entry").
+const SENIOR = 'sr|senior|(?<!chief of )staff(?! accountant)|principal|lead(?! gen)|especialista|specialist';
+const JUNIOR = 'jr|junior|estagio|estagiari[oa]|intern|internship|trainee|entry[- ]level';
+const PLENO = 'pl(?![-/ ]?sql)|pleno|mid|midlevel';
 
+const LEVEL_RE = new RegExp(
+  `(?<![a-z])(?:(?<senior>${SENIOR})|(?<junior>${JUNIOR})|(?<pleno>${PLENO}))(?![a-z])`,
+  'g',
+);
+
+/** Todos os níveis citados no título, na ordem em que aparecem ("Dev PL/SR" → pleno, senior). */
+export function detectLevels(title: string): Level[] {
+  const found: Level[] = [];
+  for (const m of fold(title).matchAll(LEVEL_RE)) {
+    const level: Level = m.groups?.senior ? 'senior' : m.groups?.junior ? 'junior' : 'pleno';
+    if (!found.includes(level)) found.push(level);
+  }
+  return found;
+}
+
+/**
+ * Nível único para gravar na vaga e mostrar no cartão: o primeiro citado no título.
+ * Em "Pleno/Sênior" fica `pleno`, para o cartão não parecer exclusivo de sênior.
+ */
 export function detectLevel(title: string): Level | null {
-  const t = fold(title);
-  if (SENIOR.test(t)) return 'senior';
-  if (JUNIOR.test(t)) return 'junior';
-  if (PLENO.test(t)) return 'pleno';
-  return null;
+  return detectLevels(title)[0] ?? null;
 }
 
 export const KNOWN_STACKS = [
   'react', 'react native', 'node', 'typescript', 'javascript', 'python', 'java', 'go', 'rust', 'php', 'ruby',
   'c#', '.net', 'angular', 'vue', 'next.js', 'aws', 'docker', 'kubernetes', 'sql', 'postgres', 'mongodb',
-  'flutter', 'kotlin', 'swift',
+  'flutter', 'kotlin', 'swift', 'c++',
 ];
 
 export function detectStacks(text: string): string[] {
@@ -28,12 +45,14 @@ export function detectStacks(text: string): string[] {
 export function matchesFilters(job: NormalizedJob, f: SearchFilters, now: number = Date.now()): boolean {
   if (job.postedAt !== null && now - job.postedAt > f.maxAgeDays * DAY) return false;
   if (f.stacks.length > 0) {
-    const hay = `${job.title} ${job.stacks.join(' ')} ${job.description}`;
-    if (!f.stacks.some((s) => hasTerm(hay, s))) return false;
+    // Termos curtos ("go", "r") aparecem demais em texto corrido: só valem no título e nas stacks.
+    const head = `${job.title} ${job.stacks.join(' ')}`;
+    const full = `${head} ${job.description}`;
+    if (!f.stacks.some((s) => hasTerm(isShortTerm(s) ? head : full, s))) return false;
   }
   if (f.levels.length > 0) {
-    const level = detectLevel(job.title);
-    if (level && !f.levels.includes(level)) return false;
+    const levels = detectLevels(job.title);
+    if (levels.length > 0 && !levels.some((l) => f.levels.includes(l))) return false;
   }
   if (f.regions.length > 0) {
     const ok =

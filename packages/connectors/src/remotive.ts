@@ -15,7 +15,7 @@ interface RemotiveJob {
   description?: string;
 }
 
-export function mapRemotive(data: { jobs: RemotiveJob[] }, query?: string): NormalizedJob[] {
+export function mapRemotive(data: { jobs: RemotiveJob[] }): NormalizedJob[] {
   return keepValid(
     data.jobs.map((j) => ({
       source: 'remotive',
@@ -26,7 +26,7 @@ export function mapRemotive(data: { jobs: RemotiveJob[] }, query?: string): Norm
       location: j.candidate_required_location || 'Remote',
       country: 'INT' as const,
       remote: true,
-      stacks: stacksWithQuery(`${j.title} ${(j.tags ?? []).join(' ')}`, query),
+      stacks: stacksWithQuery(`${j.title} ${(j.tags ?? []).join(' ')}`),
       description: stripHtml(j.description ?? ''),
       postedAt: toMs(j.publication_date),
     })),
@@ -42,7 +42,7 @@ export const remotive: Connector = {
       const data = await fetchJson<{ jobs: RemotiveJob[] }>(
         `https://remotive.com/api/remote-jobs?search=${encodeURIComponent(q)}`,
       );
-      out.push(...mapRemotive(data, q));
+      out.push(...mapRemotive(data));
     }
     return out;
   },

@@ -18,7 +18,7 @@ interface GupyJob {
   jobUrl: string;
 }
 
-export function mapGupy(data: { data: GupyJob[] }, query?: string): NormalizedJob[] {
+export function mapGupy(data: { data: GupyJob[] }): NormalizedJob[] {
   return keepValid(
     data.data.map((j) => ({
       source: 'gupy',
@@ -29,7 +29,7 @@ export function mapGupy(data: { data: GupyJob[] }, query?: string): NormalizedJo
       location: [j.city, j.state].filter(Boolean).join(', ') || 'Brasil',
       country: 'BR' as const,
       remote: j.workplaceType === 'remote' || Boolean(j.isRemoteWork),
-      stacks: stacksWithQuery(j.name, query),
+      stacks: stacksWithQuery(j.name),
       description: stripHtml(j.description ?? ''),
       postedAt: toMs(j.publishedDate),
     })),
@@ -47,7 +47,7 @@ export const gupy: Connector = {
       const data = await fetchJson<{ data: GupyJob[] }>(
         `https://portal.gupy.io/api/job-search/jobs?jobName=${encodeURIComponent(term)}&limit=50&offset=0`,
       );
-      out.push(...mapGupy(data, q));
+      out.push(...mapGupy(data));
     }
     return out;
   },

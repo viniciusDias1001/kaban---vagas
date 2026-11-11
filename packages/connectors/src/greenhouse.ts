@@ -1,7 +1,7 @@
 import type { NormalizedJob } from '@kv/shared';
 import { fetchJson } from './http';
 import { keepValid, stacksWithQuery, toMs } from './normalize';
-import { stripHtml } from './text';
+import { decodeEntities, stripHtml } from './text';
 import type { Connector } from './types';
 
 interface GreenhouseJob {
@@ -36,7 +36,8 @@ export function mapGreenhouse(data: { jobs: GreenhouseJob[] }, board: string): N
         country: /bra[sz]il/i.test(location) ? ('BR' as const) : ('INT' as const),
         remote: /remote|remoto/i.test(location),
         stacks: stacksWithQuery(j.title),
-        description: stripHtml(j.content ?? ''),
+        // `content` vem com o HTML inteiro escapado em entidades: decodifica uma vez e então tira as tags.
+        description: stripHtml(decodeEntities(j.content ?? '')),
         postedAt: toMs(j.first_published ?? j.updated_at),
       };
     }),

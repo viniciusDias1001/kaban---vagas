@@ -19,7 +19,10 @@ export function queriesFor(filters: SearchFilters): string[] {
   return filters.stacks.length > 0 ? filters.stacks.slice(0, 3) : ['developer'];
 }
 
-/** Stacks detectadas no texto mais o termo que originou a busca. */
+/**
+ * Stacks detectadas no texto. `query` (o termo que originou a busca) só deve ser passado por fontes
+ * que não trazem descrição (LinkedIn, Indeed): nas demais ele anularia o filtro de stacks.
+ */
 export function stacksWithQuery(text: string, query?: string): string[] {
   const found = detectStacks(text);
   if (query && query !== 'developer' && !found.includes(query.toLowerCase())) found.push(query.toLowerCase());
