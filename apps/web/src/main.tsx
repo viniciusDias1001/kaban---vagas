@@ -2,7 +2,10 @@ import { MutationCache, QueryCache, QueryClient, QueryClientProvider } from '@ta
 import { MotionConfig } from 'motion/react';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
+import '@fontsource-variable/geist/wght.css';
+import '@fontsource-variable/bricolage-grotesque/wght.css';
 import { App } from './App';
+import { TooltipProvider } from './components/ui/tooltip';
 import './index.css';
 import { showToast } from './toast';
 
@@ -17,7 +20,9 @@ createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <MotionConfig reducedMotion="user">
-        <App />
+        <TooltipProvider delayDuration={350}>
+          <App />
+        </TooltipProvider>
       </MotionConfig>
     </QueryClientProvider>
   </StrictMode>,
