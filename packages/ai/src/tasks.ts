@@ -5,7 +5,7 @@ import {
 } from '@kv/shared';
 import { z } from 'zod';
 import { AiError, parseOutput, withUsage } from './errors';
-import { buildPrompt, condenseProfile } from './prompts';
+import { buildPrompt, condenseProfile, type TailoredCorrection } from './prompts';
 import { ProfileTranslationError, mergeTranslation } from './translation';
 import type { AiProvider, AiUsage } from './types';
 
@@ -68,6 +68,13 @@ const clip = (text: string, max: number) => text.trim().slice(0, max);
 
 /** Espaços repetidos e linhas em branco em série (comuns em texto extraído de PDF) não gastam o limite. */
 const compactText = (text: string) => text.replace(/[ \t\f\v]+/g, ' ').replace(/ ?\n ?/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+
+/**
+ * Tamanho do texto de um currículo do jeito que `extractProfile` o mede: cortado em LIMITS.resumeText e com os
+ * espaços compactados. Quem quer recusar um currículo longo demais ANTES de enfileirar compara isto com
+ * RESUME_TEXT_MAX_CHARS, para não divergir do que a extração vai decidir.
+ */
+export const resumeTextChars = (text: string): number => compactText(clip(text, LIMITS.resumeText)).length;
 
 /** Título, empresa e local cortados em JOB_FIELD_CHARS e descrição cortada no teto da camada. */
 const jobFields = (job: JobForAi, descriptionChars: number) => ({
@@ -243,20 +250,26 @@ export async function analyzeJob(
 /**
  * Camada 3: rascunho do currículo adaptado, só com referências a itens do perfil e os textos livres.
  * O resultado AINDA NÃO é confiável: quem chama passa por `resolveTailored` (verify.ts) antes de gravar.
+ * `corrections` (de `toCorrections`, prompts.ts) pede uma nova tentativa depois de um rascunho bloqueado.
  */
 export async function draftTailored(
   provider: AiProvider,
   profile: CandidateProfile,
   job: JobForAi,
   lang: ResumeLang,
-  opts: { signal?: AbortSignal } = {},
+  opts: { signal?: AbortSignal; corrections?: readonly TailoredCorrection[] } = {},
 ): Promise<TaskResult<TailoredDraft>> {
   const res = await provider.generate({
     tier: 'strong',
     schema: TailoredDraftSchema,
     maxOutputTokens: 6_000,
     signal: opts.signal,
-    ...buildPrompt('tier3', profile, { lang, job: jobFields(job, TIER2_DESCRIPTION_CHARS) }),
+    // `corrections` só existe na nova tentativa e vai no bloco de dados (o sufixo volátil): o prefixo em cache não muda.
+    ...buildPrompt('tier3', profile, {
+      lang,
+      job: jobFields(job, TIER2_DESCRIPTION_CHARS),
+      ...(opts.corrections?.length ? { corrections: opts.corrections } : {}),
+    }),
   });
   return { data: res.data, usage: res.usage, model: res.model };
 }

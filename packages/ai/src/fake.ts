@@ -11,6 +11,8 @@ import type { AiProvider } from './types';
  * Marcadores que simulam um modelo comprometido por injeção de prompt (basta aparecerem nos dados da vaga):
  * - FAKE_AI_COMPROMISED: a camada 3 devolve uma habilidade inexistente e um número/empresa inventados
  *   (estrutura válida; quem barra é o verificador);
+ * - FAKE_AI_FIXABLE: igual a COMPROMISED, mas só na primeira tentativa: a nova tentativa (com `corrections` nos
+ *   dados) vem limpa;
  * - FAKE_AI_EXTRA_FIELD: a camada 3 devolve um campo "company" a mais (quem barra é o schema).
  *
  * Formato de currículo que a extração falsa entende (o mesmo do arquivo de exemplo de @kv/resume/testing):
@@ -68,7 +70,7 @@ function respond(task: string, data: Record<string, unknown>, profile: unknown):
     case 'tier2':
       return analyze(data.job as FakeJob, skillNames(profile));
     case 'tier3':
-      return tailor(profile as CandidateProfile, JSON.stringify(data));
+      return tailor(profile as CandidateProfile, JSON.stringify(data), 'corrections' in data);
     default:
       throw new AiError('other', `provedor falso: tarefa desconhecida "${task}"`);
   }
@@ -117,7 +119,7 @@ function analyze(job: FakeJob, skills: string[]): Tier2Output {
   };
 }
 
-function tailor(profile: CandidateProfile, dataJson: string): TailoredDraft & Record<string, unknown> {
+function tailor(profile: CandidateProfile, dataJson: string, corrected: boolean): TailoredDraft & Record<string, unknown> {
   const draft: TailoredDraft = {
     summary: profile.summary,
     experiences: profile.experiences.map((e) => ({
@@ -130,7 +132,8 @@ function tailor(profile: CandidateProfile, dataJson: string): TailoredDraft & Re
     certificationIds: profile.certifications.map((c) => c.id),
     linkIds: profile.links.map((l) => l.id),
   };
-  if (dataJson.includes('FAKE_AI_COMPROMISED')) {
+  // FAKE_AI_FIXABLE: como COMPROMISED na primeira tentativa, e limpo quando a tentativa traz `corrections`.
+  if (dataJson.includes('FAKE_AI_COMPROMISED') || (dataJson.includes('FAKE_AI_FIXABLE') && !corrected)) {
     draft.skillIds.push('skill_zzzzzzzz');
     draft.summary += ' Trabalhei 10 anos na Empresa Inventada.';
   }

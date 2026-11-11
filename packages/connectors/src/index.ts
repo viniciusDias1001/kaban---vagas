@@ -11,7 +11,10 @@ import { remotive } from './remotive';
 import type { Connector } from './types';
 
 export type { Connector, ConnectorConfig } from './types';
-export { createDescriptionFetcher, fetchJobDescription, type DescriptionFetcher, type DetailJob } from './detail';
+export {
+  MAX_DESCRIPTION_CHARS, createDescriptionFetcher, fetchJobDescription, type DescriptionFetcher, type DetailJob,
+} from './detail';
+export { LINKEDIN_MIN_INTERVAL_MS, createLane, linkedinLane, type Lane, type LaneOptions } from './lane';
 export { detectLevel, detectLevels, detectStacks, matchesFilters } from './filter';
 
 const REAL: Connector[] = [gupy, remotive, remoteok, greenhouse, lever, arbeitnow, himalayas, linkedin, indeed];
