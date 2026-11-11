@@ -1,23 +1,40 @@
 import type {
-  HealthDto, JobDetailDto, JobDto, JobPatch, ProfileDto, ProfileInput, SourceDto, StatsDto,
+  HealthDto, JobDetailDto, JobDto, JobListItemDto, JobPatch, ProfileDto, ProfileInput, SourceDto, StatsDto,
 } from '@kv/shared';
+import { ApiError, NETWORK_ERROR, errorMessage } from './apiError';
 
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`/api${path}`, {
-    ...init,
-    headers: init?.body ? { 'content-type': 'application/json' } : undefined,
-  });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({ message: res.statusText }));
-    throw new Error(body.message ?? res.statusText);
+  let res: Response;
+  try {
+    res = await fetch(`/api${path}`, {
+      ...init,
+      headers: init?.body ? { 'content-type': 'application/json' } : undefined,
+    });
+  } catch {
+    throw new ApiError(0, NETWORK_ERROR);
   }
-  return res.status === 204 ? (undefined as T) : ((await res.json()) as T);
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new ApiError(res.status, errorMessage(res.status, text));
+  }
+  if (res.status === 204) return undefined as T;
+  try {
+    return (await res.json()) as T;
+  } catch {
+    // 200 que não é JSON: um proxy ou página de login no caminho.
+    throw new ApiError(res.status, 'A API respondeu algo inesperado. Confira se ela está no ar e tente de novo.');
+  }
 }
 
 const json = (method: string, body: unknown): RequestInit => ({ method, body: JSON.stringify(body) });
 
 export const api = {
-  jobs: (q = '') => http<JobDto[]>(`/jobs${q ? `?q=${encodeURIComponent(q)}` : ''}`),
+  /**
+   * O quadro inteiro, sem as descrições. O filtro de texto é aplicado no cliente. De propósito sem
+   * AbortSignal: uma consulta cancelada pelo React Query (ao mover um card) tem o resultado descartado,
+   * mas a requisição termina normalmente, sem aparecer como falha de rede no navegador.
+   */
+  jobs: () => http<JobListItemDto[]>('/jobs'),
   job: (id: number) => http<JobDetailDto>(`/jobs/${id}`),
   patchJob: (id: number, patch: JobPatch) => http<JobDto>(`/jobs/${id}`, json('PATCH', patch)),
   profiles: () => http<ProfileDto[]>('/profiles'),

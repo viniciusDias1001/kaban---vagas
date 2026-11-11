@@ -17,3 +17,23 @@ export function computePosition(column: Positioned[], beforeId: number | null): 
   if (i === 0) return column[0].position - 1;
   return (column[i - 1].position + column[i].position) / 2;
 }
+
+/**
+ * Posição de um card solto, calculada sobre a coluna REAL: `fullColumn` são todos os cards da coluna de
+ * destino em ordem, inclusive os que o filtro esconde e os que ainda não foram renderizados ("Mostrar
+ * mais"). Soltar antes do card X põe o card imediatamente antes de X na ordem real (entre X e o vizinho
+ * de cima dele, visível ou não); soltar na coluna (`beforeId` null) põe no fim de verdade.
+ */
+export function dropPosition(fullColumn: Positioned[], movedId: number, beforeId: number | null): number {
+  return computePosition(fullColumn.filter((c) => c.id !== movedId), beforeId);
+}
+
+/**
+ * Verdadeiro quando soltar o card ali não muda nada: ele já está imediatamente antes de `beforeId` (ou já
+ * é o último, com `beforeId` null) na coluna de destino. Evita um PATCH (e um refetch) à toa.
+ */
+export function isNoopMove(fullColumn: Positioned[], movedId: number, beforeId: number | null): boolean {
+  const index = fullColumn.findIndex((c) => c.id === movedId);
+  if (index === -1) return false;
+  return (fullColumn[index + 1]?.id ?? null) === beforeId;
+}

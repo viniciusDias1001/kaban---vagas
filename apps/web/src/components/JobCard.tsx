@@ -1,7 +1,7 @@
 import { useDraggable, useDroppable } from '@dnd-kit/core';
 import { motion } from 'motion/react';
 import { memo, useCallback, useMemo, type KeyboardEvent } from 'react';
-import type { JobDto } from '@kv/shared';
+import type { JobListItemDto } from '@kv/shared';
 import { ageLabel } from '../age';
 import { spring } from '../lib/motion';
 import { cn } from '../lib/utils';
@@ -23,7 +23,7 @@ function Age({ postedAt }: { postedAt: number | null }) {
  * Hierarquia do card: título (o que se lê primeiro) → fonte + empresa + local → nível/stacks e idade.
  * No modo compacto ficam só as duas primeiras linhas, com a idade na segunda.
  */
-export function JobCardBody({ job, compact = false }: { job: JobDto; compact?: boolean }) {
+export function JobCardBody({ job, compact = false }: { job: JobListItemDto; compact?: boolean }) {
   return (
     <div className={compact ? 'px-2.5 py-2' : 'p-3'}>
       <h3 className={cn('text-[13px] font-semibold leading-[1.35] text-ink', compact ? 'truncate' : 'line-clamp-2')}>
@@ -53,10 +53,15 @@ export function JobCardBody({ job, compact = false }: { job: JobDto; compact?: b
 }
 
 interface JobCardProps {
-  job: JobDto;
+  job: JobListItemDto;
   onOpen: (id: number) => void;
-  /** Assinatura da ordem da coluna: só quando ela muda o Motion mede o layout de novo. */
+  /**
+   * Assinatura da ordem da coluna: só quando ela muda o Motion mede o layout de novo. Vazia para os cards
+   * sem animação de layout, que assim nem re-renderizam quando a ordem muda.
+   */
   order: string;
+  /** Anima a mudança de lugar do card quando a coluna é reordenada (só os cards do topo; ver LAYOUT_ANIMATED). */
+  animateLayout: boolean;
   index: number;
   compact: boolean;
 }
@@ -97,7 +102,7 @@ const CardView = memo(function CardView(p: CardViewProps) {
   return (
     <motion.article
       ref={p.setRef}
-      layout="position"
+      layout={p.animateLayout ? 'position' : false}
       layoutDependency={`${p.order}|${p.compact}`}
       initial={ENTER_FROM}
       animate={ENTER_TO}

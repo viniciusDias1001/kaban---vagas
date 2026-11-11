@@ -1,17 +1,21 @@
 import {
-  DndContext, DragOverlay, PointerSensor, defaultDropAnimationSideEffects, useDroppable, useSensor, useSensors,
-  type DragEndEvent, type DragOverEvent, type DragStartEvent, type DropAnimation,
+  DndContext, DragOverlay, PointerSensor, defaultDropAnimationSideEffects, rectIntersection, useDroppable, useSensor,
+  useSensors,
+  type Announcements, type CollisionDetection, type DragEndEvent, type DragOverEvent, type DragStartEvent,
+  type DropAnimation, type UniqueIdentifier,
 } from '@dnd-kit/core';
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { CloudOff, LoaderCircle, RotateCw, Rows2, Rows4, Search, X } from 'lucide-react';
 import { motion, useReducedMotion } from 'motion/react';
-import { memo, useCallback, useMemo, useState, type CSSProperties } from 'react';
-import { COLUMNS, COLUMN_LABELS, type Column, type JobDto } from '@kv/shared';
+import { memo, useCallback, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { COLUMNS, COLUMN_LABELS, LIMITS, type Column, type JobListItemDto } from '@kv/shared';
 import { api } from '../api';
+import { LAYOUT_ANIMATED, PAGE_SIZE, countJobs, filterByColumn, groupByColumn, normalizeText, remainingAfter, type ByColumn } from '../lib/board';
 import { COLUMN_COLOR } from '../lib/columns';
+import { useDebouncedValue, useScrollEdges } from '../lib/hooks';
 import { spring, springSnap } from '../lib/motion';
 import { cn } from '../lib/utils';
-import { computePosition } from '../position';
+import { JOBS_KEY, MOVE_KEY, useMoveJob } from '../useMoveJob';
 import { JobCard, JobCardBody } from './JobCard';
 import { StatsBar } from './StatsBar';
 import { Button } from './ui/button';
@@ -19,7 +23,9 @@ import { Input } from './ui/input';
 import { Skeleton } from './ui/skeleton';
 import { Tooltip } from './ui/tooltip';
 
-const NO_JOBS: JobDto[] = [];
+const NO_JOBS: JobListItemDto[] = [];
+/** Espera depois da última tecla antes de filtrar o quadro. */
+const FILTER_DEBOUNCE_MS = 160;
 
 type Density = 'comfortable' | 'compact';
 const DENSITY_KEY = 'kv:density';
@@ -50,24 +56,63 @@ const DROP_RETURN: DropAnimation = {
   sideEffects: defaultDropAnimationSideEffects({ styles: { active: { opacity: '0' } } }),
 };
 
+/**
+ * Alvo do arraste. Vale a regra de sempre (o card ou a coluna com maior sobreposição), com um caso a mais:
+ * ponteiro dentro de uma coluna e abaixo do último card dela (no "Mostrar mais" ou no espaço vazio) é
+ * sempre a coluna, isto é, o fim de verdade. Sem isso, numa coluna cheia a maior sobreposição seria quase
+ * sempre o último card visível, e não haveria como soltar "no fim".
+ */
+const dropTarget: CollisionDetection = (args) => {
+  const { pointerCoordinates: pointer, droppableContainers, droppableRects } = args;
+  if (pointer) {
+    for (const container of droppableContainers) {
+      if (!String(container.id).startsWith('col:')) continue;
+      const col = droppableRects.get(container.id);
+      if (!col || pointer.x < col.left || pointer.x > col.right || pointer.y < col.top || pointer.y > col.bottom) continue;
+      let lastCardBottom = -Infinity;
+      for (const other of droppableContainers) {
+        if (!String(other.id).startsWith('card:')) continue;
+        const card = droppableRects.get(other.id);
+        if (card && card.left >= col.left && card.right <= col.right) lastCardBottom = Math.max(lastCardBottom, card.bottom);
+      }
+      if (pointer.y > lastCardBottom) return [{ id: container.id }];
+      break;
+    }
+  }
+  return rectIntersection(args);
+};
+
+const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
+
 interface ColumnProps {
   column: Column;
   index: number;
-  jobs: JobDto[];
+  /** Cards da coluna que passam pelo filtro, na ordem real. */
+  jobs: JobListItemDto[];
+  /** Total de verdade da coluna (sem filtro). */
+  total: number;
+  filtered: boolean;
   onOpen: (id: number) => void;
   compact: boolean;
   isTarget: boolean;
 }
 
-const ColumnView = memo(function ColumnView({ column, index, jobs, onOpen, compact, isTarget }: ColumnProps) {
+const ColumnView = memo(function ColumnView({ column, index, jobs, total, filtered, onOpen, compact, isTarget }: ColumnProps) {
   const { setNodeRef } = useDroppable({ id: `col:${column}` });
-  const order = useMemo(() => jobs.map((j) => j.id).join(','), [jobs]);
+  // Só uma "página" de cards vai para o DOM; o resto entra em passos com "Mostrar mais". Soltar um card na
+  // coluna continua valendo o fim de verdade: a posição é calculada sobre a coluna completa (useMoveJob).
+  const [limit, setLimit] = useState(PAGE_SIZE);
+  const visible = useMemo(() => (jobs.length > limit ? jobs.slice(0, limit) : jobs), [jobs, limit]);
+  const order = useMemo(() => visible.map((j) => j.id).join(','), [visible]);
+  const remaining = remainingAfter(jobs.length, limit);
+  const label = COLUMN_LABELS[column];
+  const rest = `${remaining} ${plural(remaining, 'restante', 'restantes')}`;
   return (
     <motion.section
       ref={setNodeRef}
       data-testid={`column-${column}`}
       data-target={isTarget}
-      aria-label={COLUMN_LABELS[column]}
+      aria-label={label}
       initial={{ opacity: 0, y: 16 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ ...spring, delay: index * 0.045 }}
@@ -76,29 +121,50 @@ const ColumnView = memo(function ColumnView({ column, index, jobs, onOpen, compa
     >
       <header className="flex items-center gap-2.5 px-3.5 pb-2.5 pt-3">
         <span aria-hidden className="kv-dot" />
-        <h2 className="text-sm font-semibold text-ink">{COLUMN_LABELS[column]}</h2>
-        <span className="kv-count ml-auto">{jobs.length}</span>
+        <h2 className="text-sm font-semibold text-ink">{label}</h2>
+        <span className="kv-count ml-auto">
+          <span aria-hidden>{filtered ? `${jobs.length}/${total}` : total}</span>
+          <span className="sr-only">
+            {filtered ? `${jobs.length} de ${total} vagas com o filtro` : `${total} ${plural(total, 'vaga', 'vagas')}`}
+          </span>
+        </span>
       </header>
       {/* layoutScroll: o Motion desconta a rolagem ao animar a reordenação dos cards. */}
       <motion.div layoutScroll className="flex min-h-24 flex-1 flex-col gap-2 overflow-y-auto px-2 pb-2 pt-0.5">
-        {jobs.map((j, i) => (
-          <JobCard key={j.id} job={j} onOpen={onOpen} order={order} index={i} compact={compact} />
+        {visible.map((j, i) => (
+          <JobCard
+            key={j.id} job={j} onOpen={onOpen} order={i < LAYOUT_ANIMATED ? order : ''} index={i} compact={compact}
+            animateLayout={i < LAYOUT_ANIMATED}
+          />
         ))}
+        {remaining > 0 && (
+          <Button
+            variant="ghost" size="sm"
+            onClick={() => setLimit((l) => l + PAGE_SIZE)}
+            aria-label={`Mostrar mais vagas em ${label} (${rest})`}
+            className="h-auto min-h-9 w-full whitespace-normal border border-dashed border-line py-1.5 text-xs text-muted hover:border-line-strong"
+          >
+            Mostrar mais ({rest})
+          </Button>
+        )}
         {jobs.length === 0 && (
           <div
             aria-hidden
             className={cn(
-              'grid h-20 place-items-center rounded-[0.875rem] border border-dashed text-xs transition-colors duration-200',
+              'grid h-20 place-items-center rounded-[0.875rem] border border-dashed px-2 text-center text-xs transition-colors duration-200',
               isTarget ? 'border-(color:--col) bg-(--col)/10 text-ink-2' : 'border-line text-faint',
             )}
           >
-            {isTarget ? 'Solte aqui' : 'Arraste vagas para cá'}
+            {isTarget ? 'Solte aqui' : filtered && total > 0 ? 'Nenhuma vaga com esse filtro' : 'Arraste vagas para cá'}
           </div>
         )}
       </motion.div>
     </motion.section>
   );
 });
+
+const EDGE_FADE =
+  'pointer-events-none absolute bottom-2 top-0 z-10 w-14 from-bg/95 to-transparent transition-opacity duration-200 ease-out-soft';
 
 const SKELETON_CARDS = [5, 3, 2, 1, 1, 0];
 
@@ -141,36 +207,31 @@ export const Board = memo(function Board({ onOpen }: { onOpen: (id: number) => v
   const [activeId, setActiveId] = useState<number | null>(null);
   const [overColumn, setOverColumn] = useState<Column | null>(null);
   const [settled, setSettled] = useState(false);
-  const { data, isSuccess, isPending, isError, isFetching, isPlaceholderData, refetch } = useQuery({
-    queryKey: ['jobs', q],
-    queryFn: () => api.jobs(q),
-    refetchInterval: 15_000,
-    // Mantém o resultado anterior na tela enquanto o filtro novo carrega (sem piscar o quadro vazio).
-    placeholderData: keepPreviousData,
+  // Uma consulta só para o quadro inteiro: o filtro de texto é aplicado aqui no cliente, sem ir à API.
+  const { data, isSuccess, isPending, isError, refetch } = useQuery({
+    queryKey: JOBS_KEY,
+    queryFn: api.jobs,
+    // Com um movimento em andamento o refetch periódico traria o quadro de antes dele; o próprio
+    // movimento consulta o quadro de novo quando termina.
+    refetchInterval: () => (qc.isMutating({ mutationKey: MOVE_KEY }) > 0 ? false : 15_000),
   });
   const jobs = data ?? NO_JOBS;
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
+  const { moveTo } = useMoveJob();
 
-  const move = useMutation({
-    mutationFn: (v: { id: number; column: Column; position: number }) =>
-      api.patchJob(v.id, { column: v.column, position: v.position }),
-    onMutate: async (v) => {
-      await qc.cancelQueries({ queryKey: ['jobs'] });
-      qc.setQueryData<JobDto[]>(['jobs', q], (old = []) =>
-        old.map((j) => (j.id === v.id ? { ...j, column: v.column, position: v.position } : j)),
-      );
-    },
-    onSettled: () => {
-      qc.invalidateQueries({ queryKey: ['jobs'] });
-      qc.invalidateQueries({ queryKey: ['stats'] });
-    },
-  });
+  // Coluna real e completa, na ordem do quadro. Colunas que não mudaram mantêm o mesmo array entre
+  // refetches (e a ColumnView delas, memoizada, não re-renderiza).
+  const groupedRef = useRef<ByColumn | undefined>(undefined);
+  const byColumn = useMemo(() => (groupedRef.current = groupByColumn(jobs, groupedRef.current)), [jobs]);
+  const needle = normalizeText(useDebouncedValue(q, FILTER_DEBOUNCE_MS));
+  const matchedRef = useRef<ByColumn | undefined>(undefined);
+  const matched = useMemo(
+    () => (matchedRef.current = filterByColumn(byColumn, needle, matchedRef.current)),
+    [byColumn, needle],
+  );
+  const byId = useMemo(() => new Map(jobs.map((j) => [j.id, j])), [jobs]);
 
-  const byColumn = useMemo(() => {
-    const map = Object.fromEntries(COLUMNS.map((c) => [c, [] as JobDto[]])) as Record<Column, JobDto[]>;
-    for (const j of [...jobs].sort((a, b) => a.position - b.position)) map[j.column].push(j);
-    return map;
-  }, [jobs]);
+  const edges = useScrollEdges<HTMLDivElement>();
 
   function changeDensity(next: Density) {
     setDensity(next);
@@ -186,10 +247,27 @@ export const Board = memo(function Board({ onOpen }: { onOpen: (id: number) => v
       if (overId === undefined) return null;
       const over = String(overId);
       if (over.startsWith('col:')) return over.slice(4) as Column;
-      return jobs.find((j) => j.id === Number(over.slice(5)))?.column ?? null;
+      return byId.get(Number(over.slice(5)))?.column ?? null;
     },
-    [jobs],
+    [byId],
   );
+
+  // O que o leitor de tela ouve durante o arraste (o padrão do dnd-kit é em inglês e fala em ids).
+  const accessibility = useMemo(() => {
+    const title = (id: UniqueIdentifier) => byId.get(Number(id))?.title ?? 'Vaga';
+    const place = (overId: UniqueIdentifier | undefined) => {
+      const column = columnOf(overId);
+      return column ? `coluna ${COLUMN_LABELS[column]}` : null;
+    };
+    const announcements: Announcements = {
+      onDragStart: ({ active }) => `${title(active.id)}: card levantado.`,
+      onDragOver: ({ over }) => (place(over?.id) ? `Sobre a ${place(over?.id)}.` : undefined),
+      onDragEnd: ({ active, over }) =>
+        place(over?.id) ? `${title(active.id)}: solto na ${place(over?.id)}.` : `${title(active.id)}: solto fora do quadro; nada mudou.`,
+      onDragCancel: ({ active }) => `${title(active.id)}: arraste cancelado.`,
+    };
+    return { announcements };
+  }, [byId, columnOf]);
 
   function onDragStart(e: DragStartEvent) {
     setSettled(false);
@@ -213,13 +291,14 @@ export const Board = memo(function Board({ onOpen }: { onOpen: (id: number) => v
     } else {
       beforeId = Number(over.slice(5));
       if (beforeId === id) return;
-      const target = jobs.find((j) => j.id === beforeId);
+      const target = byId.get(beforeId);
       if (!target) return;
       column = target.column;
     }
-    const others = byColumn[column].filter((j) => j.id !== id);
     setSettled(true);
-    move.mutate({ id, column, position: computePosition(others, beforeId) });
+    // Antes do card visível `beforeId` na ordem real, ou no fim de verdade da coluna — mesmo com filtro
+    // ativo ou com a coluna só parcialmente renderizada.
+    moveTo(id, column, beforeId);
   }
 
   function onDragCancel() {
@@ -227,10 +306,13 @@ export const Board = memo(function Board({ onOpen }: { onOpen: (id: number) => v
     setOverColumn(null);
   }
 
-  const active = jobs.find((j) => j.id === activeId);
-  const empty = isSuccess && !isPlaceholderData && jobs.length === 0 && q === '';
+  const active = activeId === null ? undefined : byId.get(activeId);
+  const empty = isSuccess && jobs.length === 0;
   const compact = density === 'compact';
-  const filtering = q !== '' && isFetching && isPlaceholderData;
+  const hasFilter = needle !== '';
+  /** A digitação ainda não chegou ao quadro (debounce). */
+  const filtering = normalizeText(q) !== needle;
+  const results = hasFilter ? countJobs(matched) : jobs.length;
 
   return (
     <div className="flex h-full flex-col gap-4 p-4 sm:p-6 sm:pb-4">
@@ -240,9 +322,9 @@ export const Board = memo(function Board({ onOpen }: { onOpen: (id: number) => v
       >
         <StatsBar />
         <div className="flex min-w-64 flex-1 items-center justify-end gap-2.5">
-          {q !== '' && !filtering && isSuccess && (
-            <span className="whitespace-nowrap text-xs tabular-nums text-muted">
-              {jobs.length} {jobs.length === 1 ? 'resultado' : 'resultados'}
+          {hasFilter && !filtering && isSuccess && (
+            <span aria-live="polite" className="whitespace-nowrap text-xs tabular-nums text-muted">
+              {results === 0 ? 'Nenhum resultado' : `${results} ${plural(results, 'resultado', 'resultados')}`}
             </span>
           )}
           <div className="relative w-full max-w-80">
@@ -252,6 +334,7 @@ export const Board = memo(function Board({ onOpen }: { onOpen: (id: number) => v
               onChange={(e) => setQ(e.target.value)}
               placeholder="Filtrar por título ou empresa"
               aria-label="Filtrar vagas"
+              maxLength={LIMITS.search}
               className="bg-surface/80 px-9"
             />
             {filtering && (
@@ -323,20 +406,31 @@ export const Board = memo(function Board({ onOpen }: { onOpen: (id: number) => v
         </motion.div>
       ) : (
         <DndContext
-          sensors={sensors} onDragStart={onDragStart} onDragOver={onDragOver} onDragEnd={onDragEnd} onDragCancel={onDragCancel}
+          sensors={sensors} collisionDetection={dropTarget} accessibility={accessibility} onDragStart={onDragStart} onDragOver={onDragOver} onDragEnd={onDragEnd} onDragCancel={onDragCancel}
         >
-          <motion.div layoutScroll className="flex min-h-0 flex-1 gap-3 overflow-x-auto pb-2">
-            {COLUMNS.map((c, i) => (
-              <ColumnView
-                key={c} column={c} index={i} jobs={byColumn[c]} onOpen={onOpen} compact={compact}
-                isTarget={overColumn === c}
-              />
-            ))}
-          </motion.div>
+          <div className="relative flex min-h-0 flex-1">
+            <motion.div
+              layoutScroll ref={edges.ref} onScroll={edges.update}
+              className="flex min-h-0 flex-1 gap-3 overflow-x-auto pb-2"
+            >
+              {COLUMNS.map((c, i) => (
+                <ColumnView
+                  key={c} column={c} index={i} jobs={matched[c]} total={byColumn[c].length} filtered={hasFilter}
+                  onOpen={onOpen} compact={compact} isTarget={overColumn === c}
+                />
+              ))}
+            </motion.div>
+            {/* Em telas estreitas o quadro rola na horizontal: o esmaecido avisa que há colunas fora da vista. */}
+            <div aria-hidden className={cn(EDGE_FADE, 'left-0 bg-linear-to-r', edges.left ? 'opacity-100' : 'opacity-0')} />
+            <div aria-hidden className={cn(EDGE_FADE, 'right-0 bg-linear-to-l', edges.right ? 'opacity-100' : 'opacity-0')} />
+          </div>
           <DragOverlay zIndex={30} dropAnimation={reducedMotion ? null : settled ? DROP_SETTLE : DROP_RETURN}>
             {active && (
               <motion.article
-                initial={{ scale: 1, rotate: 0 }} animate={{ scale: 1.04, rotate: 1.8 }} transition={springSnap}
+                // Com "reduzir movimento" o card arrastado não cresce nem inclina: só a sombra o destaca.
+                initial={{ scale: 1, rotate: 0 }}
+                animate={reducedMotion ? { scale: 1, rotate: 0 } : { scale: 1.04, rotate: 1.8 }}
+                transition={springSnap}
                 className="job-card job-card--lifted"
               >
                 <JobCardBody job={active} compact={compact} />
