@@ -1,0 +1,26 @@
+{
+  "name": "kanban-vagas",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -n api,worker,web -c blue,magenta,green \"pnpm --filter @kv/api dev\" \"pnpm --filter @kv/worker dev\" \"pnpm --filter @kv/web dev\"",
+    "test": "vitest run",
+    "typecheck": "pnpm -r exec tsc --noEmit",
+    "e2e": "pnpm --filter @kv/web exec playwright test",
+    "worker:install": "node scripts/install-worker.mjs"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "esbuild"
+    ]
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "concurrently": "^10.0.7",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
+  }
+}
