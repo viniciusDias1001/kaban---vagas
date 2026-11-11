@@ -54,8 +54,10 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      # Cada arquivo de teste com banco sobe um PGlite no beforeAll; num runner disputado isso já passou
+      # dos 10 s padrão de hook do Vitest. O limite maior só evita esse falso negativo.
       - name: Testes unitários
-        run: pnpm test
+        run: pnpm test --hookTimeout=60000
         timeout-minutes: 10
 
       - name: Instalar Chromium do Playwright
