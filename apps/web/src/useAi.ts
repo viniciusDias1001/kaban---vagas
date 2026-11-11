@@ -101,10 +101,14 @@ export function useSaveSettings() {
   return useMutation({ mutationFn: (patch: SettingsPatch) => aiApi.saveSettings(patch), onSuccess: refresh });
 }
 
-/** Grava a chave de um provedor. Quem chama limpa o campo no sucesso: a chave não fica em estado React. */
+/**
+ * Grava a chave de um provedor. Quem chama limpa o campo no sucesso: a chave não fica em estado React.
+ * `gcTime: 0`: as variáveis da mutação (que levam a chave) saem do cache do React Query assim que quem
+ * chamou faz `reset()`, em vez de ficarem lá pelos 5 minutos padrão.
+ */
 export function useSaveApiKey() {
   const refresh = useSettingsRefresh();
-  return useMutation({ mutationFn: (v: { provider: AiProviderId; key: string }) => aiApi.saveApiKey(v.provider, v.key), onSuccess: refresh });
+  return useMutation({ gcTime: 0, mutationFn: (v: { provider: AiProviderId; key: string }) => aiApi.saveApiKey(v.provider, v.key), onSuccess: refresh });
 }
 
 export function useDeleteApiKey() {

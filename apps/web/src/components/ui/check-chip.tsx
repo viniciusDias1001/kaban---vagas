@@ -15,18 +15,22 @@ interface CheckChipProps {
   /** `block` ocupa a largura da célula (grades); `pill` abraça o conteúdo. */
   shape?: 'pill' | 'block';
   className?: string;
+  /** `data-testid` do próprio checkbox. */
+  testId?: string;
+  disabled?: boolean;
 }
 
 /**
  * Opção marcável em forma de chip. É um checkbox de verdade (Radix: `role="checkbox"`, `aria-checked`,
  * Espaço alterna), só que o chip inteiro é o alvo de clique e o estado aparece como preenchimento + ✓.
  */
-function CheckChip({ label, checked, onCheckedChange, adornment, shape = 'pill', className }: CheckChipProps) {
+function CheckChip({ label, checked, onCheckedChange, adornment, shape = 'pill', className, testId, disabled }: CheckChipProps) {
   return (
-    <CheckboxPrimitive.Root asChild checked={checked} onCheckedChange={(c) => onCheckedChange(c === true)} aria-label={label}>
+    <CheckboxPrimitive.Root asChild checked={checked} onCheckedChange={(c) => onCheckedChange(c === true)} aria-label={label} disabled={disabled}>
       <motion.button
         type="button"
         data-slot="check-chip"
+        data-testid={testId}
         whileTap={{ scale: 0.95 }}
         transition={springSnap}
         className={cn(
@@ -35,7 +39,7 @@ function CheckChip({ label, checked, onCheckedChange, adornment, shape = 'pill',
           'border-line bg-surface-2/70 text-ink-2 hover:border-line-strong hover:bg-surface-3 hover:text-ink',
           'data-[state=checked]:border-accent/55 data-[state=checked]:bg-accent/14 data-[state=checked]:text-ink',
           'data-[state=checked]:shadow-[inset_0_1px_0_rgb(255_255_255/0.06),0_0_0_3px_rgb(142_166_255/0.08)]',
-          'focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-accent/45',
+          'focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-accent/45 disabled:cursor-not-allowed disabled:opacity-50',
           shape === 'pill' ? 'rounded-full pl-2.5 pr-3.5' : 'w-full rounded-xl pl-2 pr-2.5',
           className,
         )}

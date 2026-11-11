@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 
 /** O valor só muda depois de `delayMs` sem novas alterações (digitação no filtro, por exemplo). */
 export function useDebouncedValue<T>(value: T, delayMs: number): T {
@@ -34,4 +34,17 @@ export function useScrollEdges<T extends HTMLElement>(): { ref: (el: T | null) =
   }, [el, update]);
 
   return { ref: setEl, ...edges, update };
+}
+
+/** Se a media query casa agora; acompanha mudanças de tamanho da janela e de zoom. */
+export function useMediaQuery(query: string): boolean {
+  const subscribe = useCallback(
+    (onChange: () => void) => {
+      const media = window.matchMedia(query);
+      media.addEventListener('change', onChange);
+      return () => media.removeEventListener('change', onChange);
+    },
+    [query],
+  );
+  return useSyncExternalStore(subscribe, () => window.matchMedia(query).matches);
 }

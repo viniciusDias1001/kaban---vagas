@@ -1,27 +1,37 @@
 import { useQuery } from '@tanstack/react-query';
-import { Activity, CircleAlert, CircleCheck, Columns3, SlidersHorizontal, TriangleAlert } from 'lucide-react';
+import { Activity, CircleAlert, CircleCheck, Columns3, Settings, SlidersHorizontal, TriangleAlert, UserRound } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { Suspense, lazy, useEffect, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useState } from 'react';
 import { api } from './api';
 import { Board } from './components/Board';
+import { Tooltip } from './components/ui/tooltip';
+import { useMediaQuery } from './lib/hooks';
 import { spring, springSnap } from './lib/motion';
 import { cn } from './lib/utils';
 import { useToast } from './toast';
 import { useRunCatchUp } from './useRunCatchUp';
 import { isWorkerStale } from './workerStale';
 
-// O quadro é a tela inicial e vai no pacote principal; o detalhe da vaga e as duas telas secundárias são
+// O quadro é a tela inicial e vai no pacote principal; o detalhe da vaga e as telas secundárias são
 // baixados à parte (o painel já começa a baixar junto com o quadro, para abrir sem espera).
 const JobDrawer = lazy(() => import('./components/JobDrawer').then((m) => ({ default: m.JobDrawer })));
 const ProfilesPage = lazy(() => import('./components/ProfilesPage').then((m) => ({ default: m.ProfilesPage })));
 const HealthPanel = lazy(() => import('./components/HealthPanel').then((m) => ({ default: m.HealthPanel })));
+const SettingsPage = lazy(() => import('./components/SettingsPage').then((m) => ({ default: m.SettingsPage })));
 
-type View = 'quadro' | 'perfis' | 'fontes';
+type View = 'quadro' | 'perfis' | 'fontes' | 'perfil' | 'config';
 const VIEWS: { id: View; label: string; icon: typeof Columns3 }[] = [
   { id: 'quadro', label: 'Quadro', icon: Columns3 },
   { id: 'perfis', label: 'Perfis de busca', icon: SlidersHorizontal },
   { id: 'fontes', label: 'Saúde das fontes', icon: Activity },
+  { id: 'perfil', label: 'Meu perfil', icon: UserRound },
+  { id: 'config', label: 'Configurações', icon: Settings },
 ];
+/**
+ * Abaixo desta largura as cinco seções não cabem com o rótulo inteiro: as não ativas mostram só o ícone. O
+ * rótulo continua no botão (escondido só da vista), então o nome acessível não muda, e aparece na dica.
+ */
+const COMPACT_NAV = '(max-width: 1023px)';
 /** De quanto em quanto tempo o aviso do worker é recalculado numa aba parada. */
 const STALE_CHECK_MS = 60_000;
 
@@ -29,6 +39,8 @@ export function App() {
   const [view, setView] = useState<View>('quadro');
   const [openJob, setOpenJob] = useState<number | null>(null);
   const toast = useToast();
+  const compactNav = useMediaQuery(COMPACT_NAV);
+  const openSettings = useCallback(() => setView('config'), []);
   const catchUp = useRunCatchUp();
   const { data: health, dataUpdatedAt: healthUpdatedAt } = useQuery({
     queryKey: ['health'], queryFn: api.health, refetchInterval: 30_000,
@@ -63,14 +75,14 @@ export function App() {
           <nav aria-label="Seções" className="flex items-center gap-0.5 rounded-full border border-line bg-bg/55 p-1 shadow-[inset_0_1px_2px_rgb(3_5_14/0.6)]">
             {VIEWS.map((v) => {
               const active = view === v.id;
-              return (
+              const button = (
                 <button
                   key={v.id}
                   onClick={() => setView(v.id)}
                   aria-current={active ? 'page' : undefined}
                   className={cn(
                     'relative flex h-8 cursor-pointer items-center gap-1.5 rounded-full px-3.5 text-[13px] font-medium transition-colors duration-150 active:scale-[0.97]',
-                    active ? 'text-ink' : 'text-muted hover:text-ink',
+                    active ? 'text-ink' : 'text-muted hover:text-ink max-lg:px-2.5',
                   )}
                 >
                   {active && (
@@ -80,10 +92,11 @@ export function App() {
                       className="absolute inset-0 rounded-full bg-accent/18 shadow-[inset_0_1px_0_rgb(255_255_255/0.08)] ring-1 ring-inset ring-accent/35"
                     />
                   )}
-                  <v.icon aria-hidden className={cn('relative size-3.5 transition-colors', active ? 'text-accent' : 'text-faint')} />
-                  <span className="relative">{v.label}</span>
+                  <v.icon aria-hidden className={cn('relative transition-colors', active ? 'size-3.5 text-accent' : 'size-3.5 text-faint max-lg:size-4')} />
+                  <span className={cn('relative whitespace-nowrap', !active && 'max-lg:sr-only')}>{v.label}</span>
                 </button>
               );
+              return compactNav && !active ? <Tooltip key={v.id} label={v.label}>{button}</Tooltip> : button;
             })}
           </nav>
         </div>
@@ -120,6 +133,8 @@ export function App() {
           <Suspense fallback={null}>
             {view === 'perfis' && <ProfilesPage onRunQueued={catchUp} />}
             {view === 'fontes' && <HealthPanel />}
+            {view === 'perfil' && <div data-testid="my-profile-placeholder" className="h-full" />}
+            {view === 'config' && <SettingsPage />}
           </Suspense>
         </motion.div>
       </main>
