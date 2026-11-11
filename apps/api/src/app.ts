@@ -4,6 +4,7 @@ import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { ZodError } from 'zod';
 import type { Db } from '@kv/db';
+import { SecretInputError } from '@kv/settings';
 import { LIMITS } from '@kv/shared';
 import { createAiContext, type AiContextOptions } from './ai-context';
 import { aiRoutes } from './routes/ai';
@@ -108,6 +109,8 @@ export function buildApp(db: Db, opts: AppOptions = {}) {
       const message = err.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
       return reply.code(400).send({ error: 'validation', message });
     }
+    // Chave vazia ou provedor desconhecido ao cifrar: a mensagem do erro é fixa e nunca inclui o valor recebido.
+    if (err instanceof SecretInputError) return reply.code(400).send({ error: 'validation', message: err.message });
     const { statusCode, message } = err as { statusCode?: number; message?: string };
     // Erros 4xx do próprio Fastify: JSON malformado, corpo grande demais, content-type não suportado.
     if (typeof statusCode === 'number' && statusCode >= 400 && statusCode < 500) {

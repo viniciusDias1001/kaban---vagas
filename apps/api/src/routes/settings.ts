@@ -105,6 +105,14 @@ export function settingsRoutes(app: FastifyInstance, db: Db, ctx: AiContext) {
       });
       body = { outcome: 'ok', message: OUTCOME_MESSAGES.ok(label, res.model), provider: config.provider, model: res.model, latencyMs: ctx.now() - started };
     } catch (e) {
+      // Uma resposta cortada, recusada ou fora do formato foi cobrada: entra no uso (e no limite do dia).
+      if (e instanceof AiError && e.usage) {
+        await recordUsage(db, {
+          provider: config.provider, model: e.model ?? config.models.fast, layer: 'test', inputTokens: e.usage.inputTokens,
+          outputTokens: e.usage.outputTokens, costUsd: estimateCostUsd(e.model ?? config.models.fast, e.usage, config.models.fast),
+          createdAt: ctx.now(),
+        });
+      }
       // A resposta veio fora do formato, mas veio: chave e modelo funcionam.
       const outcome = e instanceof AiError && e.kind === 'invalid_output' ? 'ok' : outcomeOf(e);
       body = { outcome, message: OUTCOME_MESSAGES[outcome](label, config.models.fast), provider: config.provider, model: config.models.fast, latencyMs: null };

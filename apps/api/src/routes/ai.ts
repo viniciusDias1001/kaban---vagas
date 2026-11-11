@@ -1,12 +1,12 @@
 import { desc, eq, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { dayStartMs } from '@kv/ai';
+import { RESUME_TEXT_MAX_CHARS, dayStartMs, resumeTextChars } from '@kv/ai';
 import {
   aiSpentSince, candidateProfiles, confirmAiTask, enqueueAiTask, langSubject, latestAiTasks, profileFor, resumes,
   saveProfile, toAiTaskDto, usageByLayer, type CandidateProfileRow, type Db,
 } from '@kv/db';
-import { RESUME_MIME, sniffResume } from '@kv/resume';
+import { EXTRACT_LIMITS, RESUME_MIME, sniffResume, type ExtractFailure, type ResumeKind } from '@kv/resume';
 import {
   CandidateProfileSchema, LIMITS, ProfileWireSchema, RESUME_LANGS, ResumeLangSchema, normalizeProfile, otherLang,
   type AiStatusDto, type AiTaskDto, type AiUsageDto, type CandidateProfileDto, type ProfileOverviewDto,
@@ -17,6 +17,24 @@ import { idParam } from './ids';
 
 const THIRTY_DAYS = 30 * 86_400_000;
 const LANG_NAMES = { 'pt-BR': 'português', en: 'inglês' } as const;
+
+/** Uma página de currículo cheia de texto tem uns 3 000 caracteres: só para dizer o limite em palavras. */
+const CHARS_PER_PAGE = 3_000;
+
+/**
+ * Mensagem por tipo de falha da extração. Frases fixas: o texto que o leitor de PDF/DOCX devolve pode trazer
+ * caminhos, nomes de módulos e trechos do arquivo, e não sai do servidor.
+ */
+const EXTRACT_MESSAGES: Record<ExtractFailure, (kind: ResumeKind) => string> = {
+  invalid: (kind) => (kind === 'pdf' ? 'O arquivo não é um PDF válido ou está protegido por senha.' : 'O arquivo não é um DOCX válido.'),
+  no_text: (kind) =>
+    kind === 'pdf'
+      ? 'Este PDF não tem texto extraível (parece ser uma imagem escaneada). Exporte o currículo como PDF com texto ou envie um DOCX.'
+      : 'Este DOCX não tem texto.',
+  too_many_pages: () => `O PDF tem páginas demais (o limite é ${EXTRACT_LIMITS.maxPages}). Envie uma versão mais curta do currículo.`,
+  too_large: () => 'O arquivo é grande demais depois de lido (ou ocupa memória demais) e foi recusado.',
+  timeout: () => 'O arquivo demorou demais para ser lido e foi recusado.',
+};
 
 const langParam = (req: { params: unknown }) => ResumeLangSchema.parse((req.params as { lang?: string }).lang);
 
@@ -91,7 +109,19 @@ export function aiRoutes(app: FastifyInstance, db: Db, ctx: AiContext) {
       return reply.code(400).send({ error: 'unsupported_type', message: 'Envie um PDF ou um DOCX. O tipo é conferido pelo conteúdo do arquivo.' });
     }
     const extracted = await ctx.extractResume(content, kind);
-    if (!extracted.ok) return reply.code(422).send({ error: 'unreadable_resume', message: extracted.message });
+    if (!extracted.ok) {
+      const message = (EXTRACT_MESSAGES[extracted.reason] ?? EXTRACT_MESSAGES.invalid)(kind);
+      return reply.code(422).send({ error: 'unreadable_resume', message });
+    }
+    // O mesmo critério da extração de perfil: um currículo que ela recusaria não vira tarefa na fila.
+    if (resumeTextChars(extracted.text) > RESUME_TEXT_MAX_CHARS) {
+      return reply.code(422).send({
+        error: 'resume_too_long',
+        message:
+          `O texto do currículo é longo demais para a IA ler de uma vez: o limite é de cerca de ${Math.floor(RESUME_TEXT_MAX_CHARS / CHARS_PER_PAGE)} páginas de texto. ` +
+          'Envie uma versão mais curta.',
+      });
+    }
 
     const values = {
       fileName: safeFileName(file.filename, `curriculo.${kind}`),
@@ -111,9 +141,12 @@ export function aiRoutes(app: FastifyInstance, db: Db, ctx: AiContext) {
     const lang = langParam(req);
     const [row] = await db.select().from(resumes).where(eq(resumes.lang, lang));
     if (!row) return reply.code(404).send({ error: 'not_found', message: 'currículo não encontrado' });
+    // Só os dois tipos que o upload grava; qualquer outro valor no banco sai como binário genérico. Nunca inline.
+    const kind = row.mime === RESUME_MIME.pdf ? 'pdf' : row.mime === RESUME_MIME.docx ? 'docx' : null;
     return reply
-      .header('content-type', row.mime)
-      .header('content-disposition', `attachment; filename="curriculo-${lang}.${row.mime === RESUME_MIME.pdf ? 'pdf' : 'docx'}"`)
+      .header('content-type', kind ? RESUME_MIME[kind] : 'application/octet-stream')
+      .header('content-disposition', `attachment; filename="curriculo-${lang}.${kind ?? 'bin'}"`)
+      .header('content-security-policy', "default-src 'none'; sandbox")
       .header('cache-control', 'no-store')
       .send(row.content);
   });
