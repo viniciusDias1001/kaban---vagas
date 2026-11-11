@@ -55,21 +55,25 @@ export function himalayasSearchUrl(term: string, page: number): string {
 }
 
 export interface HimalayasDeps {
-  fetchJson: (url: string) => Promise<HimalayasPage>;
+  fetchJson: (url: string, signal?: AbortSignal) => Promise<HimalayasPage>;
   sleep: (ms: number) => Promise<void>;
 }
 
 export function createHimalayas(deps: Partial<HimalayasDeps> = {}): Connector {
-  const { fetchJson: getPage = (url: string) => fetchJson<HimalayasPage>(url), sleep: pause = sleep } = deps;
+  const {
+    fetchJson: getPage = (url: string, signal?: AbortSignal) => fetchJson<HimalayasPage>(url, signal),
+    sleep: pause = sleep,
+  } = deps;
 
   /** As páginas mais recentes de um termo. Só a falha da primeira página conta como falha do termo. */
-  async function searchTerm(term: string): Promise<NormalizedJob[]> {
+  async function searchTerm(term: string, signal?: AbortSignal): Promise<NormalizedJob[]> {
     const out: NormalizedJob[] = [];
     for (let page = 1; page <= PAGES_PER_TERM; page++) {
       let data: HimalayasPage;
       try {
         if (page > 1) await pause(PAUSE_MS);
-        data = await getPage(himalayasSearchUrl(term, page));
+        if (signal?.aborted) break;
+        data = await getPage(himalayasSearchUrl(term, page), signal);
       } catch (e) {
         if (page === 1) throw e;
         console.warn(`himalayas: página ${page} de "${term}" falhou — ${e instanceof Error ? e.message : String(e)}`);
@@ -86,8 +90,11 @@ export function createHimalayas(deps: Partial<HimalayasDeps> = {}): Connector {
   return {
     id: 'himalayas',
     name: 'Himalayas',
-    async search(filters) {
-      const found = await collectQueries('himalayas', queriesFor(filters), searchTerm, { pause: () => pause(PAUSE_MS) });
+    async search(filters, signal) {
+      const found = await collectQueries('himalayas', queriesFor(filters), (term) => searchTerm(term, signal), {
+        pause: () => pause(PAUSE_MS),
+        shouldStop: () => signal?.aborted === true,
+      });
       // A mesma vaga aparece em mais de um termo e, às vezes, em duas páginas seguidas.
       const byId = new Map(found.map((j) => [j.externalId, j] as const));
       return found.filter((j) => byId.get(j.externalId) === j);

@@ -1,6 +1,6 @@
 import { getConnectors } from '@kv/connectors';
-import { assertDbReady, closeDb, createDb, type Db } from '@kv/db';
-import { enqueueAllActive, failStaleRuns, isDue, processQueue, scheduleHourly } from './scheduler';
+import { closeDb, createDb, waitForDb, type Db } from '@kv/db';
+import { createQueue, failStaleRuns, isDue, scheduleHourly } from './scheduler';
 
 const POLL_MS = 5_000;
 /** Quanto o encerramento espera os runs em andamento (o container tem ~10 s entre o SIGTERM e o SIGKILL). */
@@ -8,11 +8,18 @@ const DRAIN_MS = 4_000;
 const log = (msg: string) => console.log(`[worker ${new Date().toISOString()}] ${msg}`);
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-/** O worker não roda migrations (isso é do `pnpm db:migrate`); só confere que o banco está pronto. */
+/**
+ * O worker não roda migrations (isso é do `pnpm db:migrate`); só confere que o banco está pronto. Se o
+ * banco ainda não responde (tarefa de logon antes do Docker subir, redeploy), insiste por até ~5 min;
+ * banco sem tabelas falha na hora.
+ */
 async function connect(): Promise<Db> {
   try {
     const db = createDb();
-    await assertDbReady(db);
+    await waitForDb(db, {
+      onRetry: ({ attempt, waitMs, error }) =>
+        log(`tentativa ${attempt}: ${errorText(error)} Nova tentativa em ${waitMs / 1000} s.`),
+    });
     return db;
   } catch (e) {
     console.error(`[worker] ${errorText(e)}`);
@@ -24,29 +31,27 @@ const db = await connect();
 
 await failStaleRuns(db);
 
-if (await isDue(db)) log(`busca inicial: ${await enqueueAllActive(db)} runs enfileirados`);
+const queue = createQueue(db, getConnectors, { log });
 
-scheduleHourly(() => {
-  enqueueAllActive(db).then(
-    (n) => log(`busca horária: ${n} runs enfileirados`),
-    (e) => log(`erro na busca horária: ${errorText(e)}`),
-  );
-});
+// A busca (a inicial e a de cada hora cheia) é só um pedido: quem enfileira é a verificação da fila, que
+// insiste a cada 5 s enquanto o banco estiver fora do ar em vez de pular a hora.
+if (await isDue(db)) queue.requestEnqueue();
+scheduleHourly(() => queue.requestEnqueue());
 
-let busy = false;
 let stopping = false;
-const poll = setInterval(async () => {
-  if (busy || stopping) return;
-  busy = true;
+async function poll() {
+  if (stopping) return;
   try {
-    const done = await processQueue(db, getConnectors());
-    if (done > 0) log(`${done} runs executados`);
+    const { started, reaped, enqueued } = await queue.tick();
+    if (enqueued !== null) log(`busca: ${enqueued} runs enfileirados`);
+    if (reaped > 0) log(`${reaped} runs interrompidos marcados como erro`);
+    if (started > 0) log(`${started} runs iniciados`);
   } catch (e) {
     log(`erro na fila: ${errorText(e)}`);
-  } finally {
-    busy = false;
   }
-}, POLL_MS);
+}
+const timer = setInterval(() => void poll(), POLL_MS);
+void poll();
 
 /**
  * Redeploy/Ctrl+C: para de pegar runs da fila, espera um pouco os que estão em andamento e fecha o pool.
@@ -55,12 +60,14 @@ const poll = setInterval(async () => {
 async function shutdown(signal: string) {
   if (stopping) return;
   stopping = true;
-  clearInterval(poll);
+  clearInterval(timer);
   log(`${signal} recebido, encerrando`);
   setTimeout(() => process.exit(1), DRAIN_MS + 4_000).unref();
-  const deadline = Date.now() + DRAIN_MS;
-  while (busy && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
-  if (busy) log('runs ainda em andamento; serão marcados como erro no próximo start');
+  const drained = await Promise.race([
+    queue.idle().then(() => true),
+    new Promise<false>((r) => setTimeout(() => r(false), DRAIN_MS)),
+  ]);
+  if (!drained) log('runs ainda em andamento; serão marcados como erro no próximo start');
   try {
     await closeDb(db);
   } catch (e) {
@@ -72,4 +79,4 @@ async function shutdown(signal: string) {
 process.on('SIGTERM', () => void shutdown('SIGTERM'));
 process.on('SIGINT', () => void shutdown('SIGINT'));
 
-log('worker iniciado; busca a cada hora cheia, fila verificada a cada 5 s');
+log('worker iniciado; busca a cada hora cheia, fila verificada a cada 5 s (uma busca por fonte de cada vez)');

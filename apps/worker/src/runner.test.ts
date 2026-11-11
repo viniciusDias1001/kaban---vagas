@@ -113,9 +113,46 @@ describe('executeRun', () => {
   it('fails a run whose connector exceeds the timeout', async () => {
     await setup(['a']);
     const a: Connector = { id: 'a', name: 'A', search: () => new Promise(() => {}) };
-    await executeRun(db, (await runFor('a')).id, [a], { timeoutMs: 20, retries: 0 });
+    await executeRun(db, (await runFor('a')).id, [a], { timeoutMs: 20, retries: 0, abortGraceMs: 0 });
     expect((await runFor('a')).status).toBe('error');
     expect((await runFor('a')).error).toContain('timeout');
+  });
+
+  it('aborts a timed-out attempt and starts the retry only after it has settled', async () => {
+    await setup(['a']);
+    const log: string[] = [];
+    let calls = 0;
+    const a: Connector = {
+      id: 'a', name: 'A',
+      search: (_filters, signal) => {
+        const n = ++calls;
+        log.push(`start ${n}`);
+        if (n > 1) return Promise.resolve([job(1)]);
+        return new Promise((_, reject) => {
+          signal!.addEventListener('abort', () => {
+            // Demora um pouco para largar (ex.: fechar o navegador) depois de cancelada.
+            setTimeout(() => { log.push('settled 1'); reject(new Error('cancelada')); }, 30);
+          });
+        });
+      },
+    };
+    await executeRun(db, (await runFor('a')).id, [a], { timeoutMs: 20, retries: 1, abortGraceMs: 5_000 });
+    expect(log).toEqual(['start 1', 'settled 1', 'start 2']);
+    expect((await runFor('a')).status).toBe('ok');
+  });
+
+  it('does not wait past the grace period for an attempt that ignores the abort signal', async () => {
+    await setup(['a']);
+    let calls = 0;
+    const signals: AbortSignal[] = [];
+    const a: Connector = {
+      id: 'a', name: 'A',
+      search: (_filters, signal) => { calls++; signals.push(signal!); return new Promise(() => {}); },
+    };
+    await executeRun(db, (await runFor('a')).id, [a], { timeoutMs: 20, retries: 1, abortGraceMs: 10 });
+    expect(calls).toBe(2);
+    expect(signals.every((s) => s.aborted)).toBe(true);
+    expect(await runFor('a')).toMatchObject({ status: 'error', error: 'timeout após 20 ms' });
   });
 
   it('records an error for an unknown connector and ignores an unknown run id', async () => {
@@ -138,12 +175,33 @@ describe('insertNewJobs', () => {
     expect(rows.map((r) => r.url)).toEqual(['https://example.com/1', 'https://example.com/2']);
     expect(rows[0]).toMatchObject({ level: 'senior', postedAt, profileId: profile.id, column: 'descobertas' });
     expect(rows[0].discoveredAt).toBeGreaterThanOrEqual(before);
-    expect(rows[1].position - rows[0].position).toBe(1);
-    expect(rows[0].position).toBeLessThan(0);
+    expect(rows.map((r) => r.position)).toEqual([0, 1]);
 
     const events = await db.select().from(jobEvents);
     expect(events.map((e) => e.jobId).sort()).toEqual(rows.map((r) => r.id).sort());
     expect(events.every((e) => e.fromColumn === null && e.toColumn === 'descobertas' && e.actor === 'sistema')).toBe(true);
+  });
+
+  it('puts each new batch above the current top of descobertas, with small positions and in batch order', async () => {
+    const { profile } = await setup(['a']);
+    await insertNewJobs(db, profile.id, [job(1), job(2)]);
+    await insertNewJobs(db, profile.id, [job(3), job(4), job(5)]);
+    // Uma vaga já movida para outra coluna não conta para o topo de descobertas.
+    await db.update(jobs).set({ column: 'aplicada', position: -500 }).where(eq(jobs.url, 'https://example.com/3'));
+    await insertNewJobs(db, profile.id, [job(6)]);
+
+    const rows = await db.select().from(jobs).where(eq(jobs.column, 'descobertas')).orderBy(asc(jobs.position));
+    expect(rows.map((r) => [r.externalId, r.position])).toEqual([['6', -3], ['4', -2], ['5', -1], ['1', 0], ['2', 1]]);
+  });
+
+  it('goes above legacy rows that still have huge negative positions', async () => {
+    const { profile } = await setup(['a']);
+    const legacy = -1_800_000_000_000;
+    await insertNewJobs(db, profile.id, [job(1)]);
+    await db.update(jobs).set({ position: legacy + 0.5 });
+    await insertNewJobs(db, profile.id, [job(2), job(3)]);
+    const rows = await db.select().from(jobs).orderBy(asc(jobs.position));
+    expect(rows.map((r) => [r.externalId, r.position])).toEqual([['2', legacy - 2], ['3', legacy - 1], ['1', legacy + 0.5]]);
   });
 
   it('skips a url already on the board even when the dedup hash differs, without writing an event', async () => {
@@ -191,6 +249,9 @@ describe('insertNewJobs', () => {
     const { profile } = await setup(['a']);
     const many = Array.from({ length: 1201 }, (_, i) => job(i));
     expect(await insertNewJobs(db, profile.id, many)).toBe(1201);
+    const ordered = await db.select({ externalId: jobs.externalId, position: jobs.position }).from(jobs).orderBy(asc(jobs.position));
+    expect(ordered.map((r) => r.externalId)).toEqual(many.map((j) => j.externalId)); // a ordem da lista vale entre lotes
+    expect(new Set(ordered.map((r) => r.position)).size).toBe(1201);
     expect(await insertNewJobs(db, profile.id, many)).toBe(0);
     expect(await db.select({ id: jobEvents.id }).from(jobEvents)).toHaveLength(1201);
   });

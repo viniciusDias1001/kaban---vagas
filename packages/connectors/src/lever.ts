@@ -50,11 +50,11 @@ export function mapLever(postings: LeverPosting[], company: string): NormalizedJ
 export const lever: Connector = {
   id: 'lever',
   name: 'Lever',
-  async search() {
+  async search(_filters, signal) {
     const companies = boardList('LEVER_COMPANIES', ['palantir', 'spotify']);
     const results = await Promise.allSettled(
       companies.map(async (c) =>
-        mapLever(await fetchJson<LeverPosting[]>(`https://api.lever.co/v0/postings/${c}?mode=json`), c),
+        mapLever(await fetchJson<LeverPosting[]>(`https://api.lever.co/v0/postings/${c}?mode=json`, signal), c),
       ),
     );
     const ok = results.filter((r): r is PromiseFulfilledResult<NormalizedJob[]> => r.status === 'fulfilled');

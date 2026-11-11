@@ -38,7 +38,9 @@ export function mapArbeitnow(data: { data: ArbeitnowJob[] }): NormalizedJob[] {
 export const arbeitnow: Connector = {
   id: 'arbeitnow',
   name: 'Arbeitnow',
-  async search() {
-    return mapArbeitnow(await fetchJson<{ data: ArbeitnowJob[] }>('https://www.arbeitnow.com/api/job-board-api'));
+  async search(_filters, signal) {
+    return mapArbeitnow(
+      await fetchJson<{ data: ArbeitnowJob[] }>('https://www.arbeitnow.com/api/job-board-api', signal),
+    );
   },
 };

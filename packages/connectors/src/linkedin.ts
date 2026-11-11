@@ -97,16 +97,19 @@ function mergeById(jobs: NormalizedJob[]): NormalizedJob[] {
 }
 
 export interface LinkedinDeps {
-  fetchHtml: (url: string) => Promise<string>;
+  fetchHtml: (url: string, signal?: AbortSignal) => Promise<string>;
   sleep: (ms: number) => Promise<void>;
 }
 
 export function createLinkedin(deps: Partial<LinkedinDeps> = {}): Connector {
-  const { fetchHtml = fetchText, sleep: pause = sleep } = deps;
+  const {
+    fetchHtml = (url: string, signal?: AbortSignal) => fetchText(url, {}, signal),
+    sleep: pause = sleep,
+  } = deps;
   return {
     id: 'linkedin',
     name: 'LinkedIn',
-    async search(filters) {
+    async search(filters, signal) {
       const searches = linkedinTargets(filters.regions).flatMap((target) =>
         queriesFor(filters).map((query) => ({ target, query })),
       );
@@ -114,10 +117,10 @@ export function createLinkedin(deps: Partial<LinkedinDeps> = {}): Connector {
         'linkedin',
         searches,
         async ({ target, query }) => {
-          const html = await fetchHtml(linkedinUrl(target, query, filters.maxAgeDays));
+          const html = await fetchHtml(linkedinUrl(target, query, filters.maxAgeDays), signal);
           return parseLinkedin(html, { country: target.country, remote: target.remote, query });
         },
-        { pause: () => pause(PAUSE_MS) },
+        { pause: () => pause(PAUSE_MS), shouldStop: () => signal?.aborted === true },
       );
       return mergeById(found);
     },

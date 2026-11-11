@@ -49,14 +49,15 @@ export function mapGupy(data: { data: GupyJob[] }): NormalizedJob[] {
 export const gupy: Connector = {
   id: 'gupy',
   name: 'Gupy',
-  async search(filters) {
+  async search(filters, signal) {
     return collectQueries('gupy', queriesFor(filters), async (q) => {
       const term = q === 'developer' ? 'desenvolvedor' : q;
       // portal.api.gupy.io/api/v1/jobs now returns 404; the portal's own same-origin endpoint works.
       const data = await fetchJson<{ data: GupyJob[] }>(
         `https://portal.gupy.io/api/job-search/jobs?jobName=${encodeURIComponent(term)}&limit=50&offset=0`,
+        signal,
       );
       return mapGupy(data);
-    });
+    }, { shouldStop: () => signal?.aborted === true });
   },
 };

@@ -48,12 +48,15 @@ export function mapGreenhouse(data: { jobs: GreenhouseJob[] }, board: string): N
 export const greenhouse: Connector = {
   id: 'greenhouse',
   name: 'Greenhouse',
-  async search() {
+  async search(_filters, signal) {
     const boards = boardList('GREENHOUSE_BOARDS', ['gitlab', 'stripe', 'cloudflare', 'figma']);
     const results = await Promise.allSettled(
       boards.map(async (b) =>
         mapGreenhouse(
-          await fetchJson<{ jobs: GreenhouseJob[] }>(`https://boards-api.greenhouse.io/v1/boards/${b}/jobs?content=true`),
+          await fetchJson<{ jobs: GreenhouseJob[] }>(
+            `https://boards-api.greenhouse.io/v1/boards/${b}/jobs?content=true`,
+            signal,
+          ),
           b,
         ),
       ),

@@ -43,7 +43,7 @@ export function mapRemoteOk(items: RemoteOkItem[]): NormalizedJob[] {
 export const remoteok: Connector = {
   id: 'remoteok',
   name: 'RemoteOK',
-  async search() {
-    return mapRemoteOk(await fetchJson<RemoteOkItem[]>('https://remoteok.com/api'));
+  async search(_filters, signal) {
+    return mapRemoteOk(await fetchJson<RemoteOkItem[]>('https://remoteok.com/api', signal));
   },
 };

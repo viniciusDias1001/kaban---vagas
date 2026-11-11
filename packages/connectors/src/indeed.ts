@@ -170,7 +170,8 @@ export function createIndeed(deps: Partial<IndeedDeps> = {}): Connector {
   /** Termina quando a busca anterior fechou o navegador; nunca rejeita. */
   let previous: Promise<void> = Promise.resolve();
 
-  async function run(filters: SearchFilters, start: number): Promise<NormalizedJob[]> {
+  async function run(filters: SearchFilters, start: number, signal?: AbortSignal): Promise<NormalizedJob[]> {
+    if (signal?.aborted) throw new Error('Indeed: busca cancelada antes de começar');
     if (now() - start >= BUDGET_MS) {
       throw new Error('Indeed: outra busca ainda estava em andamento e o tempo desta acabou antes de começar');
     }
@@ -187,7 +188,7 @@ export function createIndeed(deps: Partial<IndeedDeps> = {}): Connector {
           const page = await session.html(indeedUrl(target, query, filters.maxAgeDays), HARD_LIMIT_MS - (now() - start));
           return parseIndeed(page, { domain: target.domain, country: target.country, query });
         },
-        { pause: () => pause(PAUSE_MS), shouldStop: () => now() - start >= BUDGET_MS },
+        { pause: () => pause(PAUSE_MS), shouldStop: () => now() - start >= BUDGET_MS || signal?.aborted === true },
       );
     } finally {
       await session.close().catch(() => {});
@@ -197,10 +198,10 @@ export function createIndeed(deps: Partial<IndeedDeps> = {}): Connector {
   return {
     id: 'indeed',
     name: 'Indeed',
-    search(filters) {
+    search(filters, signal) {
       const start = now();
       // Uma busca por vez: a nova tentativa do worker espera a anterior fechar o navegador.
-      const result = previous.then(() => run(filters, start));
+      const result = previous.then(() => run(filters, start, signal));
       previous = result.then(
         () => {},
         () => {},
