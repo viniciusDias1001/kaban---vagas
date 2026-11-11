@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { closeDb, jobs, type Db } from '@kv/db';
 import { createTestDb, resetTestDb } from '@kv/db/testing';
-import { buildApp } from './app';
+import { buildApp, CONTENT_SECURITY_POLICY } from './app';
 
 const profileBody = {
   name: 'React Pleno', stacks: ['react'], levels: ['pleno'], maxAgeDays: 7, regions: ['remoto'],
@@ -33,6 +33,9 @@ beforeAll(async () => {
   writeFileSync(join(dist, 'index.html'), INDEX);
   writeFileSync(join(dist, 'assets', 'app-abc123.js'), 'console.log("kv")');
   writeFileSync(join(dist, 'logo.png'), 'png');
+  writeFileSync(join(dist, '.env'), 'DATABASE_URL=segredo');
+  mkdirSync(join(dist, '.vite'));
+  writeFileSync(join(dist, '.vite', 'manifest.json'), '{"segredo":true}');
 });
 beforeEach(() => resetTestDb(db));
 afterAll(async () => {
@@ -147,6 +150,35 @@ describe('web buildado servido pela API', () => {
       const res = await app.inject({ method, url });
       expect(res.statusCode, `${method} ${url}`).toBe(404);
       expect(res.json().error).toBe('not_found');
+    }
+  });
+
+  it('never serves dotfiles or files inside dot directories', async () => {
+    for (const url of ['/.env', '/.vite/manifest.json', '/assets/../.env']) {
+      const res = await app.inject({ method: 'GET', url });
+      expect(res.statusCode, url).toBe(404);
+      expect(res.body, url).not.toContain('segredo');
+    }
+    // Com o ponto codificado a URL não parece arquivo: cai no fallback do SPA (index.html), não no .env.
+    const encoded = await app.inject({ method: 'GET', url: '/%2eenv' });
+    expect(encoded.body).toBe(INDEX);
+  });
+
+  it('sends nosniff on everything and a Content-Security-Policy on HTML pages only', async () => {
+    for (const url of ['/', '/perfis']) {
+      const page = await app.inject({ method: 'GET', url });
+      expect(page.headers['x-content-type-options'], url).toBe('nosniff');
+      expect(page.headers['content-security-policy'], url).toBe(CONTENT_SECURITY_POLICY);
+    }
+    expect(CONTENT_SECURITY_POLICY).toContain("frame-ancestors 'none'");
+    expect(CONTENT_SECURITY_POLICY).toContain("script-src 'self'");
+    expect(CONTENT_SECURITY_POLICY).toContain("connect-src 'self'");
+    expect(CONTENT_SECURITY_POLICY).not.toMatch(/script-src[^;]*unsafe/);
+
+    for (const url of ['/assets/app-abc123.js', '/logo.png', '/api/stats', '/api/unknown']) {
+      const res = await app.inject({ method: 'GET', url });
+      expect(res.headers['x-content-type-options'], url).toBe('nosniff');
+      expect(res.headers['content-security-policy'], url).toBeUndefined();
     }
   });
 
