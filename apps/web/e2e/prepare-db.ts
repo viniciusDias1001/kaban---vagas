@@ -8,7 +8,10 @@
 import { closeDb, createDb, dbErrorMessage, migrate } from '../../../packages/db/src/index';
 import { E2E_DATABASE_URL, e2eDatabaseName } from './database';
 
-const TABLES = ['job_events', 'jobs', 'runs', 'search_profiles'];
+const TABLES = [
+  'job_events', 'jobs', 'runs', 'search_profiles', 'resumes', 'profiles', 'job_ai', 'tailored_resumes', 'ai_tasks', 'ai_usage',
+  'settings', 'ai_keys',
+];
 
 async function createDatabaseIfMissing(url: string, name: string): Promise<void> {
   const adminUrl = new URL(url);
