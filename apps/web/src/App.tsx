@@ -1,16 +1,20 @@
 import { useQuery } from '@tanstack/react-query';
 import { Activity, CircleAlert, CircleCheck, Columns3, SlidersHorizontal, TriangleAlert } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { useState } from 'react';
+import { Suspense, lazy, useEffect, useState } from 'react';
 import { api } from './api';
 import { Board } from './components/Board';
-import { HealthPanel } from './components/HealthPanel';
-import { JobDrawer } from './components/JobDrawer';
-import { ProfilesPage } from './components/ProfilesPage';
 import { spring, springSnap } from './lib/motion';
 import { cn } from './lib/utils';
 import { useToast } from './toast';
 import { useRunCatchUp } from './useRunCatchUp';
+import { isWorkerStale } from './workerStale';
+
+// O quadro é a tela inicial e vai no pacote principal; o detalhe da vaga e as duas telas secundárias são
+// baixados à parte (o painel já começa a baixar junto com o quadro, para abrir sem espera).
+const JobDrawer = lazy(() => import('./components/JobDrawer').then((m) => ({ default: m.JobDrawer })));
+const ProfilesPage = lazy(() => import('./components/ProfilesPage').then((m) => ({ default: m.ProfilesPage })));
+const HealthPanel = lazy(() => import('./components/HealthPanel').then((m) => ({ default: m.HealthPanel })));
 
 type View = 'quadro' | 'perfis' | 'fontes';
 const VIEWS: { id: View; label: string; icon: typeof Columns3 }[] = [
@@ -18,15 +22,26 @@ const VIEWS: { id: View; label: string; icon: typeof Columns3 }[] = [
   { id: 'perfis', label: 'Perfis de busca', icon: SlidersHorizontal },
   { id: 'fontes', label: 'Saúde das fontes', icon: Activity },
 ];
-const TWO_HOURS = 2 * 3_600_000;
+/** De quanto em quanto tempo o aviso do worker é recalculado numa aba parada. */
+const STALE_CHECK_MS = 60_000;
 
 export function App() {
   const [view, setView] = useState<View>('quadro');
   const [openJob, setOpenJob] = useState<number | null>(null);
   const toast = useToast();
   const catchUp = useRunCatchUp();
-  const { data: health } = useQuery({ queryKey: ['health'], queryFn: api.health, refetchInterval: 30_000 });
-  const stale = !!health?.lastFinishedAt && Date.now() - health.lastFinishedAt > TWO_HOURS;
+  const { data: health, dataUpdatedAt: healthUpdatedAt } = useQuery({
+    queryKey: ['health'], queryFn: api.health, refetchInterval: 30_000,
+  });
+  const { data: profiles } = useQuery({ queryKey: ['profiles'], queryFn: api.profiles });
+  // O aviso depende do relógio: recalcula a cada minuto (aba parada) e a cada resposta nova da saúde.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), STALE_CHECK_MS);
+    return () => clearInterval(id);
+  }, []);
+  useEffect(() => setNow(Date.now()), [healthUpdatedAt]);
+  const stale = !!health && !!profiles && isWorkerStale({ now, lastFinishedAt: health.lastFinishedAt, profiles });
 
   return (
     <div className="flex h-full flex-col">
@@ -102,11 +117,15 @@ export function App() {
           initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.22, ease: 'easeOut' }}
         >
           {view === 'quadro' && <Board onOpen={setOpenJob} />}
-          {view === 'perfis' && <ProfilesPage onRunQueued={catchUp} />}
-          {view === 'fontes' && <HealthPanel />}
+          <Suspense fallback={null}>
+            {view === 'perfis' && <ProfilesPage onRunQueued={catchUp} />}
+            {view === 'fontes' && <HealthPanel />}
+          </Suspense>
         </motion.div>
       </main>
-      <JobDrawer id={openJob} onClose={() => setOpenJob(null)} />
+      <Suspense fallback={null}>
+        <JobDrawer id={openJob} onClose={() => setOpenJob(null)} />
+      </Suspense>
 
       <div className="pointer-events-none fixed inset-x-0 bottom-6 z-[60] flex justify-center px-4">
         <AnimatePresence>
