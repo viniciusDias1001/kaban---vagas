@@ -2,6 +2,8 @@ import { useQuery } from '@tanstack/react-query';
 import { AnimatePresence, motion } from 'motion/react';
 import { useState } from 'react';
 import { api } from './api';
+import { Board } from './components/Board';
+import { JobDrawer } from './components/JobDrawer';
 import { useToast } from './toast';
 
 type View = 'quadro' | 'perfis' | 'fontes';
@@ -14,6 +16,7 @@ const TWO_HOURS = 2 * 3_600_000;
 
 export function App() {
   const [view, setView] = useState<View>('quadro');
+  const [openJob, setOpenJob] = useState<number | null>(null);
   const toast = useToast();
   const { data: health } = useQuery({ queryKey: ['health'], queryFn: api.health, refetchInterval: 30_000 });
   const stale = !!health?.lastFinishedAt && Date.now() - health.lastFinishedAt > TWO_HOURS;
@@ -55,10 +58,11 @@ export function App() {
       )}
 
       <main className="min-h-0 flex-1 overflow-hidden">
-        {view === 'quadro' && <p className="p-6 text-muted">Quadro em construção.</p>}
+        {view === 'quadro' && <Board onOpen={setOpenJob} />}
         {view === 'perfis' && <p className="p-6 text-muted">Perfis em construção.</p>}
         {view === 'fontes' && <p className="p-6 text-muted">Fontes em construção.</p>}
       </main>
+      <JobDrawer id={openJob} onClose={() => setOpenJob(null)} />
 
       <AnimatePresence>
         {toast && (
