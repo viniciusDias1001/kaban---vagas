@@ -9,7 +9,11 @@ export const RESUME_MIME: Record<ResumeKind, string> = {
 
 const startsWith = (buf: Uint8Array, bytes: number[], at = 0) => bytes.every((b, i) => buf[at + i] === b);
 
-/** Nomes e tamanhos descompactados das entradas de um ZIP, lendo só o índice (nada é descompactado). */
+/**
+ * Nomes e tamanhos descompactados DECLARADOS das entradas de um ZIP, lendo só o índice (nada é
+ * descompactado). Serve para reconhecer o tipo do arquivo. O tamanho é o que o arquivo diz de si mesmo,
+ * então não vale como limite: quem impõe o teto de descompressão é `rebuildDocx` (docx-zip.ts).
+ */
 export function zipEntries(buf: Uint8Array): { name: string; size: number }[] {
   const entries: { name: string; size: number }[] = [];
   unzipSync(buf, {
