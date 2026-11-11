@@ -127,3 +127,51 @@ Tabelas novas, com RLS habilitado como as demais:
 6. Ao atingir o limite diário, nenhuma chamada automática é feita até o dia seguinte.
 7. Sem provedor configurado, todas as funções do Core continuam funcionando.
 8. Uma falha do provedor de IA não impede nem atrasa a busca horária de vagas.
+
+## Adendo (2026-11-11): aba Configurações
+
+Decidido após a aprovação do spec; onde conflitar com as seções acima, vale este adendo.
+
+**Motivo.** Configurar provedor, chave, modelos, orçamento e listas de empresas só por `.env` é pouco prático. O app ganha uma aba **Configurações**.
+
+**Conteúdo da aba**
+
+- *IA:* provedor (Claude, OpenAI, Gemini); modelo rápido e modelo forte, com os padrões do provedor pré-preenchidos; chave de API; limite diário de gasto; liga/desliga da camada 1 (triagem automática) e do disparo automático da camada 2; botão "Testar conexão"; gasto de hoje e dos últimos 30 dias.
+- *Fontes:* empresas consultadas no Greenhouse e no Lever; aviso de que o Indeed exige navegador visível e não funciona no container.
+- *Geral:* estado do worker e horário da próxima busca. O idioma de tradução permanece pt-BR nesta versão.
+
+O resumo de gasto e o estado da IA, antes previstos em "Meu perfil", ficam em Configurações; "Meu perfil" mantém currículo e perfil estruturado, com um atalho para Configurações quando a IA não está configurada.
+
+**Chave de API**
+
+- Digitada na aba e gravada no banco **cifrada** (AES-256-GCM, nonce aleatório por gravação) com chave derivada de `APP_SECRET`, que existe apenas no ambiente do servidor.
+- É de escrita apenas: a API nunca devolve a chave; a tela mostra só provedor, os quatro últimos caracteres e a data da gravação. Há ação para remover.
+- Uma chave por provedor; trocar de provedor não apaga as outras.
+- Se a variável de ambiente do provedor (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`) estiver definida, ela tem prioridade e a tela informa "definida pelo ambiente" sem permitir edição.
+- Sem `APP_SECRET`, gravar chave pela tela fica desabilitado, com a instrução de como gerar o segredo; as demais configurações funcionam.
+- Trocar `APP_SECRET` invalida as chaves gravadas: a decifragem falha de forma tratada e a tela pede a chave de novo.
+- A chave nunca aparece em log, mensagem de erro, resposta de API ou registro de uso.
+
+**Demais configurações**
+
+- Gravadas em uma tabela `settings` (chave, valor JSON, atualizado em), com RLS como as demais.
+- Precedência para valores não secretos: configuração gravada pela tela, depois variável de ambiente, depois padrão do código. As variáveis `AI_PROVIDER`, `AI_MODEL_FAST`, `AI_MODEL_STRONG`, `AI_DAILY_BUDGET_USD`, `GREENHOUSE_BOARDS` e `LEVER_COMPANIES` continuam válidas como padrão inicial.
+- API e worker leem a configuração do banco a cada uso (com cache curto), de modo que uma mudança na tela vale sem reiniciar processos.
+- Valores validados no servidor: modelos como texto curto, orçamento entre 0 e um teto, listas de empresas com tamanho e formato limitados.
+
+**Testar conexão**
+
+- Faz uma chamada mínima ao provedor com o modelo rápido e informa sucesso, chave inválida, modelo inexistente, sem crédito ou erro de rede, sem expor a chave.
+- Custa uma fração de centavo; é registrada no uso; tem limite de frequência no servidor.
+
+**Segurança**
+
+- As rotas de configuração seguem as proteções existentes (validação, guarda de origem, erro genérico em falha interna).
+- O alerta do Core continua: sem login, quem alcança o app consegue trocar o provedor e gastar a chave gravada, embora não consiga lê-la. O app não deve ficar em URL pública antes do sub-projeto de login.
+
+**Critérios de aceite adicionais**
+
+9. Configurar provedor, modelos, chave e orçamento pela tela põe a IA para funcionar sem editar arquivos nem reiniciar processos.
+10. Nenhuma resposta da API, log ou linha do banco contém a chave em texto puro.
+11. Com a variável de ambiente da chave definida, a tela não permite sobrescrevê-la e indica a origem.
+12. Sem `APP_SECRET`, a gravação de chave é recusada com instrução clara e o restante do app funciona.
