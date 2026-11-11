@@ -112,7 +112,8 @@ describe('resolveTailored', () => {
   it('blocks the hiring company inside the rewritten text, unless the profile already names it', () => {
     const draft = { ...honest(), summary: 'Quero levar minha experiência para a Acme Ficticia.' };
     expect(codes(draft, 'Acme Fictícia')).toEqual(['foreign_company@summary']);
-    expect(codes(draft)).toEqual([]);
+    // Sem saber a empresa da vaga, "Acme" ainda é um nome que não está no perfil.
+    expect(codes(draft)).toEqual(['novel_term@summary']);
     expect(codes({ ...honest(), summary: 'Atuei na Empresa Fictícia Ltda.' }, 'Empresa Fictícia Ltda')).toEqual([]);
   });
 
@@ -148,6 +149,6 @@ describe('prompt injection', () => {
   it('a compromised model that invents a skill, an employer and a number does not get past the verifier', async () => {
     const { data } = await draftTailored(fake, SAMPLE_PROFILE, job('FAKE_AI_COMPROMISED'), 'pt-BR');
     const { violations } = resolveTailored(data, SAMPLE_PROFILE, 'pt-BR', { jobCompany: SAMPLE_JOB.company });
-    expect(violations.map((v) => v.code).sort()).toEqual(['new_number', 'unknown_id']);
+    expect(violations.map((v) => v.code).sort()).toEqual(['new_number', 'novel_term', 'unknown_id']);
   });
 });

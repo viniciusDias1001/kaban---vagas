@@ -66,11 +66,22 @@ export function draftOf(resume: TailoredResume): TailoredDraft {
   };
 }
 
+/**
+ * `novel_term`: nome próprio, sigla ou termo técnico que não está no perfil; `unrelated_text`: realização
+ * reescrita sem relação com a original; `limit`: tamanho, quantidade ou caractere de controle fora do permitido.
+ */
+export const VIOLATION_CODES = [
+  'unknown_id', 'duplicate_id', 'new_number', 'foreign_company', 'novel_term', 'unrelated_text', 'limit',
+] as const;
+export type ViolationCode = (typeof VIOLATION_CODES)[number];
+
 export interface Violation {
-  code: 'unknown_id' | 'duplicate_id' | 'new_number' | 'foreign_company';
+  code: ViolationCode;
   /** Onde, no rascunho: "experiences[0].achievements[1].text". */
   path: string;
   message: string;
+  /** O termo ou número que divergiu, quando há um (ex.: "Kubernetes", "40x"). */
+  detail?: string;
 }
 
 // ---------------------------------------------------------------------------------------------

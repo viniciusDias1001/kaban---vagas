@@ -44,6 +44,43 @@ export const SAMPLE_PROFILE: CandidateProfile = {
   links: [{ id: 'link_aaaaaaa1', label: 'Portfólio', url: 'https://exemplo.test/maria' }],
 };
 
+/**
+ * Perfil com cara de dado real, para os testes do verificador: ids aleatórios com dígitos, telefone, duas
+ * experiências, datas com mês. Um teste que só passa porque um dígito de id ou de telefone "liberou" um
+ * número falha com este perfil.
+ */
+export const REALISTIC_PROFILE: CandidateProfile = {
+  contact: { name: 'Maria Exemplo da Silva', email: 'maria.exemplo99@exemplo.test', phone: '+55 11 91234-5678', location: 'São Paulo, SP' },
+  summary: 'Pessoa fictícia para testes: desenvolvedora front-end com foco em React.',
+  experiences: [
+    {
+      id: 'exp_k3j9x0aq', company: 'Empresa Fictícia Ltda', title: 'Desenvolvedora Front-end', start: '2021-03',
+      end: '2024-06', location: 'Remoto',
+      achievements: [
+        { id: 'ach_10ab7cde', text: 'Reduzi o tempo de build em 40% com a migração para Vite' },
+        { id: 'ach_zz15yy20', text: 'Liderei 3 pessoas no redesenho do checkout' },
+        { id: 'ach_8d2f6g1h', text: 'Mantive a API de pagamentos em Node.js, com R$ 1,5 milhão processado por mês' },
+      ],
+    },
+    {
+      id: 'exp_bbbbbbb2', company: 'Outra Fictícia SA', title: 'Estagiária', start: '2019-10', end: '2021-02', location: '',
+      achievements: [{ id: 'ach_bbbbbbb1', text: 'Atendi 40 clientes internos' }],
+    },
+  ],
+  education: [
+    { id: 'edu_4f5g6h7j', institution: 'Universidade Exemplo', degree: 'Ciência da Computação', start: '2015', end: '2019' },
+  ],
+  skills: [
+    { id: 'skill_1a2b3c4d', name: 'React' },
+    { id: 'skill_5e6f7g8h', name: 'TypeScript' },
+    { id: 'skill_9i0j1k2l', name: 'Node.js' },
+    { id: 'skill_bbbbbbb4', name: 'Java' },
+  ],
+  languages: [{ id: 'lang_3m4n5o6p', name: 'Inglês', level: 'avançado' }],
+  certifications: [],
+  links: [{ id: 'link_7q8r9s0t', label: 'Portfólio', url: 'https://exemplo.test/maria2024' }],
+};
+
 export const SAMPLE_JOB = {
   id: 1,
   title: 'Senior React Engineer',
