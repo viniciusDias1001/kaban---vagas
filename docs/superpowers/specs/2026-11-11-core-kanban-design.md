@@ -141,3 +141,12 @@ Entradas validadas com os schemas Zod de `packages/shared`.
 4. A mesma vaga não aparece duas vezes.
 5. Um conector com erro não impede os outros de entregar vagas.
 6. Mover um card persiste após recarregar a página e aparece no histórico.
+
+## Adendo (2026-11-11): CI e preparo para Railway
+
+Decidido durante a implementação:
+
+- **CI:** GitHub Actions roda typecheck, testes unitários e e2e a cada push e pull request.
+- **Alvo de deploy:** Railway, em **um serviço**: um container roda API, worker e o web já buildado (servido pela API), com o SQLite em um volume do Railway (`DB_PATH` apontando para o volume). O uso local com `pnpm dev` não muda.
+- **Acesso:** o app ainda não tem login. Contas de usuário são um sub-projeto próprio. **Até esse sub-projeto existir, o app não deve ser exposto em URL pública**; o Core entrega só o container e a configuração prontos, sem domínio gerado.
+- Indeed depende de navegador e fica desligado por padrão no container.

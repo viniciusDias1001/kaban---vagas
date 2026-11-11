@@ -4331,3 +4331,35 @@ Anote no commit qualquer fonte que tenha ficado em erro nesta verificação.
 git add -A
 git commit -m "docs: add README and worker install script"
 ```
+
+---
+
+### Task 21: CI (GitHub Actions)
+
+**Files:**
+- Create: `.github/workflows/ci.yml`
+
+Workflow `CI` em `push` e `pull_request`, um job em `ubuntu-latest`:
+
+1. `actions/checkout`, `pnpm/action-setup` (versão lida de `packageManager` no `package.json` raiz — adicionar o campo), `actions/setup-node` com Node 24 e cache pnpm.
+2. `pnpm install --frozen-lockfile`
+3. `pnpm typecheck`
+4. `pnpm test`
+5. `pnpm --filter @kv/web exec playwright install --with-deps chromium`
+6. `pnpm e2e`; em falha, publicar `apps/web/playwright-report` e `test-results` como artefato.
+
+Os testes unitários não usam rede (fixtures). Verificação: validar o YAML e rodar localmente a mesma sequência de comandos.
+
+### Task 22: Container único e configuração Railway
+
+**Files:**
+- Create: `Dockerfile`, `.dockerignore`, `railway.json`, `scripts/start-prod.mjs`
+- Modify: `apps/api/src/app.ts` (servir `apps/web/dist` quando existir), `apps/api/src/index.ts` (host e porta por variável), `README.md`
+
+- Um container: build do web (`pnpm --filter @kv/web build`), depois `scripts/start-prod.mjs` sobe API e worker como processos filhos e encerra o container se um deles cair.
+- A API escuta em `HOST` (padrão `127.0.0.1`; `0.0.0.0` no container) e `PORT` (Railway) ou `API_PORT`; serve os arquivos estáticos do web e as rotas da API sob `/api` além das rotas atuais, para o web buildado funcionar sem o proxy do Vite.
+- `DB_PATH=/data/kanban.db`, com volume do Railway montado em `/data`.
+- Indeed desligado no container (sem Chromium na imagem); o conector reporta erro claro em "Saúde das fontes".
+- `railway.json`: builder Dockerfile, healthcheck em `/api/stats`, política de restart.
+- **Não gerar domínio público nem fazer deploy nesta task.** README explica o deploy e avisa que o app não tem login.
+- Verificação: `docker build` e `docker run` locais com volume, se o Docker estiver disponível; senão, `node scripts/start-prod.mjs` local com o web buildado e `curl` nas rotas.
