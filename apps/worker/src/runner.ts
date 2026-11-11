@@ -1,5 +1,5 @@
 import { eq, inArray, min, sql } from 'drizzle-orm';
-import { detectLevel, matchesFilters, type Connector } from '@kv/connectors';
+import { detectLevel, matchesFilters, type Connector, type ConnectorConfig } from '@kv/connectors';
 import { JOBS_WRITE_LOCK, jobEvents, jobs, runs, searchProfiles, type Db } from '@kv/db';
 import type { NormalizedJob, SearchFilters } from '@kv/shared';
 import { dedupHash } from './dedup';
@@ -11,6 +11,11 @@ export interface RunOptions {
   retries?: number;
   /** Depois de abortar uma tentativa que estourou o tempo, quanto esperar ela terminar (padrão 2 s). */
   abortGraceMs?: number;
+  /**
+   * Configuração entregue aos conectores (listas de empresas do Greenhouse e do Lever), lida a cada run:
+   * uma mudança na aba Configurações vale na próxima busca. Se a leitura falhar, o run termina em erro.
+   */
+  connectorConfig?: () => Promise<ConnectorConfig>;
 }
 
 const DEFAULTS = { timeoutMs: 60_000, retries: 1, abortGraceMs: 2_000 } as const;
@@ -31,12 +36,17 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
  * `timeoutMs` tem o `signal` abortado (os conectores o repassam às requisições, que são canceladas) e
  * ganha `abortGraceMs` para terminar; só então vem a próxima.
  */
-async function searchWithRetry(connector: Connector, filters: SearchFilters, opts: Required<RunOptions>) {
+async function searchWithRetry(
+  connector: Connector,
+  filters: SearchFilters,
+  opts: Required<Omit<RunOptions, 'connectorConfig'>>,
+  config?: ConnectorConfig,
+) {
   const { timeoutMs, retries, abortGraceMs } = opts;
   let last: unknown;
   for (let attempt = 0; attempt <= retries; attempt++) {
     const controller = new AbortController();
-    const search = Promise.resolve().then(() => connector.search(filters, controller.signal));
+    const search = Promise.resolve().then(() => connector.search(filters, controller.signal, config));
     const settled = search.then(
       () => {},
       () => {},
@@ -153,7 +163,8 @@ export async function executeRun(db: Db, runId: number, connectors: Connector[],
         maxAgeDays: profile.maxAgeDays,
         regions: profile.regions,
       };
-      const all = await searchWithRetry(connector, filters, options);
+      const config = await opts.connectorConfig?.();
+      const all = await searchWithRetry(connector, filters, options, config);
       const found = all.filter((j) => matchesFilters(j, filters));
       const inserted = await insertNewJobs(db, profile.id, found);
       await db
