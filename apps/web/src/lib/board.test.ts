@@ -99,8 +99,8 @@ describe('remainingAfter', () => {
 describe('displayColumn', () => {
   const jobs = [{ id: 1 }, { id: 2 }, { id: 3 }];
   const scores = toScoreMap([
-    { jobId: 2, score: 90, titlePt: null, language: null, reason: null, stale: false },
-    { jobId: 3, score: 60, titlePt: null, language: null, reason: null, stale: false },
+    { jobId: 2, score: 90, titlePt: null, language: null, stale: false },
+    { jobId: 3, score: 60, titlePt: null, language: null, stale: false },
   ]);
   it('keeps the board order (same array) unless sorting by score', () => {
     expect(displayColumn(jobs, 'board', scores)).toBe(jobs);

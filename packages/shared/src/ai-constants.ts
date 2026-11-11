@@ -175,6 +175,20 @@ export interface JobAiSummaryDto {
   stale: boolean;
 }
 
+/** Item de `GET /jobs/ai` (o quadro, relido a cada 15 s): a nota sem a justificativa, que vem em `GET /jobs/:id/ai`. */
+export type JobAiListItemDto = Omit<JobAiSummaryDto, 'reason'>;
+
+/** Resposta de `POST /jobs/:id/ai/analyze`. */
+export interface AnalyzeResultDto {
+  /** Camadas enfileiradas por este pedido. */
+  queued: AiTaskType[];
+  /**
+   * Por que nada (ou nem tudo) foi enfileirado, quando não é "já está em dia": `previous_error` = uma camada
+   * terminou em erro e o pedido era automático (abrir a vaga, mover o card); só um pedido explícito a refaz.
+   */
+  reason: 'not_configured' | 'no_profile' | 'auto_off' | 'previous_error' | null;
+}
+
 export interface LayerDto {
   state: LayerState;
   /** A tarefa mais recente da camada para esta vaga (traz o erro e o id para confirmar o gasto). */

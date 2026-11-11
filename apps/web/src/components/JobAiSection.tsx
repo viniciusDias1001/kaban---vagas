@@ -218,6 +218,15 @@ export function JobAiSection({ jobId, status, detail, onOpenSettings, index }: P
           </div>
         )}
 
+        {/* A nota (camada 1) falhou: sem isto a seção pareceria apenas "sem nota". O "Tentar de novo" refaz as duas camadas que faltam. */}
+        {data.tier1.state === 'error' && state !== 'error' && (
+          <Notice tone="bad" title="A nota desta vaga falhou" data-testid="ai-score-error" action={
+            <Button type="button" size="sm" disabled={analyze.isPending} onClick={() => analyze.mutate()}><RotateCw aria-hidden /> Tentar de novo</Button>
+          }>
+            <TaskError error={data.tier1.task?.error} />
+          </Notice>
+        )}
+
         <div data-testid="ai-analysis-state" aria-live="polite" className={cn(state === 'ok' && 'sr-only')}>
           {state === 'ok' && layerMessage(state, tier2?.task ?? null)}
           {(state === 'queued' || state === 'running') && <Working>{layerMessage(state, tier2?.task ?? null)} Analisando a vaga com o seu perfil.</Working>}
@@ -256,9 +265,10 @@ export function JobAiSection({ jobId, status, detail, onOpenSettings, index }: P
           )}
           {state === 'error' && (
             <Notice tone="bad" title="A análise desta vaga falhou" action={
-              <Button type="button" size="sm" disabled={analyze.isPending} onClick={() => analyze.mutate()}><RotateCw aria-hidden /> Tentar de novo</Button>
+              <Button type="button" size="sm" data-testid="ai-retry" disabled={analyze.isPending} onClick={() => analyze.mutate()}><RotateCw aria-hidden /> Tentar de novo</Button>
             }>
               <TaskError error={tier2?.task?.error} />
+              <p className="mt-1 text-muted">Ela não é refeita sozinha ao abrir a vaga: cada tentativa é uma chamada paga ao provedor.</p>
             </Notice>
           )}
         </div>

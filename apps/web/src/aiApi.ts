@@ -1,5 +1,5 @@
 import type {
-  AiStatusDto, AiUsageDto, CandidateProfileDto, JobAiDetailDto, JobAiSummaryDto, ProfileOverviewDto, ProfileWire,
+  AiStatusDto, AiUsageDto, AnalyzeResultDto, CandidateProfileDto, JobAiDetailDto, JobAiListItemDto, ProfileOverviewDto, ProfileWire,
   AiKeyMetaDto, AiProviderId, ResumeLang, ResumeMetaDto, SettingsDto, SettingsPatch, TailoredDraft, TailoredSaveDto,
   TailoredStateDto, TestConnectionDto,
 } from '@kv/shared/client';
@@ -46,9 +46,14 @@ export const aiApi = {
   saveProfile: (lang: ResumeLang, data: ProfileWire) => request<CandidateProfileDto>(`/ai/profile/${lang}`, json('PUT', { data })),
   translateProfile: (lang: ResumeLang) => request<{ queued: boolean }>(`/ai/profile/${lang}/translate`, post()),
   confirmTask: (taskId: number) => request<{ queued: boolean }>(`/ai/tasks/${taskId}/confirm`, post()),
-  jobScores: () => request<JobAiSummaryDto[]>('/jobs/ai'),
+  jobScores: () => request<JobAiListItemDto[]>('/jobs/ai'),
   jobAi: (jobId: number) => request<JobAiDetailDto>(`/jobs/${jobId}/ai`),
-  analyzeJob: (jobId: number) => request<{ queued: string[]; reason: string | null }>(`/jobs/${jobId}/ai/analyze`, post()),
+  /**
+   * `explicit` = o usuário clicou ("Analisar esta vaga", "Tentar de novo"). Sem ele (abrir a vaga), a API não refaz
+   * uma camada que terminou em erro.
+   */
+  analyzeJob: (jobId: number, explicit = false) =>
+    request<AnalyzeResultDto>(`/jobs/${jobId}/ai/analyze`, explicit ? json('POST', { explicit: true }) : post()),
   tailored: (jobId: number) => request<TailoredStateDto>(`/jobs/${jobId}/tailored`),
   requestTailored: (jobId: number) => request<{ queued: boolean }>(`/jobs/${jobId}/tailored`, post()),
   saveTailored: (jobId: number, draft: TailoredDraft) => request<TailoredSaveDto>(`/jobs/${jobId}/tailored`, json('PUT', draft)),

@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { ArrowUpRight, CloudOff, Globe, Info, MapPin, RotateCw, X } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
-import { COLUMNS, COLUMN_LABELS, LIMITS, type Column, type JobDto } from '@kv/shared/client';
+import { AI_TIER2_DESCRIPTION_CHARS, COLUMNS, COLUMN_LABELS, LIMITS, type Column, type JobDto } from '@kv/shared/client';
 import { ageLabel } from '../age';
 import { api } from '../api';
 import { drawerTitle } from '../lib/ai';
@@ -198,6 +198,11 @@ function Description({ original, translated, index }: { original: string; transl
       ) : <span className="text-[11px] text-faint">traduzida pela IA</span>)}
     >
       <p lang={text === original ? undefined : 'pt-BR'} className="whitespace-pre-wrap break-words text-sm leading-relaxed text-ink-2">{text}</p>
+      {text !== original && original.trim().length > AI_TIER2_DESCRIPTION_CHARS && (
+        <p data-testid="translation-partial" className="mt-2 text-xs leading-snug text-faint">
+          A descrição é longa: a IA leu e traduziu os primeiros {AI_TIER2_DESCRIPTION_CHARS.toLocaleString('pt-BR')} caracteres. O restante está no texto original.
+        </p>
+      )}
     </Section>
   );
 }

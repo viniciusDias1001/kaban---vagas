@@ -1,13 +1,13 @@
 import {
-  LIMITS, type AiStatusDto, type AiTaskDto, type JobAiSummaryDto, type LayerState, type PdfWarningsDto, type ProfileWire, type Violation,
+  LIMITS, type AiStatusDto, type AiTaskDto, type JobAiListItemDto, type LayerState, type PdfWarningsDto, type ProfileWire, type Violation,
   type ViolationCode,
 } from '@kv/shared/client';
 import { NETWORK_ERROR, errorMessage } from '../apiError';
 
 /** Lógica pura das telas de IA (sem React): ordenação, rótulos, estados e validação do arquivo. */
 
-export type ScoreMap = ReadonlyMap<number, JobAiSummaryDto>;
-export const toScoreMap = (scores: readonly JobAiSummaryDto[]): ScoreMap => new Map(scores.map((s) => [s.jobId, s]));
+export type ScoreMap = ReadonlyMap<number, JobAiListItemDto>;
+export const toScoreMap = (scores: readonly JobAiListItemDto[]): ScoreMap => new Map(scores.map((s) => [s.jobId, s]));
 
 /** Ordem de uma coluna: a do quadro (posição) ou por nota. */
 export type ColumnSort = 'board' | 'score';
@@ -29,7 +29,7 @@ export const scoreTone = (score: number): ScoreTone => (score >= 75 ? 'high' : s
  * Título a mostrar no card: o traduzido, quando existe e é diferente do original. `original` (para a
  * dica) só vem preenchido quando o card está mostrando a tradução.
  */
-export const cardTitle = (title: string, ai: JobAiSummaryDto | undefined): { title: string; original: string | null } =>
+export const cardTitle = (title: string, ai: Pick<JobAiListItemDto, 'titlePt'> | undefined): { title: string; original: string | null } =>
   drawerTitle(title, ai?.titlePt);
 
 /**

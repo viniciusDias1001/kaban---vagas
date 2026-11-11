@@ -142,7 +142,8 @@ export function useJobScores(enabled: boolean) {
 /**
  * A seção "Análise IA" de uma vaga aberta. Com `auto` (a configuração "análise automática", que vem de
  * `useAiStatus().data.tier2Auto`), abrir a vaga pede a análise uma vez: a API só enfileira o que falta ou
- * está desatualizado. Sem `auto`, nada é pedido sozinho; a tela oferece o botão de `useAnalyzeJob`.
+ * está desatualizado, e NUNCA refaz sozinha uma camada que terminou em erro (isso é do botão "Tentar de novo").
+ * Sem `auto`, nada é pedido sozinho; a tela oferece o botão de `useAnalyzeJob`.
  * Atualiza a cada 2 s enquanto há camada pendente.
  */
 export function useJobAi(jobId: number, enabled: boolean, auto: boolean) {
@@ -171,11 +172,11 @@ export function useJobAi(jobId: number, enabled: boolean, auto: boolean) {
   });
 }
 
-/** Pedido explícito de análise: o botão "Analisar esta vaga" e o "Tentar de novo". */
+/** Pedido explícito de análise: o botão "Analisar esta vaga" e o "Tentar de novo" (refaz também o que deu erro). */
 export function useAnalyzeJob(jobId: number) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: () => aiApi.analyzeJob(jobId),
+    mutationFn: () => aiApi.analyzeJob(jobId, true),
     onSuccess: () => qc.invalidateQueries({ queryKey: AI_KEYS.job(jobId) }),
   });
 }

@@ -109,8 +109,8 @@ describe('GET /jobs/ai and /jobs/:id/ai', () => {
     ]);
     const list = (await app.inject({ method: 'GET', url: '/jobs/ai' })).json();
     expect(list.sort((x: { jobId: number }, y: { jobId: number }) => x.jobId - y.jobId)).toEqual([
-      { jobId: a.id, language: 'en', titlePt: 'Engenheira React', score: 88, reason: 'ótimo', stale: false },
-      { jobId: b.id, language: 'pt', titlePt: 'Dev', score: 30, reason: 'fraco', stale: true },
+      { jobId: a.id, language: 'en', titlePt: 'Engenheira React', score: 88, stale: false },
+      { jobId: b.id, language: 'pt', titlePt: 'Dev', score: 30, stale: true },
     ]);
     // "/jobs/ai" não pode ser confundido com "/jobs/:id".
     expect((await app.inject({ method: 'GET', url: '/api/jobs/ai' })).statusCode).toBe(200);
