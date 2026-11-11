@@ -1,14 +1,17 @@
-import { Plus, Trash2, X } from 'lucide-react';
+import { useQueryClient } from '@tanstack/react-query';
+import { Plus, RotateCw, Trash2, X } from 'lucide-react';
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { LIMITS, type CandidateProfileDto, type ProfileOrigin, type ProfileWire, type ResumeLang } from '@kv/shared/client';
-import { blankItem } from '../lib/ai';
+import { ApiError } from '../apiError';
+import { blankItem, rebaseDraft } from '../lib/ai';
 import { cn } from '../lib/utils';
 import { showToast } from '../toast';
-import { useSaveProfile } from '../useAi';
+import { AI_KEYS, useSaveProfile } from '../useAi';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Input, Textarea } from './ui/input';
+import { Notice } from './ui/notice';
 
 const LABEL = 'block text-xs font-medium text-muted';
 const EYEBROW = 'text-[11px] font-semibold uppercase tracking-[0.08em] text-faint';
@@ -19,8 +22,17 @@ const ORIGIN: Record<ProfileOrigin, { label: string; tone: 'accent' | 'warn' | '
   editado: { label: 'editado', tone: 'ok' },
 };
 
-/** Rascunhos não salvos de quem saiu da tela, por idioma: voltam como estavam (como em Perfis de busca). */
+/**
+ * Rascunhos não salvos de quem saiu da tela, por idioma: voltam como estavam (como em Perfis de busca). `version` é
+ * a versão do perfil em que o rascunho se baseia; se o servidor já tem outra quando o editor volta, o rascunho
+ * continua lá e a tela avisa (ver `rebaseDraft`).
+ */
 const kept: Partial<Record<ResumeLang, { version: number; data: ProfileWire }>> = {};
+
+/** Esquece o rascunho guardado de um idioma (ou de todos): o perfil foi apagado. */
+export function forgetProfileDraft(lang?: ResumeLang): void {
+  for (const key of Object.keys(kept) as ResumeLang[]) if (!lang || key === lang) delete kept[key];
+}
 
 /** Cópia editável: mesmos campos e mesmos ids. Ids nunca são criados nem alterados aqui. */
 const copyOf = (data: ProfileWire): ProfileWire => JSON.parse(JSON.stringify(data)) as ProfileWire;
@@ -86,21 +98,35 @@ interface Props {
 
 export function ProfileEditor({ profile, active, footer }: Props) {
   const lang = profile.lang;
-  const [data, setData] = useState<ProfileWire>(() => (kept[lang]?.version === profile.version ? kept[lang].data : copyOf(profile.data)));
-  // Versão nova no servidor (currículo reenviado, tradução refeita): o editor acompanha, a menos que haja edição pendente.
-  const [base, setBase] = useState(profile);
+  const qc = useQueryClient();
+  const [data, setData] = useState<ProfileWire>(() => kept[lang]?.data ?? copyOf(profile.data));
+  /** Versão do perfil em que o rascunho se baseia: é ela que vai no PUT, e a API recusa (409) se já houver outra. */
+  const [draftVersion, setDraftVersion] = useState(() => kept[lang]?.version ?? profile.version);
+  /** O servidor tem uma versão mais nova que a do rascunho, e há alterações não salvas: o usuário decide. */
+  const [conflict, setConflict] = useState(false);
+  const dirty = !same(data, profile.data);
+  // Versão nova no servidor (currículo reenviado, tradução refeita, outra aba): sem edição pendente o editor
+  // acompanha; com edição pendente o rascunho fica e a tela pergunta o que fazer.
+  const [base, setBase] = useState<CandidateProfileDto | null>(null);
   if (profile !== base) {
-    if (profile.version !== base.version && same(data, base.data)) setData(copyOf(profile.data));
+    const action = rebaseDraft({ dirty: base ? !same(data, base.data) : dirty, version: draftVersion }, profile.version);
+    if (action === 'adopt') {
+      setData(copyOf(profile.data));
+      setDraftVersion(profile.version);
+      setConflict(false);
+    } else if (action === 'conflict') {
+      setConflict(true);
+    }
     setBase(profile);
   }
   const save = useSaveProfile();
   const formId = useId();
   const summaryId = useId();
-  const dirty = !same(data, profile.data);
   const origin = ORIGIN[profile.origin];
+  const blocked = conflict && dirty;
 
-  const latest = useRef({ data, dirty, version: profile.version });
-  latest.current = { data, dirty, version: profile.version };
+  const latest = useRef({ data, dirty, version: draftVersion });
+  latest.current = { data, dirty, version: draftVersion };
   useEffect(() => () => {
     const { dirty: wasDirty, ...draft } = latest.current;
     if (wasDirty) kept[lang] = draft;
@@ -120,15 +146,37 @@ export function ProfileEditor({ profile, active, footer }: Props) {
 
   function submit(e: FormEvent) {
     e.preventDefault();
-    if (!dirty || save.isPending) return;
-    save.mutate({ lang, data }, {
+    if (!dirty || blocked || save.isPending) return;
+    save.mutate({ lang, data, version: draftVersion }, {
       onSuccess: (saved) => {
         // A resposta traz os ids que a API criou para os itens novos.
         setBase(saved);
         setData(copyOf(saved.data));
+        setDraftVersion(saved.version);
+        setConflict(false);
         showToast('Perfil salvo. Notas e análises antigas ficam marcadas como desatualizadas.', 'info');
       },
+      onError: (e) => {
+        // 409: o perfil mudou no servidor depois que este rascunho começou. Busca a versão nova e mostra as opções.
+        if (e instanceof ApiError && e.status === 409) {
+          void qc.invalidateQueries({ queryKey: AI_KEYS.profile }).finally(() => setConflict(true));
+        } else {
+          showToast(e.message);
+        }
+      },
     });
+  }
+
+  /** "Recarregar": descarta o rascunho e mostra a versão do servidor. */
+  function reload() {
+    setData(copyOf(profile.data));
+    setDraftVersion(profile.version);
+    setConflict(false);
+  }
+  /** "Continuar editando": o rascunho passa a se basear na versão do servidor; salvar grava por cima dela. */
+  function keepEditing() {
+    setDraftVersion(profile.version);
+    setConflict(false);
   }
 
   return (
@@ -145,6 +193,26 @@ export function ProfileEditor({ profile, active, footer }: Props) {
           {' '}É a partir deste perfil que a IA dá notas e escreve: ela não pode acrescentar nada que não esteja aqui.
         </p>
       </div>
+
+      {blocked && (
+        <Notice
+          tone="warn" role="alert" data-testid={`profile-conflict-${lang}`} title="O perfil mudou no servidor"
+          action={
+            <>
+              <Button type="button" size="sm" data-testid={`profile-conflict-reload-${lang}`} onClick={reload}><RotateCw aria-hidden /> Recarregar</Button>
+              <Button type="button" size="sm" variant="ghost" data-testid={`profile-conflict-keep-${lang}`} onClick={keepEditing}>Continuar editando</Button>
+            </>
+          }
+        >
+          <p>
+            Uma versão mais nova deste perfil foi gravada enquanto você editava (por uma tradução, pela leitura de um currículo ou em outra aba).
+            Suas alterações continuam aqui, mas ainda não foram salvas.
+          </p>
+          <p className="mt-1 text-muted">
+            Recarregar descarta as suas alterações e mostra a versão nova. Continuar editando mantém o seu texto: ao salvar, ele substitui a versão nova.
+          </p>
+        </Notice>
+      )}
 
       <div role="group" aria-label="Contato" className="grid gap-3 @md:grid-cols-2 @3xl:grid-cols-4">
         <Field label="Nome" value={data.contact.name} onChange={(name) => set('contact', { ...data.contact, name })} />
@@ -310,15 +378,16 @@ export function ProfileEditor({ profile, active, footer }: Props) {
       {active && footer && createPortal(
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-x-4 gap-y-2">
           <p aria-live="polite" className={cn('min-w-0 text-xs', dirty && !save.isPending ? 'text-warn' : 'text-faint')}>
-            {save.isPending ? 'Salvando…' : dirty ? 'Há alterações não salvas no perfil.' : 'Nenhuma alteração para salvar.'}
+            {save.isPending ? 'Salvando…' : blocked ? 'O perfil mudou no servidor: escolha recarregar ou continuar editando.'
+              : dirty ? 'Há alterações não salvas no perfil.' : 'Nenhuma alteração para salvar.'}
           </p>
           <div className="ml-auto flex items-center gap-2">
             {dirty && (
-              <Button type="button" variant="ghost" size="lg" disabled={save.isPending} onClick={() => setData(copyOf(profile.data))}>
+              <Button type="button" variant="ghost" size="lg" disabled={save.isPending} onClick={reload}>
                 Descartar
               </Button>
             )}
-            <Button type="submit" form={formId} variant="primary" size="lg" data-testid={`profile-save-${lang}`} disabled={!dirty || save.isPending} className="min-w-44">
+            <Button type="submit" form={formId} variant="primary" size="lg" data-testid={`profile-save-${lang}`} disabled={!dirty || blocked || save.isPending} className="min-w-44">
               Salvar meu perfil
             </Button>
           </div>

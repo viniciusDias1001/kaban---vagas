@@ -3,7 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { RESUME_TEXT_MAX_CHARS, dayStartMs, resumeTextChars } from '@kv/ai';
 import {
-  aiSpentSince, candidateProfiles, confirmAiTask, enqueueAiTask, langSubject, latestAiTasks, profileFor, providerWait, resumes,
+  ProfileConflictError, aiSpentSince, candidateProfiles, confirmAiTask, enqueueAiTask, langSubject, latestAiTasks, profileFor, providerWait, resumes,
   saveProfile, toAiTaskDto, usageByLayer, type CandidateProfileRow, type Db,
 } from '@kv/db';
 import { EXTRACT_LIMITS, RESUME_MIME, sniffResume, type ExtractFailure, type ResumeKind } from '@kv/resume';
@@ -152,13 +152,29 @@ export function aiRoutes(app: FastifyInstance, db: Db, ctx: AiContext) {
       .send(row.content);
   });
 
-  /** Edição do perfil pelo usuário: mantém os ids existentes, cria ids para itens novos, sobe a versão. */
+  /**
+   * Edição do perfil pelo usuário: mantém os ids existentes, cria ids para itens novos, sobe a versão.
+   *
+   * `version` (opcional, para clientes antigos; o web sempre manda) é a versão que o editor carregou. Se o perfil
+   * no banco já é outro (uma tradução ou a leitura de um currículo terminou, ou outra aba salvou), a resposta é
+   * 409 `profile_conflict` e nada é gravado: quem salvava um rascunho antigo sobrescrevia a versão nova sem saber.
+   * A comparação acontece dentro do lock de gravação de perfil, junto com a escrita.
+   */
   app.put('/ai/profile/:lang', async (req, reply) => {
     const lang = langParam(req);
-    const { data } = z.object({ data: ProfileWireSchema }).parse(req.body);
+    const { data, version } = z.object({ data: ProfileWireSchema, version: z.number().int().positive().optional() }).parse(req.body);
     const profile = CandidateProfileSchema.parse(normalizeProfile(data, { clamp: false }));
     if (!(await profileFor(db, lang))) return reply.code(404).send({ error: 'not_found', message: 'perfil não encontrado' });
-    return toProfileDto(await saveProfile(db, lang, profile, 'editado', ctx.now()));
+    try {
+      return toProfileDto(await saveProfile(db, lang, profile, 'editado', ctx.now(), { ifVersion: version }));
+    } catch (e) {
+      if (!(e instanceof ProfileConflictError)) throw e;
+      return reply.code(409).send({
+        error: 'profile_conflict',
+        message: 'O perfil mudou no servidor desde que você o abriu. Recarregue para ver a versão atual ou continue editando para gravar por cima dela.',
+        currentVersion: e.currentVersion,
+      });
+    }
   });
 
   /** Gera o perfil de `:lang` por tradução do outro idioma. */

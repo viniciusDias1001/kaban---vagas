@@ -52,7 +52,9 @@ export function useUploadResume() {
 export function useSaveProfile() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (v: { lang: ResumeLang; data: ProfileWire }) => aiApi.saveProfile(v.lang, v.data),
+    // O 409 (o perfil mudou no servidor) é tratado pelo próprio editor, que mostra as opções; sem aviso flutuante.
+    meta: INLINE_ERROR,
+    mutationFn: (v: { lang: ResumeLang; data: ProfileWire; version: number }) => aiApi.saveProfile(v.lang, v.data, v.version),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: AI_KEYS.profile });
       void qc.invalidateQueries({ queryKey: AI_KEYS.scores });

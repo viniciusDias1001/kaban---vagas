@@ -43,7 +43,9 @@ export const aiApi = {
     form.append('file', file);
     return request<ResumeMetaDto>(`/ai/resumes/${lang}`, { method: 'POST', body: form });
   },
-  saveProfile: (lang: ResumeLang, data: ProfileWire) => request<CandidateProfileDto>(`/ai/profile/${lang}`, json('PUT', { data })),
+  /** `version` = a versão do perfil em que o rascunho se baseia: a API responde 409 se o servidor já tem outra. */
+  saveProfile: (lang: ResumeLang, data: ProfileWire, version: number) =>
+    request<CandidateProfileDto>(`/ai/profile/${lang}`, json('PUT', { data, version })),
   translateProfile: (lang: ResumeLang) => request<{ queued: boolean }>(`/ai/profile/${lang}/translate`, post()),
   confirmTask: (taskId: number) => request<{ queued: boolean }>(`/ai/tasks/${taskId}/confirm`, post()),
   jobScores: () => request<JobAiListItemDto[]>('/jobs/ai'),

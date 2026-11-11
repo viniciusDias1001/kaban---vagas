@@ -292,6 +292,20 @@ export function resumeFileProblem(file: { name: string; size: number }): string 
   return null;
 }
 
+/**
+ * O que o editor de perfil faz quando o servidor tem uma versão diferente da que serviu de base para o rascunho
+ * (uma tradução ou a leitura de um currículo terminou, ou outra aba salvou):
+ * - `keep`: é a mesma versão, nada a fazer;
+ * - `adopt`: não há alteração pendente, o editor passa a mostrar a versão nova;
+ * - `conflict`: há alteração pendente. O rascunho fica como está e a tela pergunta: recarregar ou continuar
+ *   editando (e gravar por cima). Salvar sem escolher mandaria a versão antiga e a API responderia 409.
+ */
+export type DraftRebase = 'keep' | 'adopt' | 'conflict';
+export function rebaseDraft(draft: { dirty: boolean; version: number }, serverVersion: number): DraftRebase {
+  if (serverVersion === draft.version) return 'keep';
+  return draft.dirty ? 'conflict' : 'adopt';
+}
+
 /** Itens novos do editor de perfil: `id` vazio, que a API troca por um id estável ao salvar. */
 export const blankItem = {
   experience: (): ProfileWire['experiences'][number] => ({ id: '', company: '', title: '', start: '', end: '', location: '', achievements: [] }),

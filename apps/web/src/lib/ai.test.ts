@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ProfileWireSchema, VIOLATION_CODES, type AiTaskDto, type JobAiSummaryDto, type Violation, type ViolationCode } from '@kv/shared';
 import {
   VIOLATION_LABELS, blankItem, cardTitle, drawerTitle, formatUsd, isPending, languageBadge, layerMessage, parsePdfFailure, pdfBlockers,
-  pollMs, resumeFileProblem, retryNote, scoreTone, scoringPauseText, sortByScore, taskErrorText, toScoreMap, violationPlace, violationView,
+  pollMs, rebaseDraft, resumeFileProblem, retryNote, scoreTone, scoringPauseText, sortByScore, taskErrorText, toScoreMap, violationPlace, violationView,
 } from './ai';
 
 const summary = (jobId: number, score: number | null, titlePt: string | null = null): JobAiSummaryDto => ({
@@ -238,5 +238,17 @@ describe('scoringPauseText', () => {
     expect(text.next).toMatch(/Nova tentativa automática às \d{2}:\d{2}/);
     expect(text.next).toContain('Testar conexão');
     expect(scoringPauseText({ message: '', retryAt: 0, tasks: 1 }).next).toContain('1 vaga aguarda a nota.');
+  });
+});
+
+describe('rebaseDraft (the profile editor when the server version changes)', () => {
+  it('keeps the draft when the version is the one it is based on', () => {
+    expect(rebaseDraft({ dirty: true, version: 7 }, 7)).toBe('keep');
+    expect(rebaseDraft({ dirty: false, version: 7 }, 7)).toBe('keep');
+  });
+
+  it('follows the server when nothing is pending, and asks when there are unsaved changes', () => {
+    expect(rebaseDraft({ dirty: false, version: 7 }, 8)).toBe('adopt');
+    expect(rebaseDraft({ dirty: true, version: 7 }, 8)).toBe('conflict');
   });
 });
