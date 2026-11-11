@@ -17,6 +17,7 @@ import { isWorkerStale } from './workerStale';
 const JobDrawer = lazy(() => import('./components/JobDrawer').then((m) => ({ default: m.JobDrawer })));
 const ProfilesPage = lazy(() => import('./components/ProfilesPage').then((m) => ({ default: m.ProfilesPage })));
 const HealthPanel = lazy(() => import('./components/HealthPanel').then((m) => ({ default: m.HealthPanel })));
+const MyProfilePage = lazy(() => import('./components/MyProfilePage').then((m) => ({ default: m.MyProfilePage })));
 const SettingsPage = lazy(() => import('./components/SettingsPage').then((m) => ({ default: m.SettingsPage })));
 
 type View = 'quadro' | 'perfis' | 'fontes' | 'perfil' | 'config';
@@ -133,7 +134,7 @@ export function App() {
           <Suspense fallback={null}>
             {view === 'perfis' && <ProfilesPage onRunQueued={catchUp} />}
             {view === 'fontes' && <HealthPanel />}
-            {view === 'perfil' && <div data-testid="my-profile-placeholder" className="h-full" />}
+            {view === 'perfil' && <MyProfilePage onOpenSettings={openSettings} />}
             {view === 'config' && <SettingsPage />}
           </Suspense>
         </motion.div>
