@@ -5,7 +5,7 @@ export const fieldClass =
   'w-full rounded-xl border border-line bg-bg/60 text-sm text-ink shadow-[inset_0_1px_2px_rgb(3_5_14/0.5)] outline-none ' +
   'transition-[border-color,box-shadow,background-color] duration-150 ease-out-soft placeholder:text-faint ' +
   'hover:border-line-strong focus-visible:border-accent focus-visible:bg-bg/80 focus-visible:ring-[3px] focus-visible:ring-accent/25 ' +
-  'disabled:opacity-50';
+  'disabled:opacity-50 aria-invalid:border-bad/60 aria-invalid:focus-visible:border-bad aria-invalid:focus-visible:ring-bad/20';
 
 function Input({ className, type, ...props }: ComponentProps<'input'>) {
   return <input type={type} data-slot="input" className={cn(fieldClass, 'h-10 px-3', className)} {...props} />;

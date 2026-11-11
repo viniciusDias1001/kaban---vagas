@@ -13,12 +13,16 @@ interface TagInputProps {
   onDraftChange: (draft: string) => void;
   placeholder?: string;
   id?: string;
+  /** Marca o campo como inválido (borda e `aria-invalid`). */
+  invalid?: boolean;
+  /** Id do texto de ajuda/erro que descreve o campo. */
+  describedBy?: string;
 }
 
 const clean = (raw: string) => raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
 
 /** Campo de tags: Enter ou vírgula confirma, Backspace no campo vazio remove a última. */
-function TagInput({ tags, onTagsChange, draft, onDraftChange, placeholder, id }: TagInputProps) {
+function TagInput({ tags, onTagsChange, draft, onDraftChange, placeholder, id, invalid, describedBy }: TagInputProps) {
   const input = useRef<HTMLInputElement>(null);
   const add = (raw: string) => {
     const next = clean(raw).filter((t) => !tags.includes(t));
@@ -52,6 +56,7 @@ function TagInput({ tags, onTagsChange, draft, onDraftChange, placeholder, id }:
         fieldClass,
         'flex min-h-10 cursor-text flex-wrap items-center gap-1.5 px-2 py-1.5',
         'focus-within:border-accent focus-within:bg-bg/80 focus-within:ring-[3px] focus-within:ring-accent/25',
+        invalid && 'border-bad/60 hover:border-bad/60 focus-within:border-bad focus-within:ring-bad/20',
       )}
     >
       <AnimatePresence initial={false} mode="popLayout">
@@ -79,6 +84,8 @@ function TagInput({ tags, onTagsChange, draft, onDraftChange, placeholder, id }:
         onKeyDown={onKeyDown} onPaste={onPaste}
         onBlur={() => draft.trim() !== '' && add(draft)}
         placeholder={tags.length === 0 ? placeholder : undefined}
+        aria-invalid={invalid || undefined}
+        aria-describedby={describedBy}
         className="h-6 min-w-24 flex-1 bg-transparent px-1 text-sm text-ink outline-none placeholder:text-faint"
       />
     </div>

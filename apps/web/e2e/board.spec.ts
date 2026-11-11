@@ -2,25 +2,14 @@ import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 
 /**
- * Imagens ainda não geradas (Task 19 do plano): o 404 delas é esperado por enquanto. (No Vite dev o
- * pedido cai no fallback de SPA e volta 200; o 404 aparece quando o web é servido já buildado.)
+ * Junta erros de console, exceções da página, requisições que falharam e respostas 4xx/5xx. Nenhum 404 é
+ * tolerado: as imagens do app (logo.png, empty.png, header-bg.jpg) existem em apps/web/public.
  */
-const MISSING_ASSETS = new Set(['/logo.png', '/empty.png', '/header-bg.jpg']);
-const isMissingAsset = (url: string) => {
-  try {
-    return MISSING_ASSETS.has(new URL(url).pathname);
-  } catch {
-    return false;
-  }
-};
-
-/** Junta erros de console, exceções da página e requisições que falharam, fora os 404 esperados. */
 function collectProblems(page: Page) {
   const problems: string[] = [];
   const state = { navigating: false };
   page.on('console', (msg) => {
     if (msg.type() !== 'error') return;
-    if (isMissingAsset(msg.location().url)) return;
     problems.push(`console.error: ${msg.text()} (${msg.location().url})`);
   });
   page.on('pageerror', (err) => problems.push(`pageerror: ${err.message}`));
@@ -30,7 +19,7 @@ function collectProblems(page: Page) {
     problems.push(`requestfailed: ${req.method()} ${req.url()} ${req.failure()?.errorText ?? ''}`);
   });
   page.on('response', (res) => {
-    if (res.status() < 400 || isMissingAsset(res.url())) return;
+    if (res.status() < 400) return;
     problems.push(`http ${res.status()}: ${res.request().method()} ${res.url()}`);
   });
   return { problems, state };
@@ -54,6 +43,25 @@ test('profile search fills the board and a moved card persists', async ({ page }
   await page.getByLabel('Fake', { exact: true }).check();
   await page.getByRole('button', { name: 'Salvar perfil' }).click();
   await expect(page.getByTestId('profile')).toHaveCount(1);
+
+  // Editar o perfil salvo: o mesmo formulário entra em modo de edição já preenchido.
+  const profile = page.getByTestId('profile');
+  await profile.getByRole('button', { name: 'Editar' }).click();
+  await expect(page.getByRole('heading', { name: 'Editar perfil de busca' })).toBeVisible();
+  const name = page.getByPlaceholder('React Pleno remoto');
+  await expect(name).toHaveValue('E2E');
+  await expect(page.getByLabel('Fake', { exact: true })).toBeChecked();
+  await name.fill('E2E editado');
+  await snapshot(page, 'profile-edit.png');
+  await page.getByRole('button', { name: 'Salvar alterações' }).click();
+  await expect(page.getByRole('status')).toContainText('Perfil atualizado');
+  await expect(profile).toHaveCount(1);
+  await expect(profile.getByRole('heading', { name: 'E2E editado' })).toBeVisible();
+  // De volta ao modo de criação, com o formulário vazio.
+  await expect(page.getByRole('button', { name: 'Salvar perfil' })).toBeVisible();
+  await expect(name).toHaveValue('');
+  // Editar não dispara busca: nenhuma vaga apareceu.
+  expect(((await (await page.request.get('/api/jobs')).json()) as unknown[]).length).toBe(0);
 
   await page.getByRole('button', { name: 'Buscar agora' }).click();
   await expect(page.getByRole('status')).toContainText('Busca enfileirada em 1 fonte');
