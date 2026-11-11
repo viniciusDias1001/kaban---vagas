@@ -1,54 +1,143 @@
 import { useDraggable, useDroppable } from '@dnd-kit/core';
 import { motion } from 'motion/react';
+import { memo, useCallback, useMemo, type KeyboardEvent } from 'react';
 import type { JobDto } from '@kv/shared';
 import { ageLabel } from '../age';
+import { spring } from '../lib/motion';
+import { cn } from '../lib/utils';
+import { SourceMark, sourceInfo } from './SourceMark';
+import { Badge } from './ui/badge';
 
-export function JobCardBody({ job }: { job: JobDto }) {
+function Age({ postedAt }: { postedAt: number | null }) {
+  const label = ageLabel(postedAt);
+  const fresh = label === 'hoje';
   return (
-    <>
-      <div className="flex items-start justify-between gap-2">
-        <h3 className="text-sm font-medium leading-snug">{job.title}</h3>
-        <span className="shrink-0 rounded bg-surface-2 px-1.5 py-0.5 text-[10px] uppercase text-muted">{job.source}</span>
-      </div>
-      <p className="mt-1 text-xs text-muted">
-        {job.company} · {job.remote ? 'Remoto' : job.location || 'Local n/d'}
-      </p>
-      <div className="mt-2 flex flex-wrap items-center gap-1">
-        {job.level && <span className="rounded bg-accent/20 px-1.5 py-0.5 text-[10px] text-accent">{job.level}</span>}
-        {job.stacks.slice(0, 3).map((s) => (
-          <span key={s} className="rounded bg-surface-2 px-1.5 py-0.5 text-[10px] text-ink">{s}</span>
-        ))}
-        {job.needsHuman && <span className="rounded bg-warn/20 px-1.5 py-0.5 text-[10px] text-warn">precisa de você</span>}
-        <span className="ml-auto text-[10px] text-muted">{ageLabel(job.postedAt)}</span>
-      </div>
-    </>
+    <span className={cn('ml-auto flex shrink-0 items-center gap-1 pl-1 text-[11px] tabular-nums', fresh ? 'text-ok' : 'text-muted')}>
+      {fresh && <span aria-hidden className="size-1.5 rounded-full bg-ok" />}
+      {label}
+    </span>
   );
 }
 
-export function JobCard({ job, onOpen }: { job: JobDto; onOpen: (id: number) => void }) {
-  const drag = useDraggable({ id: job.id });
-  const drop = useDroppable({ id: `card:${job.id}` });
-  const setRef = (el: HTMLElement | null) => {
-    drag.setNodeRef(el);
-    drop.setNodeRef(el);
+/**
+ * Hierarquia do card: título (o que se lê primeiro) → fonte + empresa + local → nível/stacks e idade.
+ * No modo compacto ficam só as duas primeiras linhas, com a idade na segunda.
+ */
+export function JobCardBody({ job, compact = false }: { job: JobDto; compact?: boolean }) {
+  return (
+    <div className={compact ? 'px-2.5 py-2' : 'p-3'}>
+      <h3 className={cn('text-[13px] font-semibold leading-[1.35] text-ink', compact ? 'truncate' : 'line-clamp-2')}>
+        {job.title}
+      </h3>
+      <div className={cn('flex items-center gap-1.5 text-xs text-muted', compact ? 'mt-1' : 'mt-1.5')}>
+        <SourceMark source={job.source} />
+        <span className="sr-only">{sourceInfo(job.source).name}: </span>
+        <p className="min-w-0 truncate">
+          <span className="text-ink-2">{job.company}</span> · {job.remote ? 'Remoto' : job.location || 'Local n/d'}
+        </p>
+        {compact && <Age postedAt={job.postedAt} />}
+      </div>
+      {!compact && (
+        <div className="mt-2.5 flex items-center gap-1 overflow-hidden">
+          {job.level && <Badge tone="accent" className="capitalize">{job.level}</Badge>}
+          {job.stacks.slice(0, 3).map((s) => (
+            <Badge key={s}>{s}</Badge>
+          ))}
+          {job.needsHuman && <Badge tone="warn">precisa de você</Badge>}
+          <Age postedAt={job.postedAt} />
+        </div>
+      )}
+      {compact && job.needsHuman && <Badge tone="warn" className="mt-1.5">precisa de você</Badge>}
+    </div>
+  );
+}
+
+interface JobCardProps {
+  job: JobDto;
+  onOpen: (id: number) => void;
+  /** Assinatura da ordem da coluna: só quando ela muda o Motion mede o layout de novo. */
+  order: string;
+  index: number;
+  compact: boolean;
+}
+
+/** Quantos cards do topo entram em cascata; os demais (fora da tela) aparecem de uma vez. */
+const STAGGERED = 12;
+
+const ENTER_FROM = { opacity: 0, y: 10 };
+const ENTER_TO = { opacity: 1, y: 0 };
+const PRESSED = { scale: 0.985 };
+
+type Draggable = ReturnType<typeof useDraggable>;
+
+interface CardViewProps extends JobCardProps {
+  setRef: (el: HTMLElement | null) => void;
+  listeners: Draggable['listeners'];
+  attributes: Draggable['attributes'];
+  dragging: boolean;
+  over: boolean;
+}
+
+/**
+ * A parte cara do card (Motion + conteúdo), memoizada: durante um arraste o dnd-kit re-renderiza todos os
+ * `useDraggable`/`useDroppable` a cada mudança de alvo, mas só os cards cujo estado mudou passam daqui.
+ */
+const CardView = memo(function CardView(p: CardViewProps) {
+  const { job, onOpen } = p;
+  const transition = useMemo(
+    () => ({ ...spring, delay: p.index < STAGGERED ? p.index * 0.022 : 0, layout: spring, scale: spring }),
+    [p.index],
+  );
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (e.target !== e.currentTarget || (e.key !== 'Enter' && e.key !== ' ')) return;
+    e.preventDefault();
+    onOpen(job.id);
   };
 
   return (
     <motion.article
-      ref={setRef}
-      layout
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: drag.isDragging ? 0.35 : 1, y: 0 }}
-      transition={{ type: 'spring', stiffness: 500, damping: 40 }}
+      ref={p.setRef}
+      layout="position"
+      layoutDependency={`${p.order}|${p.compact}`}
+      initial={ENTER_FROM}
+      animate={ENTER_TO}
+      whileTap={PRESSED}
+      transition={transition}
       data-testid="job-card"
+      data-dragging={p.dragging}
+      data-over={p.over}
       onClick={() => onOpen(job.id)}
-      className={`cursor-grab rounded-lg border bg-surface p-3 shadow-sm ${
-        drop.isOver && !drag.isDragging ? 'border-accent' : 'border-line'
-      }`}
-      {...drag.listeners}
-      {...drag.attributes}
+      onKeyDown={onKeyDown}
+      className="job-card shrink-0"
+      {...p.listeners}
+      {...p.attributes}
     >
-      <JobCardBody job={job} />
+      <JobCardBody job={job} compact={p.compact} />
     </motion.article>
   );
-}
+});
+
+export const JobCard = memo(function JobCard(props: JobCardProps) {
+  const drag = useDraggable({ id: props.job.id });
+  const drop = useDroppable({ id: `card:${props.job.id}` });
+  const setDragRef = drag.setNodeRef;
+  const setDropRef = drop.setNodeRef;
+  const setRef = useCallback(
+    (el: HTMLElement | null) => {
+      setDragRef(el);
+      setDropRef(el);
+    },
+    [setDragRef, setDropRef],
+  );
+
+  return (
+    <CardView
+      {...props}
+      setRef={setRef}
+      listeners={drag.listeners}
+      attributes={drag.attributes}
+      dragging={drag.isDragging}
+      over={drop.isOver && !drag.isDragging}
+    />
+  );
+});
