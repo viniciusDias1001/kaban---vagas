@@ -1,8 +1,12 @@
 import { resolve } from 'node:path';
+import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { ZodError } from 'zod';
 import type { Db } from '@kv/db';
+import { LIMITS } from '@kv/shared';
+import { createAiContext, type AiContextOptions } from './ai-context';
+import { aiRoutes } from './routes/ai';
 import { jobRoutes } from './routes/jobs';
 import { metaRoutes } from './routes/meta';
 import { profileRoutes } from './routes/profiles';
@@ -14,6 +18,8 @@ export interface AppOptions {
    * estáticos e `index.html` para as demais URLs de página. Sem ele (dev e testes) só existem as rotas da API.
    */
   webDist?: string;
+  /** Serviço de configurações, ambiente e extrator de currículo. Padrão: os do processo. Trocado nos testes. */
+  ai?: AiContextOptions;
 }
 
 const API_PREFIX = '/api';
@@ -67,6 +73,11 @@ function rootCause(err: unknown): unknown {
 
 export function buildApp(db: Db, opts: AppOptions = {}) {
   const app = Fastify();
+  const ctx = createAiContext(db, opts.ai);
+
+  // Upload de currículo. Só multipart/form-data passa por aqui: um arquivo, até LIMITS.resumeBytes (acima
+  // disso, 413). O limite de 1 MiB do corpo JSON (padrão do Fastify) continua valendo para o resto.
+  app.register(multipart, { limits: { fileSize: LIMITS.resumeBytes, files: 1, fields: 0, parts: 1 } });
 
   // Sem CORS: o web é sempre servido pela mesma origem da API (proxy do Vite em dev, a própria API em
   // produção), então nenhuma outra página precisa ler as respostas. Além disso, como a API não tem
@@ -114,6 +125,7 @@ export function buildApp(db: Db, opts: AppOptions = {}) {
     jobRoutes(scope, db);
     runRoutes(scope, db);
     metaRoutes(scope, db);
+    aiRoutes(scope, db, ctx);
   };
   app.register(routes);
   app.register(routes, { prefix: API_PREFIX });
