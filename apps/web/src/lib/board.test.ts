@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Column, JobDto, JobListItemDto } from '@kv/shared';
+import type { Column, JobDto, JobListItemDto } from '@kv/shared/client';
 import {
   applyMove, countJobs, filterByColumn, groupByColumn, matchesFilter, mergeServerJob, normalizeText, remainingAfter,
 } from './board';

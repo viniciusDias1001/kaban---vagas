@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useCallback } from 'react';
-import type { Column, JobDetailDto, JobListItemDto } from '@kv/shared';
+import type { Column, JobDetailDto, JobListItemDto } from '@kv/shared/client';
 import { api } from './api';
 import { applyMove, groupByColumn, mergeServerJob } from './lib/board';
 import { dropPosition, isNoopMove } from './position';

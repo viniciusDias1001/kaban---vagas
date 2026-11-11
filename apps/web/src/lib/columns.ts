@@ -1,4 +1,4 @@
-import type { Column } from '@kv/shared';
+import type { Column } from '@kv/shared/client';
 
 /** Cor de identidade de cada coluna (definidas em index.css). */
 export const COLUMN_COLOR: Record<Column, string> = {

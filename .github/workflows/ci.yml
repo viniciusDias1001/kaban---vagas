@@ -60,6 +60,12 @@ jobs:
         run: pnpm test
         timeout-minutes: 10
 
+      # Zod no bundle do navegador viola a CSP da API; o web importa de @kv/shared/client (sem Zod).
+      - name: Build do web sem Zod
+        run: |
+          pnpm --filter @kv/web build
+          if grep -rlE 'ZodError|\$ZodType' apps/web/dist/assets; then echo 'Zod entrou no bundle do web' >&2; exit 1; fi
+
       - name: Instalar Chromium do Playwright
         run: pnpm --filter @kv/web exec playwright install --with-deps chromium
         timeout-minutes: 10

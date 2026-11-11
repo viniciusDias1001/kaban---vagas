@@ -1,6 +1,6 @@
 import type {
   HealthDto, JobDetailDto, JobDto, JobListItemDto, JobPatch, ProfileDto, ProfileInput, SourceDto, StatsDto,
-} from '@kv/shared';
+} from '@kv/shared/client';
 import { ApiError, NETWORK_ERROR, errorMessage } from './apiError';
 
 async function http<T>(path: string, init?: RequestInit): Promise<T> {

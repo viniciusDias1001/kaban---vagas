@@ -1,4 +1,5 @@
-import type { Column, Level, ProfileInput } from './schemas';
+import type { Column, Level } from './constants';
+import type { ProfileInput } from './schemas';
 
 export type Actor = 'ia' | 'humano' | 'sistema';
 

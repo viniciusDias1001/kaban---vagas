@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Pencil, Radar, SearchX, Trash2, TriangleAlert } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
-import { LEVELS, LIMITS, MAX_AGES, REGIONS, type Level, type MaxAge, type ProfileDto, type ProfileInput, type Region } from '@kv/shared';
+import { LEVELS, LIMITS, MAX_AGES, REGIONS, type Level, type MaxAge, type ProfileDto, type ProfileInput, type Region } from '@kv/shared/client';
 import { api } from '../api';
 import { spring } from '../lib/motion';
 import { cn } from '../lib/utils';

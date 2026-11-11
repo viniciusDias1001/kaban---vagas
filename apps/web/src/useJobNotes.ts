@@ -1,6 +1,6 @@
 import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useSyncExternalStore } from 'react';
-import { LIMITS, type JobDetailDto, type JobListItemDto } from '@kv/shared';
+import { LIMITS, type JobDetailDto, type JobListItemDto } from '@kv/shared/client';
 import { api } from './api';
 import { NotesController, NotesStore, type NotesSnapshot } from './notes';
 import { showToast } from './toast';

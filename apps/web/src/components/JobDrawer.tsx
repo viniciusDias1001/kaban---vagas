@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { ArrowUpRight, CloudOff, Globe, Info, MapPin, RotateCw, Sparkles, X } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useId, useLayoutEffect, useRef, type CSSProperties, type ReactNode } from 'react';
-import { COLUMNS, COLUMN_LABELS, LIMITS, type Column, type JobDto } from '@kv/shared';
+import { COLUMNS, COLUMN_LABELS, LIMITS, type Column, type JobDto } from '@kv/shared/client';
 import { ageLabel } from '../age';
 import { api } from '../api';
 import { COLUMN_COLOR } from '../lib/columns';

@@ -8,7 +8,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { CloudOff, LoaderCircle, RotateCw, Rows2, Rows4, Search, X } from 'lucide-react';
 import { motion, useReducedMotion } from 'motion/react';
 import { memo, useCallback, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { COLUMNS, COLUMN_LABELS, LIMITS, type Column, type JobListItemDto } from '@kv/shared';
+import { COLUMNS, COLUMN_LABELS, LIMITS, type Column, type JobListItemDto } from '@kv/shared/client';
 import { api } from '../api';
 import { LAYOUT_ANIMATED, PAGE_SIZE, countJobs, filterByColumn, groupByColumn, normalizeText, remainingAfter, type ByColumn } from '../lib/board';
 import { COLUMN_COLOR } from '../lib/columns';

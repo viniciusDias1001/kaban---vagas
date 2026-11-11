@@ -1,7 +1,7 @@
 import { useDraggable, useDroppable } from '@dnd-kit/core';
 import { motion } from 'motion/react';
 import { memo, useCallback, useMemo, type KeyboardEvent } from 'react';
-import type { JobListItemDto } from '@kv/shared';
+import type { JobListItemDto } from '@kv/shared/client';
 import { ageLabel } from '../age';
 import { spring } from '../lib/motion';
 import { cn } from '../lib/utils';

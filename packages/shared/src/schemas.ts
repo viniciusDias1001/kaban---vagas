@@ -1,29 +1,10 @@
 import { z } from 'zod';
+import { COLUMNS, LEVELS, LIMITS, MAX_AGES, REGIONS, hasNul } from './constants';
 
-export const COLUMNS = ['descobertas', 'selecionadas', 'aplicada', 'entrevista', 'oferta', 'arquivada'] as const;
 export const ColumnSchema = z.enum(COLUMNS);
-export type Column = z.infer<typeof ColumnSchema>;
-
-export const COLUMN_LABELS: Record<Column, string> = {
-  descobertas: 'Descobertas',
-  selecionadas: 'Selecionadas',
-  aplicada: 'Aplicada',
-  entrevista: 'Entrevista',
-  oferta: 'Oferta',
-  arquivada: 'Arquivada',
-};
-
-export const LEVELS = ['junior', 'pleno', 'senior'] as const;
 export const LevelSchema = z.enum(LEVELS);
-export type Level = z.infer<typeof LevelSchema>;
-
-export const REGIONS = ['brasil', 'exterior', 'remoto'] as const;
 export const RegionSchema = z.enum(REGIONS);
-export type Region = z.infer<typeof RegionSchema>;
-
-export const MAX_AGES = [1, 3, 7, 30] as const;
-export const MaxAgeSchema = z.union([z.literal(1), z.literal(3), z.literal(7), z.literal(30)]);
-export type MaxAge = z.infer<typeof MaxAgeSchema>;
+export const MaxAgeSchema = z.literal(MAX_AGES);
 
 export const SearchFiltersSchema = z.object({
   stacks: z.array(z.string().min(1)),
@@ -33,19 +14,6 @@ export const SearchFiltersSchema = z.object({
 });
 export type SearchFilters = z.infer<typeof SearchFiltersSchema>;
 
-/** Limites de tamanho dos campos de texto livre (a API responde 400 acima deles). */
-export const LIMITS = {
-  profileName: 80,
-  stackLength: 40,
-  stacks: 20,
-  sourceIdLength: 40,
-  sources: 50,
-  notes: 20_000,
-  search: 100,
-} as const;
-
-/** O Postgres não aceita o caractere NUL em `text`: barrado na validação, em vez de virar erro 500. */
-export const hasNul = (s: string) => s.includes('\u0000');
 const NO_NUL = 'não pode conter o caractere NUL';
 
 /** Campos do perfil que vêm de digitação livre, com limite de tamanho. */

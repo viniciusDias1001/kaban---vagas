@@ -1,4 +1,4 @@
-import { COLUMNS, type Column, type JobDto, type JobListItemDto } from '@kv/shared';
+import { COLUMNS, type Column, type JobDto, type JobListItemDto } from '@kv/shared/client';
 
 export type ByColumn = Record<Column, JobListItemDto[]>;
 

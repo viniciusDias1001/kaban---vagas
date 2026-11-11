@@ -1,4 +1,4 @@
-import { LIMITS, type Level, type MaxAge, type ProfileDto, type ProfileInput, type Region } from '@kv/shared';
+import { LIMITS, type Level, type MaxAge, type ProfileDto, type ProfileInput, type Region } from '@kv/shared/client';
 
 /** O que o formulário de perfil guarda: os campos do perfil mais o texto ainda não confirmado das stacks. */
 export interface ProfileForm {
