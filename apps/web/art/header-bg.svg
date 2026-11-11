@@ -1,0 +1,106 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 480" width="1920" height="480">
+  <title>Fundo do cabeçalho</title>
+  <!-- An out-of-focus kanban board in dusk light: endless lanes with a few resting cards,
+       lifted by two wide periwinkle glows. In the app it sits under an 88-96 % dark overlay
+       with background-size: cover, so only the middle band (~y 200-280) shows, at 4-12 %
+       strength. Hence: no hairlines (they read as artefacts through the overlay), only soft,
+       large-scale luminance that survives as a faint sense of depth. -->
+  <defs>
+    <linearGradient id="base" x1="0" y1="0" x2="1920" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0f121b"/>
+      <stop offset=".3" stop-color="#131827"/>
+      <stop offset=".7" stop-color="#111522"/>
+      <stop offset="1" stop-color="#0d1018"/>
+    </linearGradient>
+    <radialGradient id="glow-a">
+      <stop offset="0" stop-color="#7c9cff" stop-opacity=".62"/>
+      <stop offset=".45" stop-color="#7c9cff" stop-opacity=".24"/>
+      <stop offset="1" stop-color="#7c9cff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow-b">
+      <stop offset="0" stop-color="#6079e6" stop-opacity=".52"/>
+      <stop offset=".5" stop-color="#6079e6" stop-opacity=".19"/>
+      <stop offset="1" stop-color="#6079e6" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="sweep" x1="300" y1="-200" x2="1500" y2="680" gradientUnits="userSpaceOnUse">
+      <stop offset=".35" stop-color="#c9d6ff" stop-opacity="0"/>
+      <stop offset=".5" stop-color="#c9d6ff" stop-opacity=".045"/>
+      <stop offset=".65" stop-color="#c9d6ff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="fade-v" x1="0" y1="0" x2="0" y2="480" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity=".25"/>
+      <stop offset=".38" stop-color="#ffffff" stop-opacity="1"/>
+      <stop offset=".62" stop-color="#ffffff" stop-opacity="1"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity=".25"/>
+    </linearGradient>
+    <mask id="lane-fade" maskUnits="userSpaceOnUse" x="0" y="0" width="1920" height="480">
+      <rect width="1920" height="480" fill="url(#fade-v)"/>
+    </mask>
+    <filter id="defocus" x="-5%" y="-20%" width="110%" height="140%" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="5"/>
+    </filter>
+    <filter id="defocus-lanes" x="-5%" y="-20%" width="110%" height="140%" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="9"/>
+    </filter>
+    <linearGradient id="vignette" x1="0" y1="0" x2="1920" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0b0d12" stop-opacity=".5"/>
+      <stop offset=".1" stop-color="#0b0d12" stop-opacity="0"/>
+      <stop offset=".9" stop-color="#0b0d12" stop-opacity="0"/>
+      <stop offset="1" stop-color="#0b0d12" stop-opacity=".5"/>
+    </linearGradient>
+  </defs>
+
+  <rect id="ground" width="1920" height="480" fill="url(#base)"/>
+
+  <g id="light">
+    <ellipse cx="300" cy="245" rx="780" ry="300" fill="url(#glow-a)"/>
+    <ellipse cx="1460" cy="235" rx="700" ry="290" fill="url(#glow-b)"/>
+    <rect width="1920" height="480" fill="url(#sweep)"/>
+  </g>
+
+  <g id="ghost-board" mask="url(#lane-fade)">
+    <g id="lanes" fill="#9ab2ff" fill-opacity=".055" filter="url(#defocus-lanes)">
+      <rect x="20" y="-40" width="200" height="560" rx="26"/>
+      <rect x="260" y="-40" width="200" height="560" rx="26"/>
+      <rect x="500" y="-40" width="200" height="560" rx="26"/>
+      <rect x="740" y="-40" width="200" height="560" rx="26"/>
+      <rect x="980" y="-40" width="200" height="560" rx="26"/>
+      <rect x="1220" y="-40" width="200" height="560" rx="26"/>
+      <rect x="1460" y="-40" width="200" height="560" rx="26"/>
+      <rect x="1700" y="-40" width="200" height="560" rx="26"/>
+    </g>
+    <g id="cards" fill="#9ab2ff" fill-opacity=".1" filter="url(#defocus)">
+      <rect x="36" y="28" width="168" height="92" rx="16"/>
+      <rect x="36" y="136" width="168" height="76" rx="16"/>
+      <rect x="36" y="296" width="168" height="104" rx="16"/>
+
+      <rect x="276" y="70" width="168" height="110" rx="16"/>
+      <rect x="276" y="196" width="168" height="84" rx="16"/>
+
+      <rect x="516" y="12" width="168" height="80" rx="16"/>
+      <rect x="516" y="236" width="168" height="96" rx="16"/>
+      <rect x="516" y="348" width="168" height="84" rx="16"/>
+
+      <rect x="756" y="104" width="168" height="88" rx="16"/>
+      <rect x="756" y="300" width="168" height="78" rx="16"/>
+
+      <rect x="996" y="40" width="168" height="74" rx="16"/>
+      <rect x="996" y="130" width="168" height="100" rx="16"/>
+      <rect x="996" y="246" width="168" height="80" rx="16"/>
+
+      <rect x="1236" y="176" width="168" height="92" rx="16"/>
+      <rect x="1236" y="356" width="168" height="90" rx="16"/>
+
+      <rect x="1476" y="24" width="168" height="104" rx="16"/>
+      <rect x="1476" y="214" width="168" height="78" rx="16"/>
+      <rect x="1476" y="308" width="168" height="96" rx="16"/>
+
+      <rect x="1716" y="88" width="168" height="84" rx="16"/>
+      <rect x="1716" y="188" width="168" height="110" rx="16"/>
+
+      <rect id="active-card" x="1236" y="176" width="168" height="92" rx="16" fill-opacity=".13"/>
+    </g>
+  </g>
+
+  <rect id="vignette-layer" width="1920" height="480" fill="url(#vignette)"/>
+</svg>
