@@ -1,4 +1,4 @@
-import { assertDbReady, closeDb, createDb } from '@kv/db';
+import { closeDb, createDb, waitForDb } from '@kv/db';
 import { buildApp } from './app';
 import { resolveListen, resolveWebDist } from './config';
 
@@ -8,8 +8,12 @@ try {
   const { host, port } = resolveListen();
   const webDist = resolveWebDist();
   // A API não roda migrations (isso é do `pnpm db:migrate`); só confere que o banco está pronto.
+  // Banco ainda fora do ar (Docker subindo, redeploy): insiste por até ~5 min. Sem tabelas: falha na hora.
   const db = createDb();
-  await assertDbReady(db);
+  await waitForDb(db, {
+    onRetry: ({ attempt, waitMs, error }) =>
+      console.error(`[api] tentativa ${attempt}: ${errorText(error)} Nova tentativa em ${waitMs / 1000} s.`),
+  });
   const app = buildApp(db, { webDist });
   await app.listen({ port, host });
   console.log(`[api] http://${host}:${port}${webDist ? ` (servindo o web de ${webDist})` : ''}`);

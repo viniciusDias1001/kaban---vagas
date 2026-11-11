@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Start de produção: um container, três passos.
 //
-//   1. aplica as migrations pendentes (uma vez, e espera terminar);
+//   1. aplica as migrations pendentes (uma vez, e espera terminar; se o banco ainda não responde, insiste ~5 min);
 //   2. sobe a API (que também serve o web buildado) e o worker como processos filhos;
 //   3. se um dos dois sair, derruba o outro e sai com código != 0, para a plataforma reiniciar o container.
 //
@@ -30,8 +30,8 @@ const log = (msg) => console.log(`[start] ${msg}`);
 const tsx = pathToFileURL(createRequire(join(ROOT, 'apps/api/package.json')).resolve('tsx')).href;
 
 /** Sobe `node --import tsx <entry>` repassando a saída linha a linha com o prefixo `name |`. */
-function start(name, entry) {
-  const child = spawn(process.execPath, ['--import', tsx, join(ROOT, entry)], {
+function start(name, entry, args = []) {
+  const child = spawn(process.execPath, ['--import', tsx, join(ROOT, entry), ...args], {
     cwd: ROOT,
     env: process.env,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -77,7 +77,9 @@ function stopAll(signal = 'SIGTERM') {
   }, KILL_AFTER_MS).unref();
 }
 
-const migration = start('migrate', 'packages/db/src/migrate-cli.ts');
+// `--wait`: se o Postgres ainda está subindo (redeploy correndo com o banco), as migrations esperam por ele
+// até ~5 min em vez de derrubar o container; API e worker fazem a mesma espera no start deles.
+const migration = start('migrate', 'packages/db/src/migrate-cli.ts', ['--wait']);
 current = [migration];
 const migrated = await migration.closed;
 if (stopSignal) process.exit(0);
