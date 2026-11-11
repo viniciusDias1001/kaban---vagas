@@ -70,7 +70,7 @@ describe('errors', () => {
     ]);
     expect([401, 402, 403, 404, 500].map(detailFromStatus)).toEqual(['auth', 'billing', 'auth', 'model', undefined]);
     // Erros determinísticos não são repetidos: repetir só cobra de novo.
-    for (const kind of ['config', 'truncated', 'refused', 'input'] as const) expect(isRetryable(kind), kind).toBe(false);
+    for (const kind of ['config', 'truncated', 'refused', 'draft_blocked', 'input'] as const) expect(isRetryable(kind), kind).toBe(false);
     for (const kind of ['rate_limited', 'invalid_output', 'transient', 'other'] as const) expect(isRetryable(kind), kind).toBe(true);
     expect(isRetryable(new AiError('truncated', 'x'))).toBe(false);
     expect(isRetryable(new AiError('transient', 'x'))).toBe(true);

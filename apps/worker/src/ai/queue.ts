@@ -2,7 +2,7 @@ import { and, asc, eq, inArray, isNull, lt, lte, ne, notInArray, or, sql } from 
 import { AiError, dayStartMs, isRetryable } from '@kv/ai';
 import { aiSpentSince, aiTasks, type AiTaskRow, type Db } from '@kv/db';
 import type { AiTaskType } from '@kv/shared';
-import { taskErrorMessage } from './task-errors';
+import { describeForLog, isUnknownError, taskErrorMessage } from './task-errors';
 
 /**
  * Executa uma unidade de trabalho: uma tarefa, ou um lote de tarefas da camada 1. Devolve as falhas por
@@ -119,6 +119,8 @@ export function createAiQueue(db: Db, run: UnitRunner, opts: AiQueueOptions) {
   async function fail(task: AiTaskRow, attempts: number, error: unknown): Promise<void> {
     const kind = error instanceof AiError ? error.kind : 'other';
     const message = taskErrorMessage(error);
+    // Erro que não veio de um AiError (banco, bug): a tela recebe a frase fixa; o que aconteceu fica aqui.
+    if (isUnknownError(error)) log(`fila de IA: tarefa ${task.id} (${task.type}) falhou com erro interno: ${describeForLog(error)}`);
     if (!isRetryable(kind) || attempts >= maxAttempts) {
       await db.update(aiTasks).set({ status: 'error', error: message, finishedAt: now() }).where(eq(aiTasks.id, task.id));
       await onFailed?.(task, message);

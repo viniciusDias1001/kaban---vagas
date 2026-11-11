@@ -9,6 +9,7 @@ import {
 import { createTestDb, resetTestDb } from '@kv/db/testing';
 import { createQueue } from '../scheduler';
 import { createAiQueue, requeueRunningAiTasks, type AiQueueOptions, type AiQueueSettings, type UnitRunner } from './queue';
+import { UNKNOWN_TASK_ERROR } from './task-errors';
 
 const TZ = 'America/Sao_Paulo';
 /** 2026-11-11 12:00 em São Paulo. */
@@ -199,9 +200,36 @@ describe('createAiQueue', () => {
   it('does not throw from tick when the runner breaks in an unexpected way', async () => {
     const [job] = await seedJobs(1);
     await enqueueAiTask(db, { type: 'tier2', jobId: job });
-    const queue = createAiQueue(db, async () => Promise.reject('texto, não Error'), options());
+    const logged: string[] = [];
+    const queue = createAiQueue(db, async () => Promise.reject('texto, não Error'), options({ log: (m) => logged.push(m) }));
     await queue.drain();
-    expect((await all())[0]).toMatchObject({ status: 'queued', attempts: 1, error: 'texto, não Error' });
+    // O que não é AiError não vai para o banco: a tela recebe a frase fixa e o detalhe fica no log.
+    expect((await all())[0]).toMatchObject({ status: 'queued', attempts: 1, error: UNKNOWN_TASK_ERROR });
+    expect(logged.join('\n')).toContain('texto, não Error');
+  });
+
+  it('keeps a database error (SQL text, parameters) out of ai_tasks.error and logs it without the parameters', async () => {
+    const [job] = await seedJobs(1);
+    await enqueueAiTask(db, { type: 'tier2', jobId: job });
+    const logged: string[] = [];
+    const failed: string[] = [];
+    const dbError = Object.assign(
+      new Error('Failed query: insert into "job_ai" ("job_id", "analysis") values ($1, $2)\nparams: 7,{"resumo":"texto do currículo"}'),
+      { cause: Object.assign(new Error('relation "job_ai" does not exist'), { code: '42P01' }) },
+    );
+    const queue = createAiQueue(db, async () => Promise.reject(dbError), options({
+      maxAttempts: 1, log: (m) => logged.push(m), onFailed: async (_task, message) => void failed.push(message),
+    }));
+    await queue.drain();
+    const [task] = await all();
+    expect(task).toMatchObject({ status: 'error', attempts: 1, error: UNKNOWN_TASK_ERROR });
+    expect(task.error).not.toMatch(/insert|job_ai|currículo/);
+    expect(failed).toEqual([UNKNOWN_TASK_ERROR]);
+    const line = logged.join('\n');
+    expect(line).toContain(`tarefa ${task.id} (tier2)`);
+    expect(line).toContain('Failed query: insert into "job_ai"');
+    expect(line).toContain('[42P01]: relation "job_ai" does not exist');
+    expect(line).not.toContain('texto do currículo');
   });
 });
 

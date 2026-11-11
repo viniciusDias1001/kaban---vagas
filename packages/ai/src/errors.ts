@@ -4,9 +4,12 @@ import type { AiUsage } from './types';
 /**
  * `truncated`: a resposta parou no teto de tokens (repetir a mesma chamada dá o mesmo corte e a mesma
  * cobrança). `input`: a entrada foi recusada ANTES de chamar o modelo (ex.: currículo longo demais).
+ * `refused`: o MODELO (ou o filtro de segurança do provedor) recusou o pedido. `draft_blocked`: o modelo
+ * respondeu, mas o verificador de não invenção descartou o currículo proposto; são desfechos diferentes
+ * para o usuário (um é do provedor, o outro é a proteção do app funcionando).
  */
 export type AiErrorKind =
-  | 'rate_limited' | 'refused' | 'invalid_output' | 'truncated' | 'input' | 'config' | 'transient' | 'other';
+  | 'rate_limited' | 'refused' | 'draft_blocked' | 'invalid_output' | 'truncated' | 'input' | 'config' | 'transient' | 'other';
 
 /** O que um erro pode carregar além de tipo e mensagem. */
 export interface AiErrorExtra {
@@ -62,12 +65,13 @@ export function scrubSecrets(text: string, secrets: readonly string[] = []): str
   return out.replace(KEY_SHAPES, '[chave removida]');
 }
 
-const NOT_RETRYABLE: ReadonlySet<string> = new Set<AiErrorKind>(['config', 'truncated', 'refused', 'input']);
+const NOT_RETRYABLE: ReadonlySet<string> = new Set<AiErrorKind>(['config', 'truncated', 'refused', 'draft_blocked', 'input']);
 
 /**
  * Vale a pena repetir a chamada? Não para erro determinístico: chave ou modelo errado (`config`), resposta
- * cortada no teto de tokens (`truncated`), recusa do modelo ou filtro de segurança (`refused`) e entrada
- * recusada antes da chamada (`input`). Repetir esses casos só cobra de novo. O resto (rede, limite de taxa,
+ * cortada no teto de tokens (`truncated`), recusa do modelo ou filtro de segurança (`refused`), rascunho
+ * barrado pelo verificador depois da tentativa corretiva (`draft_blocked`) e entrada recusada antes da
+ * chamada (`input`). Repetir esses casos só cobra de novo. O resto (rede, limite de taxa,
  * saída fora do schema, que varia entre chamadas) é tentado até o limite da fila.
  * Aceita o tipo (como sempre) ou o próprio erro.
  */
