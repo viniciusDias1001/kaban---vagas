@@ -4,14 +4,20 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./testing": "./src/testing.ts"
   },
-  "devDependencies": {
-    "@types/better-sqlite3": "^9.6.0"
+  "scripts": {
+    "migrate": "tsx src/migrate-cli.ts",
+    "generate": "drizzle-kit generate"
   },
   "dependencies": {
     "@kv/shared": "workspace:*",
-    "better-sqlite3": "^13.0.3",
-    "drizzle-orm": "^0.45.4"
+    "drizzle-orm": "^0.45.4",
+    "postgres": "^4.1.1"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.16",
+    "drizzle-kit": "^0.31.11"
   }
 }

@@ -1,94 +1,94 @@
-import { mkdirSync } from 'node:fs';
-import { dirname, isAbsolute, resolve } from 'node:path';
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import Database from 'better-sqlite3';
-import { drizzle } from 'drizzle-orm/better-sqlite3';
+import { sql } from 'drizzle-orm';
+import type { PgDatabase } from 'drizzle-orm/pg-core';
+import { drizzle } from 'drizzle-orm/postgres-js';
+import postgres from 'postgres';
 import * as schema from './schema';
-
-const DDL = `
-CREATE TABLE IF NOT EXISTS search_profiles (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL,
-  stacks TEXT NOT NULL,
-  levels TEXT NOT NULL,
-  max_age_days INTEGER NOT NULL,
-  regions TEXT NOT NULL,
-  sources TEXT NOT NULL,
-  active INTEGER NOT NULL DEFAULT 1,
-  created_at INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS jobs (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  source TEXT NOT NULL,
-  external_id TEXT NOT NULL,
-  url TEXT NOT NULL,
-  title TEXT NOT NULL,
-  company TEXT NOT NULL,
-  location TEXT NOT NULL,
-  country TEXT NOT NULL,
-  remote INTEGER NOT NULL,
-  level TEXT,
-  stacks TEXT NOT NULL,
-  description TEXT NOT NULL,
-  posted_at INTEGER,
-  discovered_at INTEGER NOT NULL,
-  dedup_hash TEXT NOT NULL,
-  profile_id INTEGER NOT NULL,
-  board_column TEXT NOT NULL DEFAULT 'descobertas',
-  position REAL NOT NULL,
-  applied_by TEXT,
-  needs_human INTEGER NOT NULL DEFAULT 0,
-  needs_human_reason TEXT,
-  notes TEXT NOT NULL DEFAULT ''
-);
-CREATE UNIQUE INDEX IF NOT EXISTS jobs_url_idx ON jobs (url);
-CREATE INDEX IF NOT EXISTS jobs_dedup_idx ON jobs (dedup_hash);
-CREATE TABLE IF NOT EXISTS job_events (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  job_id INTEGER NOT NULL,
-  from_column TEXT,
-  to_column TEXT NOT NULL,
-  actor TEXT NOT NULL,
-  created_at INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS job_events_job_idx ON job_events (job_id);
-CREATE TABLE IF NOT EXISTS runs (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  profile_id INTEGER NOT NULL,
-  source TEXT NOT NULL,
-  trigger TEXT NOT NULL,
-  status TEXT NOT NULL,
-  found INTEGER NOT NULL DEFAULT 0,
-  inserted INTEGER NOT NULL DEFAULT 0,
-  error TEXT,
-  created_at INTEGER NOT NULL,
-  started_at INTEGER,
-  finished_at INTEGER
-);
-CREATE INDEX IF NOT EXISTS runs_status_idx ON runs (status);
-CREATE UNIQUE INDEX IF NOT EXISTS runs_pending_idx ON runs (profile_id, source) WHERE status IN ('queued','running');
-`;
 
 const REPO_ROOT = resolve(fileURLToPath(new URL('../../../', import.meta.url)));
 
+// API, worker e scripts rodam com cwds diferentes: todos leem o mesmo <raiz do repo>/.env.
+// Variáveis já definidas no ambiente têm precedência (loadEnvFile não sobrescreve).
+try {
+  const envFile = resolve(REPO_ROOT, '.env');
+  if (existsSync(envFile)) process.loadEnvFile(envFile);
+} catch {
+  // .env ilegível ou malformado: segue só com o ambiente do processo.
+}
+
 /**
- * DB_PATH absoluto e ':memory:' passam direto; relativo é resolvido a partir da raiz do repo
- * (não do cwd), para API e worker — que rodam com cwds diferentes — abrirem o mesmo arquivo.
+ * Tipo aceito por todo o código da aplicação. Tanto a instância postgres-js (produção) quanto a
+ * PGlite (testes) são atribuíveis a ele.
  */
-export function defaultDbPath(): string {
-  const env = process.env.DB_PATH;
-  if (!env) return resolve(REPO_ROOT, 'data/kanban.db');
-  if (env === ':memory:' || isAbsolute(env)) return env;
-  return resolve(REPO_ROOT, env);
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type Db = PgDatabase<any, typeof schema>;
+
+export function createDb(url: string | undefined = process.env.DATABASE_URL) {
+  if (!url) {
+    throw new Error(
+      'DATABASE_URL não definida. Copie .env.example para .env e ajuste a URL do Postgres ' +
+        '(local: `docker compose up -d`; produção: connection string do Supabase).',
+    );
+  }
+  // prepare: false — compatível com o pooler em modo transação do Supabase (porta 6543).
+  const client = postgres(url, { prepare: false, max: 5, onnotice: () => {} });
+  return drizzle(client, { schema });
 }
 
-export function openDb(path: string = defaultDbPath()) {
-  if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
-  const sqlite = new Database(path);
-  sqlite.pragma('journal_mode = WAL');
-  sqlite.pragma('busy_timeout = 5000');
-  sqlite.exec(DDL);
-  return drizzle(sqlite, { schema });
+interface Closable {
+  end?: (opts?: { timeout?: number }) => Promise<void>;
+  close?: () => Promise<void>;
 }
 
-export type Db = ReturnType<typeof openDb>;
+/** Fecha as conexões de um Db criado por `createDb` (ou por `createTestDb`). */
+export async function closeDb(db: Db): Promise<void> {
+  const client = (db as { $client?: Closable }).$client;
+  if (typeof client?.end === 'function') await client.end({ timeout: 5 });
+  else if (typeof client?.close === 'function') await client.close();
+}
+
+interface ErrorLike {
+  message?: string;
+  code?: string;
+  errors?: ErrorLike[];
+  cause?: unknown;
+}
+
+/**
+ * Mensagem legível de um erro de banco: o Drizzle embrulha o erro do driver em `cause` ("Failed query: ..."),
+ * e erros de conexão do Node vêm como AggregateError sem message (só `code`/`errors`).
+ */
+export function dbErrorMessage(e: unknown): string {
+  const outer = e as ErrorLike | undefined;
+  const root = (outer?.cause ?? outer) as ErrorLike | undefined;
+  return root?.message || root?.errors?.[0]?.message || root?.code || outer?.message || String(e);
+}
+
+const TABLES = ['search_profiles', 'jobs', 'job_events', 'runs'];
+
+/**
+ * Falha com uma mensagem clara se o banco está inacessível ou sem as tabelas.
+ * API e worker chamam isto ao subir; nenhum dos dois roda migrations (evita corrida entre eles).
+ */
+export async function assertDbReady(db: Db): Promise<void> {
+  let found: string[];
+  try {
+    const result = (await db.execute(
+      sql`select table_name from information_schema.tables where table_schema = current_schema()`,
+    )) as unknown as { table_name: string }[] | { rows?: { table_name: string }[] };
+    const rows = Array.isArray(result) ? result : (result.rows ?? []);
+    found = rows.map((r) => r.table_name);
+  } catch (e) {
+    throw new Error(
+      `Não foi possível conectar ao Postgres (${dbErrorMessage(e)}). Confira DATABASE_URL no .env e se o banco ` +
+        'está no ar (local: `docker compose up -d`).',
+      { cause: e },
+    );
+  }
+  const missing = TABLES.filter((t) => !found.includes(t));
+  if (missing.length > 0) {
+    throw new Error(`Banco sem as tabelas ${missing.join(', ')}: rode pnpm db:migrate.`);
+  }
+}

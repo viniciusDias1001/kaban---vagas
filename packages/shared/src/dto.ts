@@ -17,7 +17,8 @@ export interface JobDto {
   description: string;
   postedAt: number | null;
   discoveredAt: number;
-  profileId: number;
+  /** Nulo quando o perfil que encontrou a vaga foi apagado. */
+  profileId: number | null;
   column: Column;
   position: number;
   appliedBy: 'ia' | 'humano' | null;
