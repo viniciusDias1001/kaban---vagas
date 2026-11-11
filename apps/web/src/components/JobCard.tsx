@@ -1,15 +1,7 @@
 import { useDraggable, useDroppable } from '@dnd-kit/core';
 import { motion } from 'motion/react';
 import type { JobDto } from '@kv/shared';
-
-const DAY = 86_400_000;
-
-export function ageLabel(postedAt: number | null, now: number = Date.now()): string {
-  if (postedAt === null) return 'data n/d';
-  const days = Math.floor((now - postedAt) / DAY);
-  if (days <= 0) return 'hoje';
-  return days === 1 ? 'há 1 dia' : `há ${days} dias`;
-}
+import { ageLabel } from '../age';
 
 export function JobCardBody({ job }: { job: JobDto }) {
   return (

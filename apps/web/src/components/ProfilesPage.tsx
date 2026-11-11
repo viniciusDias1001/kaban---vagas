@@ -32,7 +32,7 @@ function Checks<T extends string>(props: {
   );
 }
 
-export function ProfilesPage() {
+export function ProfilesPage({ onRunQueued }: { onRunQueued: () => void }) {
   const qc = useQueryClient();
   const { data: profiles = [] } = useQuery({ queryKey: ['profiles'], queryFn: api.profiles });
   const { data: sources = [] } = useQuery({ queryKey: ['sources'], queryFn: api.sources });
@@ -55,8 +55,11 @@ export function ProfilesPage() {
   const remove = useMutation({ mutationFn: api.deleteProfile, onSuccess: refresh });
   const runNow = useMutation({
     mutationFn: api.runNow,
-    onSuccess: (r) =>
-      showToast(r.queued > 0 ? `Busca enfileirada em ${r.queued} fontes` : 'Já existe uma busca em andamento', 'info'),
+    onSuccess: (r) => {
+      if (r.queued === 0) return showToast('Já existe uma busca em andamento', 'info');
+      showToast(`Busca enfileirada em ${r.queued} ${r.queued === 1 ? 'fonte' : 'fontes'}`, 'info');
+      onRunQueued();
+    },
   });
 
   function submit(e: FormEvent) {

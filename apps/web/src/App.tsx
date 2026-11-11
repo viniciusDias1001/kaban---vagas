@@ -7,6 +7,7 @@ import { HealthPanel } from './components/HealthPanel';
 import { JobDrawer } from './components/JobDrawer';
 import { ProfilesPage } from './components/ProfilesPage';
 import { useToast } from './toast';
+import { useRunCatchUp } from './useRunCatchUp';
 
 type View = 'quadro' | 'perfis' | 'fontes';
 const VIEWS: { id: View; label: string }[] = [
@@ -20,6 +21,7 @@ export function App() {
   const [view, setView] = useState<View>('quadro');
   const [openJob, setOpenJob] = useState<number | null>(null);
   const toast = useToast();
+  const catchUp = useRunCatchUp();
   const { data: health } = useQuery({ queryKey: ['health'], queryFn: api.health, refetchInterval: 30_000 });
   const stale = !!health?.lastFinishedAt && Date.now() - health.lastFinishedAt > TWO_HOURS;
 
@@ -61,7 +63,7 @@ export function App() {
 
       <main className="min-h-0 flex-1 overflow-hidden">
         {view === 'quadro' && <Board onOpen={setOpenJob} />}
-        {view === 'perfis' && <ProfilesPage />}
+        {view === 'perfis' && <ProfilesPage onRunQueued={catchUp} />}
         {view === 'fontes' && <HealthPanel />}
       </main>
       <JobDrawer id={openJob} onClose={() => setOpenJob(null)} />

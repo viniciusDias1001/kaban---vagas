@@ -56,7 +56,7 @@ test('profile search fills the board and a moved card persists', async ({ page }
   await expect(page.getByTestId('profile')).toHaveCount(1);
 
   await page.getByRole('button', { name: 'Buscar agora' }).click();
-  await expect(page.getByRole('status')).toContainText('Busca enfileirada');
+  await expect(page.getByRole('status')).toContainText('Busca enfileirada em 1 fonte');
   // O worker verifica a fila a cada 5 s (e pode ainda estar subindo): espera a vaga existir na API
   // antes de ir ao quadro, que só refaz a consulta a cada 15 s.
   await expect

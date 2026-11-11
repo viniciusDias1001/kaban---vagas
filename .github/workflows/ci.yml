@@ -1,7 +1,9 @@
 name: CI
 
 on:
+  # Push só na main: os branches de PR já rodam pelo evento pull_request (evita execução dupla).
   push:
+    branches: [main]
   pull_request:
 
 permissions:
@@ -54,10 +56,8 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      # Cada arquivo de teste com banco sobe um PGlite no beforeAll; num runner disputado isso já passou
-      # dos 10 s padrão de hook do Vitest. O limite maior só evita esse falso negativo.
       - name: Testes unitários
-        run: pnpm test --hookTimeout=60000
+        run: pnpm test
         timeout-minutes: 10
 
       - name: Instalar Chromium do Playwright

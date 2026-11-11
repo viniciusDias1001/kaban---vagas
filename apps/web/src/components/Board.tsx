@@ -16,7 +16,7 @@ function ColumnView({ column, jobs, onOpen }: { column: Column; jobs: JobDto[]; 
     <section
       ref={setNodeRef}
       data-testid={`column-${column}`}
-      className={`flex w-72 shrink-0 flex-col rounded-xl border bg-surface-2/40 ${isOver ? 'border-accent' : 'border-line'}`}
+      className={`flex min-w-60 flex-1 basis-0 flex-col rounded-xl border bg-surface-2/40 ${isOver ? 'border-accent' : 'border-line'}`}
     >
       <header className="flex items-center justify-between px-3 py-2">
         <h2 className="text-sm font-semibold">{COLUMN_LABELS[column]}</h2>
@@ -122,7 +122,7 @@ export function Board({ onOpen }: { onOpen: (id: number) => void }) {
           </div>
           <DragOverlay>
             {active && (
-              <article className="w-68 rotate-2 cursor-grabbing rounded-lg border border-accent bg-surface p-3 shadow-xl">
+              <article className="w-64 rotate-2 cursor-grabbing rounded-lg border border-accent bg-surface p-3 shadow-xl">
                 <JobCardBody job={active} />
               </article>
             )}
