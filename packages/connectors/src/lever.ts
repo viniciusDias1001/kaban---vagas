@@ -1,4 +1,4 @@
-import type { NormalizedJob } from '@kv/shared';
+import { DEFAULT_LEVER_COMPANIES, type NormalizedJob } from '@kv/shared';
 import { boardList } from './greenhouse';
 import { fetchJson } from './http';
 import { expectList, keepValid, stacksWithQuery, toMs } from './normalize';
@@ -50,8 +50,10 @@ export function mapLever(postings: LeverPosting[], company: string): NormalizedJ
 export const lever: Connector = {
   id: 'lever',
   name: 'Lever',
-  async search(_filters, signal) {
-    const companies = boardList('LEVER_COMPANIES', ['palantir', 'spotify']);
+  async search(_filters, signal, config) {
+    const companies = config?.leverCompanies?.length
+      ? [...config.leverCompanies]
+      : boardList('LEVER_COMPANIES', [...DEFAULT_LEVER_COMPANIES]);
     const results = await Promise.allSettled(
       companies.map(async (c) =>
         mapLever(await fetchJson<LeverPosting[]>(`https://api.lever.co/v0/postings/${c}?mode=json`, signal), c),

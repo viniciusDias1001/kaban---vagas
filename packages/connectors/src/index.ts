@@ -10,7 +10,7 @@ import { remoteok } from './remoteok';
 import { remotive } from './remotive';
 import type { Connector } from './types';
 
-export type { Connector } from './types';
+export type { Connector, ConnectorConfig } from './types';
 export { createDescriptionFetcher, fetchJobDescription, type DescriptionFetcher, type DetailJob } from './detail';
 export { detectLevel, detectLevels, detectStacks, matchesFilters } from './filter';
 
