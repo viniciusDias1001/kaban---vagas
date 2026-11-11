@@ -1,5 +1,7 @@
 import { load } from 'cheerio';
-import type { NormalizedJob, Region } from '@kv/shared';
+import type { NormalizedJob, Region, SearchFilters } from '@kv/shared';
+import { collectQueries } from './collect';
+import { sleep } from './http';
 import { queriesFor, stacksWithQuery, validateJobs } from './normalize';
 import type { Connector } from './types';
 
@@ -84,35 +86,128 @@ export function parseIndeed(html: string, ctx: ParseContext): NormalizedJob[] {
   return valid;
 }
 
-/** Abre a página de resultados em um Chromium e devolve o HTML. Lança se o Indeed bloquear. */
-export async function fetchIndeedHtml(url: string): Promise<string> {
+/** O mínimo que usamos do Playwright; permite testar sem abrir um navegador. */
+interface PageLike {
+  goto(url: string, options: { waitUntil: 'domcontentloaded'; timeout: number }): Promise<unknown>;
+  waitForSelector(selector: string, options: { timeout: number }): Promise<unknown>;
+  content(): Promise<string>;
+}
+interface BrowserLike {
+  newPage(options: { locale: string }): Promise<PageLike>;
+  close(): Promise<void>;
+}
+
+/** Um navegador aberto, com uma única aba reaproveitada em todas as consultas. */
+export interface IndeedSession {
+  /** Abre a página de resultados e devolve o HTML, esperando no máximo `timeoutMs` ao todo. */
+  html(url: string, timeoutMs: number): Promise<string>;
+  close(): Promise<void>;
+}
+
+const GOTO_TIMEOUT_MS = 30_000;
+const CARDS_TIMEOUT_MS = 20_000;
+
+async function launchChromium(): Promise<BrowserLike> {
   const { chromium } = await import('playwright');
-  const browser = await chromium.launch({ headless: process.env.INDEED_HEADFUL !== '1' });
+  return chromium.launch({ headless: process.env.INDEED_HEADFUL !== '1' });
+}
+
+/** Abre o Chromium do Playwright, sem nenhum disfarce: se o Indeed bloquear, a busca falha. */
+export async function openIndeedSession(launch: () => Promise<BrowserLike> = launchChromium): Promise<IndeedSession> {
+  let browser: BrowserLike;
   try {
-    const page = await browser.newPage({ locale: 'pt-BR' });
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
-    try {
-      await page.waitForSelector('div.job_seen_beacon', { timeout: 20_000 });
-    } catch {
-      throw new Error('Indeed bloqueou o acesso ou mudou o layout');
-    }
-    return await page.content();
+    browser = await launch();
+  } catch (e) {
+    const detail = (e instanceof Error ? e.message : String(e)).split('\n')[0].trim();
+    throw new Error(
+      'Indeed precisa do Chromium do Playwright: não foi possível abrir o navegador; se ele não estiver instalado, ' +
+        `rode "pnpm --filter @kv/connectors exec playwright install chromium" (${detail})`,
+      { cause: e },
+    );
+  }
+  let page: PageLike | undefined;
+  return {
+    async html(url, timeoutMs) {
+      const deadline = Date.now() + timeoutMs;
+      // Timeout 0 no Playwright significa "sem limite": nunca passamos menos de 1 ms.
+      const left = (cap: number) => Math.max(1, Math.min(cap, deadline - Date.now()));
+      page ??= await browser.newPage({ locale: 'pt-BR' });
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: left(GOTO_TIMEOUT_MS) });
+      try {
+        await page.waitForSelector('div.job_seen_beacon', { timeout: left(CARDS_TIMEOUT_MS) });
+      } catch {
+        throw new Error('Indeed bloqueou o acesso ou mudou o layout');
+      }
+      return page.content();
+    },
+    close: () => browser.close(),
+  };
+}
+
+/** Abre um Chromium, baixa uma página de resultados e fecha. Usado para gravar a fixture. */
+export async function fetchIndeedHtml(url: string): Promise<string> {
+  const session = await openIndeedSession();
+  try {
+    return await session.html(url, GOTO_TIMEOUT_MS + CARDS_TIMEOUT_MS);
   } finally {
-    await browser.close();
+    await session.close();
   }
 }
 
-export const indeed: Connector = {
-  id: 'indeed',
-  name: 'Indeed',
-  async search(filters) {
-    const out: NormalizedJob[] = [];
-    for (const t of indeedTargets(filters.regions)) {
-      for (const q of queriesFor(filters)) {
-        const url = indeedUrl(t, q, filters.maxAgeDays);
-        out.push(...parseIndeed(await fetchIndeedHtml(url), { domain: t.domain, country: t.country, query: q }));
-      }
+/** O worker desiste da busca em 60 s e tenta de novo: a busca inteira tem de caber nisso com folga. */
+const BUDGET_MS = 45_000; // depois disso não começa outra navegação
+const HARD_LIMIT_MS = 55_000; // nenhuma navegação em curso espera além disso
+const PAUSE_MS = 2_000;
+
+export interface IndeedDeps {
+  open: () => Promise<IndeedSession>;
+  sleep: (ms: number) => Promise<void>;
+  now: () => number;
+}
+
+export function createIndeed(deps: Partial<IndeedDeps> = {}): Connector {
+  const { open = () => openIndeedSession(), sleep: pause = sleep, now = Date.now } = deps;
+  /** Termina quando a busca anterior fechou o navegador; nunca rejeita. */
+  let previous: Promise<void> = Promise.resolve();
+
+  async function run(filters: SearchFilters, start: number): Promise<NormalizedJob[]> {
+    if (now() - start >= BUDGET_MS) {
+      throw new Error('Indeed: outra busca ainda estava em andamento e o tempo desta acabou antes de começar');
     }
-    return out;
-  },
-};
+    const session = await open();
+    try {
+      // Termo por fora, site por dentro: se o tempo acabar, todo site já teve ao menos uma consulta.
+      const searches = queriesFor(filters).flatMap((query) =>
+        indeedTargets(filters.regions).map((target) => ({ target, query })),
+      );
+      return await collectQueries(
+        'indeed',
+        searches,
+        async ({ target, query }) => {
+          const page = await session.html(indeedUrl(target, query, filters.maxAgeDays), HARD_LIMIT_MS - (now() - start));
+          return parseIndeed(page, { domain: target.domain, country: target.country, query });
+        },
+        { pause: () => pause(PAUSE_MS), shouldStop: () => now() - start >= BUDGET_MS },
+      );
+    } finally {
+      await session.close().catch(() => {});
+    }
+  }
+
+  return {
+    id: 'indeed',
+    name: 'Indeed',
+    search(filters) {
+      const start = now();
+      // Uma busca por vez: a nova tentativa do worker espera a anterior fechar o navegador.
+      const result = previous.then(() => run(filters, start));
+      previous = result.then(
+        () => {},
+        () => {},
+      );
+      return result;
+    },
+  };
+}
+
+export const indeed = createIndeed();
