@@ -7,6 +7,7 @@ import type { Db } from '@kv/db';
 import { LIMITS } from '@kv/shared';
 import { createAiContext, type AiContextOptions } from './ai-context';
 import { aiRoutes } from './routes/ai';
+import { jobAiRoutes } from './routes/job-ai';
 import { jobRoutes } from './routes/jobs';
 import { metaRoutes } from './routes/meta';
 import { profileRoutes } from './routes/profiles';
@@ -122,10 +123,11 @@ export function buildApp(db: Db, opts: AppOptions = {}) {
   // pela própria API, sem proxy).
   const routes = async (scope: FastifyInstance) => {
     profileRoutes(scope, db);
-    jobRoutes(scope, db);
+    jobRoutes(scope, db, ctx);
     runRoutes(scope, db);
     metaRoutes(scope, db);
     aiRoutes(scope, db, ctx);
+    jobAiRoutes(scope, db, ctx);
   };
   app.register(routes);
   app.register(routes, { prefix: API_PREFIX });
