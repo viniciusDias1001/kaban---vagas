@@ -7,17 +7,35 @@ const html = readFileSync(new URL('../fixtures/indeed.html', import.meta.url), '
 const BR = { domain: 'br.indeed.com', country: 'BR' as const, query: 'react' };
 
 describe('parseIndeed', () => {
-  it('extracts valid jobs from a results page', () => {
+  it('extracts the fifteen real cards of a results page', () => {
     const jobs = parseIndeed(html, BR);
-    expect(jobs.length).toBeGreaterThan(0);
+    expect(jobs).toHaveLength(15);
+    expect(new Set(jobs.map((j) => j.externalId)).size).toBe(15);
     for (const j of jobs) {
       expect(NormalizedJobSchema.safeParse(j).success).toBe(true);
       expect(j.source).toBe('indeed');
       expect(j.url).toBe(`https://br.indeed.com/viewjob?jk=${j.externalId}`);
       expect(j.country).toBe('BR');
       expect(j.location).not.toBe('');
+      expect(j.externalId).toMatch(/^[0-9a-f]{16}$/);
+      expect(j.company).not.toBe('');
       expect(j.postedAt).toBeNull();
     }
+  });
+
+  it('skips the hidden placeholder card', () => {
+    expect(html).toContain('data-jk="abcdef0123456789"');
+    const ids = parseIndeed(html, BR).map((j) => j.externalId);
+    expect(ids).not.toContain('abcdef0123456789');
+    // mesmo visível, o id de exemplo não é uma vaga
+    const shown = parseIndeed(html.replaceAll('aria-hidden="true"', ''), BR).map((j) => j.externalId);
+    expect(shown).toHaveLength(15);
+    expect(shown).not.toContain('abcdef0123456789');
+  });
+
+  it('ignores cards whose id is not a job key', () => {
+    const jobs = parseIndeed(html.replaceAll('34de5dbc912d64bf', 'not-a-job-key'), BR);
+    expect(jobs).toHaveLength(14);
   });
 
   it('derives remote from the card location and title', () => {

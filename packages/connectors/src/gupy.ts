@@ -1,6 +1,7 @@
 import type { NormalizedJob } from '@kv/shared';
+import { collectQueries } from './collect';
 import { fetchJson } from './http';
-import { keepValid, queriesFor, stacksWithQuery, toMs } from './normalize';
+import { expectList, keepValid, queriesFor, stacksWithQuery, toMs } from './normalize';
 import { stripHtml } from './text';
 import type { Connector } from './types';
 
@@ -28,7 +29,7 @@ function gupyCountry(j: GupyJob): 'BR' | 'INT' {
 
 export function mapGupy(data: { data: GupyJob[] }): NormalizedJob[] {
   return keepValid(
-    data.data.map((j) => ({
+    expectList(data.data, 'gupy', 'data').map((j) => ({
       source: 'gupy',
       externalId: String(j.id),
       url: j.jobUrl,
@@ -37,10 +38,11 @@ export function mapGupy(data: { data: GupyJob[] }): NormalizedJob[] {
       location: [j.city, j.state].filter(Boolean).join(', ') || 'Brasil',
       country: gupyCountry(j),
       remote: j.workplaceType === 'remote' || Boolean(j.isRemoteWork),
-      stacks: stacksWithQuery(j.name),
+      stacks: stacksWithQuery(j.name ?? ''),
       description: stripHtml(j.description ?? ''),
       postedAt: toMs(j.publishedDate),
     })),
+    'gupy',
   );
 }
 
@@ -48,15 +50,13 @@ export const gupy: Connector = {
   id: 'gupy',
   name: 'Gupy',
   async search(filters) {
-    const out: NormalizedJob[] = [];
-    for (const q of queriesFor(filters)) {
+    return collectQueries('gupy', queriesFor(filters), async (q) => {
       const term = q === 'developer' ? 'desenvolvedor' : q;
       // portal.api.gupy.io/api/v1/jobs now returns 404; the portal's own same-origin endpoint works.
       const data = await fetchJson<{ data: GupyJob[] }>(
         `https://portal.gupy.io/api/job-search/jobs?jobName=${encodeURIComponent(term)}&limit=50&offset=0`,
       );
-      out.push(...mapGupy(data));
-    }
-    return out;
+      return mapGupy(data);
+    });
   },
 };

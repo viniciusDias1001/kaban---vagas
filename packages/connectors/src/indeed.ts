@@ -1,6 +1,6 @@
 import { load } from 'cheerio';
 import type { NormalizedJob, Region } from '@kv/shared';
-import { keepValid, queriesFor, stacksWithQuery } from './normalize';
+import { queriesFor, stacksWithQuery, validateJobs } from './normalize';
 import type { Connector } from './types';
 
 export interface IndeedTarget {
@@ -41,10 +41,18 @@ export function indeedUrl(target: IndeedTarget, query: string, maxAgeDays: numbe
   return `https://${target.domain}/jobs?${params}`;
 }
 
+/** `data-jk` do cartão-modelo oculto que o Indeed deixa na página. */
+const PLACEHOLDER_JK = 'abcdef0123456789';
+const isJobKey = (jk: string) => /^[0-9a-f]{16}$/i.test(jk) && jk.toLowerCase() !== PLACEHOLDER_JK;
+
 export function parseIndeed(html: string, ctx: ParseContext): NormalizedJob[] {
   const $ = load(html);
-  const jobs = $('div.job_seen_beacon')
+  // Cartões dentro de um bloco aria-hidden são modelos de layout, não vagas.
+  const visible = $('div.job_seen_beacon, [data-jk]')
     .toArray()
+    .filter((el) => $(el).closest('[aria-hidden="true"]').length === 0);
+  const jobs = visible
+    .filter((el) => $(el).is('div.job_seen_beacon'))
     .map((card) => {
       const el = $(card);
       const link = el.find('.jobTitle a').first();
@@ -66,7 +74,14 @@ export function parseIndeed(html: string, ctx: ParseContext): NormalizedJob[] {
         postedAt: null,
       };
     });
-  return keepValid(jobs);
+  const { valid, firstIssue } = validateJobs(jobs.filter((j) => isJobKey(j.externalId)));
+  // Página sem resultados não tem cartões; cartões que não rendem nenhuma vaga indicam mudança de layout.
+  if (valid.length === 0 && visible.length > 0) {
+    const cards = jobs.length || visible.length;
+    const why = firstIssue ?? 'cartão ou identificador da vaga não encontrado';
+    throw new Error(`indeed: a página tem ${cards} cartões, mas nenhum virou vaga — o layout mudou? (${why})`);
+  }
+  return valid;
 }
 
 /** Abre a página de resultados em um Chromium e devolve o HTML. Lança se o Indeed bloquear. */

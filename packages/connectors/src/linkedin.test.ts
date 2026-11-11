@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { NormalizedJobSchema } from '@kv/shared';
 import { createLinkedin, linkedinTargets, linkedinUrl, parseLinkedin } from './linkedin';
 
@@ -121,6 +121,32 @@ describe('linkedin connector', () => {
     // o mesmo cartão volta em todas as consultas: sai uma vez só
     expect(jobs).toHaveLength(10);
     expect(jobs.every((j) => j.remote && j.country === 'BR')).toBe(true);
+  });
+
+  it('keeps the results of the queries that worked when another one fails', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let n = 0;
+    const connector = createLinkedin({
+      fetchHtml: async () => {
+        if (++n === 2) throw new Error('HTTP 429');
+        return html;
+      },
+      sleep: async () => {},
+    });
+    expect(await connector.search(filters)).toHaveLength(10);
+    expect(n).toBe(4);
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it('fails when every query failed', async () => {
+    const connector = createLinkedin({
+      fetchHtml: async () => {
+        throw new Error('HTTP 429');
+      },
+      sleep: async () => {},
+    });
+    await expect(connector.search(filters)).rejects.toThrow(/linkedin: as 4 consultas falharam.*HTTP 429/);
   });
 
   it('keeps the remote flag when the same job comes from a plain and a remote query', async () => {

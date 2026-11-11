@@ -1,10 +1,12 @@
 import type { NormalizedJob } from '@kv/shared';
 import { fetchJson } from './http';
-import { keepValid, stacksWithQuery, toMs } from './normalize';
+import { expectList, keepValid, stacksWithQuery, toMs } from './normalize';
 import { stripHtml } from './text';
 import type { Connector } from './types';
 
 interface RemoteOkItem {
+  /** Só o primeiro item da resposta (o aviso legal) tem este campo. */
+  legal?: string;
   id?: string | number;
   position?: string;
   company?: string;
@@ -18,8 +20,9 @@ interface RemoteOkItem {
 
 export function mapRemoteOk(items: RemoteOkItem[]): NormalizedJob[] {
   return keepValid(
-    items
-      .filter((x) => x.position)
+    expectList(items, 'remoteok', 'de vagas')
+      // Só o aviso legal é pulado: um item sem `position` tem de aparecer como formato inválido.
+      .filter((x) => x.legal === undefined)
       .map((j) => ({
         source: 'remoteok',
         externalId: String(j.id ?? ''),
@@ -33,6 +36,7 @@ export function mapRemoteOk(items: RemoteOkItem[]): NormalizedJob[] {
         description: stripHtml(j.description ?? ''),
         postedAt: toMs(j.epoch ?? j.date),
       })),
+    'remoteok',
   );
 }
 

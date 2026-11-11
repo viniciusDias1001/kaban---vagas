@@ -1,6 +1,6 @@
 import type { NormalizedJob } from '@kv/shared';
 import { fetchJson } from './http';
-import { keepValid, queriesFor, stacksWithQuery, toMs } from './normalize';
+import { expectList, keepValid, queriesFor, stacksWithQuery, toMs } from './normalize';
 import { stripHtml } from './text';
 import type { Connector } from './types';
 
@@ -17,7 +17,7 @@ interface RemotiveJob {
 
 export function mapRemotive(data: { jobs: RemotiveJob[] }): NormalizedJob[] {
   return keepValid(
-    data.jobs.map((j) => ({
+    expectList(data.jobs, 'remotive', 'jobs').map((j) => ({
       source: 'remotive',
       externalId: String(j.id),
       url: j.url,
@@ -30,6 +30,7 @@ export function mapRemotive(data: { jobs: RemotiveJob[] }): NormalizedJob[] {
       description: stripHtml(j.description ?? ''),
       postedAt: toMs(j.publication_date),
     })),
+    'remotive',
   );
 }
 

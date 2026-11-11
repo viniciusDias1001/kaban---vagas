@@ -2,9 +2,40 @@ import { NormalizedJobSchema, type NormalizedJob, type SearchFilters } from '@kv
 import { detectStacks } from './filter';
 import { canonicalTerm } from './text';
 
-/** Descarta vagas que não passam no schema (ex.: sem empresa ou sem URL válida). */
-export function keepValid(jobs: NormalizedJob[]): NormalizedJob[] {
-  return jobs.filter((j) => NormalizedJobSchema.safeParse(j).success);
+/** Separa as vagas que passam no schema e guarda o primeiro problema encontrado nas demais. */
+export function validateJobs(jobs: NormalizedJob[]): { valid: NormalizedJob[]; firstIssue: string | null } {
+  const valid: NormalizedJob[] = [];
+  let firstIssue: string | null = null;
+  for (const job of jobs) {
+    const parsed = NormalizedJobSchema.safeParse(job);
+    if (parsed.success) {
+      valid.push(job);
+    } else if (firstIssue === null) {
+      const issue = parsed.error.issues[0];
+      firstIssue = `${issue.path.join('.') || 'vaga'}: ${issue.message}`;
+    }
+  }
+  return { valid, firstIssue };
+}
+
+/**
+ * Descarta vagas que não passam no schema (ex.: sem empresa ou sem URL válida).
+ * Se havia itens e nenhum é válido, a fonte mudou de formato: lança em vez de devolver "0 vagas".
+ */
+export function keepValid(jobs: NormalizedJob[], source: string): NormalizedJob[] {
+  const { valid, firstIssue } = validateJobs(jobs);
+  if (jobs.length > 0 && valid.length === 0) {
+    throw new Error(`${source}: nenhum dos ${jobs.length} itens é uma vaga válida — o formato da fonte mudou? (${firstIssue})`);
+  }
+  return valid;
+}
+
+/** Garante que a resposta trouxe a lista esperada; uma chave renomeada não pode virar "0 vagas". */
+export function expectList<T>(value: T[] | undefined | null, source: string, where: string): T[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`${source}: a resposta não trouxe a lista ${where} — o formato da fonte mudou?`);
+  }
+  return value;
 }
 
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;

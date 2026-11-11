@@ -1,7 +1,8 @@
 import { load } from 'cheerio';
 import type { NormalizedJob, Region } from '@kv/shared';
+import { collectQueries } from './collect';
 import { fetchText, sleep } from './http';
-import { keepValid, queriesFor, stacksWithQuery, toMs } from './normalize';
+import { queriesFor, stacksWithQuery, toMs, validateJobs } from './normalize';
 import type { Connector } from './types';
 
 const BASE = 'https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search';
@@ -76,7 +77,12 @@ export function parseLinkedin(html: string, ctx: ParseContext): NormalizedJob[] 
         postedAt: toMs(el.find('time').attr('datetime')),
       };
     });
-  return keepValid(jobs);
+  const { valid, firstIssue } = validateJobs(jobs);
+  // Página sem resultados não tem <li>; cartões que não rendem nenhuma vaga indicam mudança de layout.
+  if (valid.length === 0 && jobs.length > 0 && /jobs\/view\/|jobPosting|job-search-card/.test(html)) {
+    throw new Error(`linkedin: a página tem ${jobs.length} cartões, mas nenhum virou vaga — o layout mudou? (${firstIssue})`);
+  }
+  return valid;
 }
 
 /** Junta os resultados das buscas: a mesma vaga sai uma vez, remota se alguma busca a viu como remota. */
@@ -104,13 +110,16 @@ export function createLinkedin(deps: Partial<LinkedinDeps> = {}): Connector {
       const searches = linkedinTargets(filters.regions).flatMap((target) =>
         queriesFor(filters).map((query) => ({ target, query })),
       );
-      const out: NormalizedJob[] = [];
-      for (const [i, { target, query }] of searches.entries()) {
-        if (i > 0) await pause(PAUSE_MS);
-        const html = await fetchHtml(linkedinUrl(target, query, filters.maxAgeDays));
-        out.push(...parseLinkedin(html, { country: target.country, remote: target.remote, query }));
-      }
-      return mergeById(out);
+      const found = await collectQueries(
+        'linkedin',
+        searches,
+        async ({ target, query }) => {
+          const html = await fetchHtml(linkedinUrl(target, query, filters.maxAgeDays));
+          return parseLinkedin(html, { country: target.country, remote: target.remote, query });
+        },
+        { pause: () => pause(PAUSE_MS) },
+      );
+      return mergeById(found);
     },
   };
 }

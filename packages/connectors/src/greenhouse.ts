@@ -1,6 +1,6 @@
 import type { NormalizedJob } from '@kv/shared';
 import { fetchJson } from './http';
-import { keepValid, stacksWithQuery, toMs } from './normalize';
+import { expectList, keepValid, stacksWithQuery, toMs } from './normalize';
 import { decodeEntities, stripHtml } from './text';
 import type { Connector } from './types';
 
@@ -24,7 +24,7 @@ export function boardList(envName: string, defaults: string[]): string[] {
 
 export function mapGreenhouse(data: { jobs: GreenhouseJob[] }, board: string): NormalizedJob[] {
   return keepValid(
-    data.jobs.map((j) => {
+    expectList(data.jobs, 'greenhouse', 'jobs').map((j) => {
       const location = j.location?.name ?? '';
       return {
         source: 'greenhouse',
@@ -35,12 +35,13 @@ export function mapGreenhouse(data: { jobs: GreenhouseJob[] }, board: string): N
         location,
         country: /bra[sz]il/i.test(location) ? ('BR' as const) : ('INT' as const),
         remote: /remote|remoto/i.test(location),
-        stacks: stacksWithQuery(j.title),
+        stacks: stacksWithQuery(j.title ?? ''),
         // `content` vem com o HTML inteiro escapado em entidades: decodifica uma vez e então tira as tags.
         description: stripHtml(decodeEntities(j.content ?? '')),
         postedAt: toMs(j.first_published ?? j.updated_at),
       };
     }),
+    'greenhouse',
   );
 }
 
@@ -58,7 +59,11 @@ export const greenhouse: Connector = {
       ),
     );
     const ok = results.filter((r): r is PromiseFulfilledResult<NormalizedJob[]> => r.status === 'fulfilled');
-    if (ok.length === 0) throw new Error('Greenhouse: nenhum board respondeu');
+    if (ok.length === 0) {
+      const failed = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
+      const why = failed?.reason instanceof Error ? failed.reason.message : String(failed?.reason);
+      throw new Error(`Greenhouse: nenhum board respondeu — ${why}`);
+    }
     return ok.flatMap((r) => r.value);
   },
 };

@@ -1,6 +1,6 @@
 import type { NormalizedJob } from '@kv/shared';
 import { fetchJson } from './http';
-import { keepValid, stacksWithQuery, toMs } from './normalize';
+import { expectList, keepValid, stacksWithQuery, toMs } from './normalize';
 import { stripHtml } from './text';
 import type { Connector } from './types';
 
@@ -17,7 +17,7 @@ interface HimalayasJob {
 
 export function mapHimalayas(data: { jobs: HimalayasJob[] }): NormalizedJob[] {
   return keepValid(
-    data.jobs.map((j) => ({
+    expectList(data.jobs, 'himalayas', 'jobs').map((j) => ({
       source: 'himalayas',
       externalId: j.guid,
       url: j.applicationLink || j.guid,
@@ -30,6 +30,7 @@ export function mapHimalayas(data: { jobs: HimalayasJob[] }): NormalizedJob[] {
       description: stripHtml(j.description ?? ''),
       postedAt: toMs(j.pubDate),
     })),
+    'himalayas',
   );
 }
 
