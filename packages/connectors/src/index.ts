@@ -11,6 +11,7 @@ import { remotive } from './remotive';
 import type { Connector } from './types';
 
 export type { Connector } from './types';
+export { createDescriptionFetcher, fetchJobDescription, type DescriptionFetcher, type DetailJob } from './detail';
 export { detectLevel, detectLevels, detectStacks, matchesFilters } from './filter';
 
 const REAL: Connector[] = [gupy, remotive, remoteok, greenhouse, lever, arbeitnow, himalayas, linkedin, indeed];

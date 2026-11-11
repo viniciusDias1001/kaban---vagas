@@ -99,8 +99,11 @@ interface BrowserLike {
 
 /** Um navegador aberto, com uma única aba reaproveitada em todas as consultas. */
 export interface IndeedSession {
-  /** Abre a página de resultados e devolve o HTML, esperando no máximo `timeoutMs` ao todo. */
-  html(url: string, timeoutMs: number): Promise<string>;
+  /**
+   * Abre a página e devolve o HTML, esperando no máximo `timeoutMs` ao todo. `waitFor` é o seletor que
+   * precisa aparecer: os cartões da busca (padrão) ou, na página de uma vaga, o bloco da descrição.
+   */
+  html(url: string, timeoutMs: number, waitFor?: string): Promise<string>;
   close(): Promise<void>;
 }
 
@@ -127,14 +130,14 @@ export async function openIndeedSession(launch: () => Promise<BrowserLike> = lau
   }
   let page: PageLike | undefined;
   return {
-    async html(url, timeoutMs) {
+    async html(url, timeoutMs, waitFor = 'div.job_seen_beacon') {
       const deadline = Date.now() + timeoutMs;
       // Timeout 0 no Playwright significa "sem limite": nunca passamos menos de 1 ms.
       const left = (cap: number) => Math.max(1, Math.min(cap, deadline - Date.now()));
       page ??= await browser.newPage({ locale: 'pt-BR' });
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: left(GOTO_TIMEOUT_MS) });
       try {
-        await page.waitForSelector('div.job_seen_beacon', { timeout: left(CARDS_TIMEOUT_MS) });
+        await page.waitForSelector(waitFor, { timeout: left(CARDS_TIMEOUT_MS) });
       } catch {
         throw new Error('Indeed bloqueou o acesso ou mudou o layout');
       }
