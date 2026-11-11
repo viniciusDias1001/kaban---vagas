@@ -1,0 +1,88 @@
+import { ApiError, FinishReason, GoogleGenAI } from '@google/genai';
+import { z } from 'zod';
+import { AiError, detailFromStatus, kindFromStatus, parseJsonText } from './errors';
+import type { AiProvider, AiTier } from './types';
+
+/** Tokens de raciocínio ("thoughts") contam em `maxOutputTokens`. */
+const THINKING_HEADROOM: Record<AiTier, number> = { fast: 2_000, strong: 8_000 };
+const BLOCKED = new Set<string>([
+  FinishReason.SAFETY, FinishReason.RECITATION, FinishReason.BLOCKLIST, FinishReason.PROHIBITED_CONTENT, FinishReason.SPII,
+]);
+
+export interface GeminiOptions {
+  apiKey: string;
+  models: Record<AiTier, string>;
+}
+
+/**
+ * Mensagens fixas: a do SDK repete o corpo da resposta do provedor, que pode conter a chave. O erro do
+ * SDK não segue adiante (nada de `cause`).
+ */
+function mapError(e: unknown): AiError {
+  if (e instanceof AiError) return e;
+  if (e instanceof ApiError) {
+    // Defensivo (não confirmado na documentação lida em 2026-11-11, que lista 401 para chave inválida): o
+    // `generateContent` historicamente responde 400 INVALID_ARGUMENT com o motivo API_KEY_INVALID. A
+    // mensagem do SDK (o corpo da resposta) só é LIDA aqui para classificar; nunca é repassada.
+    if (e.status === 400 && e.message.includes('API_KEY_INVALID')) {
+      return new AiError('config', 'a chave de API do Gemini é inválida ou não tem permissão', 'auth');
+    }
+    const kind = kindFromStatus(e.status);
+    const detail = kind === 'config' ? detailFromStatus(e.status) : undefined;
+    const what =
+      detail === 'auth' ? 'a chave de API do Gemini é inválida ou não tem permissão'
+      : detail === 'model' ? 'modelo do Gemini não encontrado'
+      : detail === 'billing' ? 'a conta do Gemini está sem crédito'
+      : `Gemini respondeu ${e.status}`;
+    return new AiError(kind, what, detail);
+  }
+  // Fora de ApiError, o SDK lança erros de rede e de cancelamento (AbortError).
+  return new AiError('transient', 'falha de rede ao falar com o Gemini');
+}
+
+export function createGeminiProvider(opts: GeminiOptions): AiProvider {
+  // attempts: 1 = sem novas tentativas dentro do SDK (quem tenta de novo é a fila de IA).
+  const ai = new GoogleGenAI({ apiKey: opts.apiKey, httpOptions: { timeout: 120_000, retryOptions: { attempts: 1 } } });
+  return {
+    id: 'gemini',
+    async generate(req) {
+      const model = opts.models[req.tier];
+      const { $schema: _dialect, ...jsonSchema } = z.toJSONSchema(req.schema) as Record<string, unknown>;
+      let res;
+      try {
+        res = await ai.models.generateContent({
+          model,
+          contents: req.prompt,
+          config: {
+            systemInstruction: req.system,
+            responseMimeType: 'application/json',
+            responseJsonSchema: jsonSchema,
+            maxOutputTokens: req.maxOutputTokens + THINKING_HEADROOM[req.tier],
+            abortSignal: req.signal,
+            // O SDK 3.x, por padrão, refaz a requisição sozinho quando a resposta termina em CONTINUATION,
+            // e cada requisição é cobrada. Desligado: uma chamada = uma requisição = um `usageMetadata`.
+            automaticContinuation: false,
+          },
+        });
+      } catch (e) {
+        throw mapError(e);
+      }
+      const blockReason = res.promptFeedback?.blockReason;
+      if (blockReason) throw new AiError('refused', `o Gemini bloqueou o pedido (${blockReason})`);
+      const finish = res.candidates?.[0]?.finishReason;
+      if (finish && BLOCKED.has(finish)) throw new AiError('refused', `o Gemini bloqueou a resposta (${finish})`);
+      if (finish === FinishReason.MAX_TOKENS) throw new AiError('invalid_output', 'resposta cortada pelo limite de tokens');
+      if (finish === FinishReason.CONTINUATION) throw new AiError('invalid_output', 'resposta incompleta (pede continuação)');
+      const data = parseJsonText(req.schema, res.text);
+      const u = res.usageMetadata;
+      return {
+        data,
+        model: res.modelVersion ?? model,
+        usage: {
+          inputTokens: u?.promptTokenCount ?? 0,
+          outputTokens: (u?.candidatesTokenCount ?? 0) + (u?.thoughtsTokenCount ?? 0),
+        },
+      };
+    },
+  };
+}
