@@ -3,7 +3,9 @@ import { AnimatePresence, motion } from 'motion/react';
 import { useState } from 'react';
 import { api } from './api';
 import { Board } from './components/Board';
+import { HealthPanel } from './components/HealthPanel';
 import { JobDrawer } from './components/JobDrawer';
+import { ProfilesPage } from './components/ProfilesPage';
 import { useToast } from './toast';
 
 type View = 'quadro' | 'perfis' | 'fontes';
@@ -59,8 +61,8 @@ export function App() {
 
       <main className="min-h-0 flex-1 overflow-hidden">
         {view === 'quadro' && <Board onOpen={setOpenJob} />}
-        {view === 'perfis' && <p className="p-6 text-muted">Perfis em construção.</p>}
-        {view === 'fontes' && <p className="p-6 text-muted">Fontes em construção.</p>}
+        {view === 'perfis' && <ProfilesPage />}
+        {view === 'fontes' && <HealthPanel />}
       </main>
       <JobDrawer id={openJob} onClose={() => setOpenJob(null)} />
 
