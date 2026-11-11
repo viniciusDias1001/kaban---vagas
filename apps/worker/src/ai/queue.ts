@@ -2,6 +2,7 @@ import { and, asc, eq, inArray, isNull, lt, lte, ne, notInArray, or, sql } from 
 import { AiError, dayStartMs, isRetryable } from '@kv/ai';
 import { aiSpentSince, aiTasks, type AiTaskRow, type Db } from '@kv/db';
 import type { AiTaskType } from '@kv/shared';
+import { taskErrorMessage } from './task-errors';
 
 /**
  * Executa uma unidade de trabalho: uma tarefa, ou um lote de tarefas da camada 1. Devolve as falhas por
@@ -63,7 +64,8 @@ export interface AiTickResult {
 }
 
 const DEFAULT_TIMEOUT_MS: Record<AiTaskType, number> = {
-  tier1: 60_000, tier2: 100_000, tier3: 100_000, profile_extract: 100_000, profile_translate: 100_000,
+  // A camada 3 pode fazer duas chamadas fortes seguidas (a nova tentativa depois de um rascunho bloqueado).
+  tier1: 60_000, tier2: 100_000, tier3: 200_000, profile_extract: 100_000, profile_translate: 100_000,
 };
 /** Folga somada ao maior tempo limite antes de considerar uma tarefa abandonada. */
 const STALE_MARGIN_MS = 3 * 60_000;
@@ -116,7 +118,7 @@ export function createAiQueue(db: Db, run: UnitRunner, opts: AiQueueOptions) {
 
   async function fail(task: AiTaskRow, attempts: number, error: unknown): Promise<void> {
     const kind = error instanceof AiError ? error.kind : 'other';
-    const message = errorText(error).slice(0, 2_000);
+    const message = taskErrorMessage(error);
     if (!isRetryable(kind) || attempts >= maxAttempts) {
       await db.update(aiTasks).set({ status: 'error', error: message, finishedAt: now() }).where(eq(aiTasks.id, task.id));
       await onFailed?.(task, message);
