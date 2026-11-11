@@ -154,6 +154,8 @@ export function createAiQueue(db: Db, run: UnitRunner, opts: AiQueueOptions) {
   const running = new Set<Promise<void>>();
   let ticking = false;
   let lastPrune: number | undefined;
+  /** `until` da última pausa da triagem registrada no log. */
+  let pauseLogged = 0;
 
   /** O gasto de hoje já alcançou o limite? (Mesma conta da verificação, refeita antes de cada chamada individual.) */
   async function overBudget(): Promise<boolean> {
@@ -188,8 +190,11 @@ export function createAiQueue(db: Db, run: UnitRunner, opts: AiQueueOptions) {
     }
     if (task.type === 'tier1' && isProviderUnavailable(kind)) {
       const pause = kind === 'rate_limited' ? providerPauseMs.rate_limited : providerPauseMs.config;
-      log(`fila de IA: triagem em pausa por ${Math.round(pause / 60_000)} min: ${message}`);
-      await pauseTier1(task, message, now() + pause);
+      const until = now() + pause;
+      // Uma linha no log por pausa, não uma por tarefa do lote.
+      if (until - pauseLogged > 1_000) log(`fila de IA: triagem em pausa por ${Math.round(pause / 60_000)} min: ${message}`);
+      pauseLogged = until;
+      await pauseTier1(task, message, until);
       return;
     }
     await db.update(aiTasks).set({ status: 'error', error: message, finishedAt: now() }).where(eq(aiTasks.id, task.id));
