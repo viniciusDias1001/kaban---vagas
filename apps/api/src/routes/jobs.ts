@@ -1,8 +1,8 @@
-import { and, asc, eq, ilike, ne, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, getTableColumns, ilike, ne, or, sql, type SQL } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { JOBS_WRITE_LOCK, jobEvents, jobs, type Db } from '@kv/db';
-import { ColumnSchema, JobPatchSchema, LIMITS, hasNul, type Column } from '@kv/shared';
+import { ColumnSchema, JobPatchSchema, LIMITS, hasNul, type Column, type JobListItemDto } from '@kv/shared';
 import { intendedIndex } from '../position';
 import { idParam, parseId } from './ids';
 
@@ -22,11 +22,17 @@ const JobsQuerySchema = z.object({
   q: queryText(LIMITS.search).optional(),
 });
 
+/**
+ * Colunas de um item da lista: tudo o que o card do quadro usa. Ficam de fora a descrição (o campo mais
+ * pesado, só lido no detalhe da vaga) e o `dedupHash` (interno do worker).
+ */
+const { description: _description, dedupHash: _dedupHash, ...LIST_COLUMNS } = getTableColumns(jobs);
+
 /** `%`, `_` e a barra invertida são curingas/escape do LIKE: escapados, casam literalmente. */
 export const escapeLike = (term: string) => term.replace(/[\\%_]/g, (ch) => `\\${ch}`);
 
 export function jobRoutes(app: FastifyInstance, db: Db) {
-  app.get('/jobs', async (req) => {
+  app.get('/jobs', async (req): Promise<JobListItemDto[]> => {
     // Parâmetro vazio (`?q=`) é o mesmo que ausente.
     const raw = Object.fromEntries(Object.entries(req.query as Record<string, unknown>).filter(([, v]) => v !== ''));
     const query = JobsQuerySchema.parse(raw);
@@ -42,7 +48,7 @@ export function jobRoutes(app: FastifyInstance, db: Db) {
       const term = `%${escapeLike(query.q)}%`;
       where.push(or(ilike(jobs.title, term), ilike(jobs.company, term))!);
     }
-    return db.select().from(jobs).where(and(...where)).orderBy(asc(jobs.position), asc(jobs.id));
+    return db.select(LIST_COLUMNS).from(jobs).where(and(...where)).orderBy(asc(jobs.position), asc(jobs.id));
   });
 
   app.get('/jobs/:id', async (req, reply) => {

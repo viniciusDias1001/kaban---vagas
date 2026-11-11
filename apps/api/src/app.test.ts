@@ -147,13 +147,29 @@ describe('jobs', () => {
   it('serialises a job with numbers, booleans, arrays and nulls in the DTO shape', async () => {
     const now = Date.now();
     const job = await seedJob({ postedAt: now, discoveredAt: now + 1, position: -now + 0.5, stacks: ['react', 'node'] });
-    const [dto] = (await app.inject({ method: 'GET', url: '/jobs' })).json();
-    expect(dto).toEqual({
+    const item = {
       id: job.id, source: 'gupy', externalId: '1', url: job.url, title: 'Dev React', company: 'Acme',
-      location: 'SP', country: 'BR', remote: false, level: null, stacks: ['react', 'node'], description: 'd',
-      postedAt: now, discoveredAt: now + 1, dedupHash: job.dedupHash, profileId: null, column: 'descobertas',
+      location: 'SP', country: 'BR', remote: false, level: null, stacks: ['react', 'node'],
+      postedAt: now, discoveredAt: now + 1, profileId: null, column: 'descobertas',
       position: -now + 0.5, appliedBy: null, needsHuman: false, needsHumanReason: null, notes: '',
-    });
+    };
+    // A lista do quadro não traz a descrição (nem o hash interno de deduplicação)...
+    const [dto] = (await app.inject({ method: 'GET', url: '/jobs' })).json();
+    expect(dto).toEqual(item);
+    // ...que continua vindo no detalhe da vaga.
+    const detail = (await app.inject({ method: 'GET', url: `/jobs/${job.id}` })).json();
+    expect(detail.job).toEqual({ ...item, description: 'd', dedupHash: job.dedupHash });
+  });
+
+  it('leaves the description out of every list variant and keeps it in PATCH responses', async () => {
+    const job = await seedJob({ title: 'Python Dev', column: 'aplicada' });
+    for (const qs of ['', '?q=python', '?column=aplicada', '?source=gupy']) {
+      const [row] = (await app.inject({ method: 'GET', url: `/jobs${qs}` })).json();
+      expect(row.id).toBe(job.id);
+      expect(row).not.toHaveProperty('description');
+    }
+    const patched = (await app.inject({ method: 'PATCH', url: `/jobs/${job.id}`, payload: { notes: 'n' } })).json();
+    expect(patched).toMatchObject({ id: job.id, notes: 'n', description: 'd' });
   });
 
   it('moves a job, records the event and marks human application', async () => {

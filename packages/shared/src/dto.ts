@@ -27,6 +27,9 @@ export interface JobDto {
   notes: string;
 }
 
+/** Item de `GET /jobs` (o quadro): a vaga sem a descrição, que só vem em `GET /jobs/:id`. */
+export type JobListItemDto = Omit<JobDto, 'description'>;
+
 export interface JobEventDto {
   id: number;
   jobId: number;
