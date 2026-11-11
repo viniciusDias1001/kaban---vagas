@@ -93,6 +93,8 @@ describe('cross-origin guard on state-changing methods', () => {
   });
 
   it('accepts a same-origin POST: the web served by the API, or the Vite dev proxy (which keeps Host)', async () => {
+    // Um domínio próprio só é aceito como `Host` quando está em ALLOWED_HOSTS (ver host-guard.test.ts).
+    app = buildApp(db, { allowedHosts: ['kanban.example.com'] });
     for (const [origin, host] of [
       ['http://localhost:3333', 'localhost:3333'],
       ['http://localhost:5173', 'localhost:5173'],

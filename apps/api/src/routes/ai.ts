@@ -101,10 +101,20 @@ export function aiRoutes(app: FastifyInstance, db: Db, ctx: AiContext) {
     if (!req.isMultipart()) {
       return reply.code(400).send({ error: 'bad_request', message: 'envie o arquivo como multipart/form-data, no campo "file"' });
     }
-    const file = await req.file();
-    if (!file) return reply.code(400).send({ error: 'bad_request', message: 'nenhum arquivo enviado' });
-    // Acima de LIMITS.resumeBytes o plugin lança 413, que o error handler devolve como bad_request.
-    const content = await file.toBuffer();
+    // O corpo é lido aqui. Envio cortado no meio (conexão caiu, proxy truncou) ou multipart malformado faz o leitor
+    // lançar um erro sem status: é culpa da requisição (400, frase fixa), não um erro interno com pilha no log.
+    // Acima de LIMITS.resumeBytes o plugin lança 413 (tem status), que o error handler devolve como bad_request.
+    let sent: { fileName: string | undefined; content: Buffer };
+    try {
+      const file = await req.file();
+      if (!file) return reply.code(400).send({ error: 'bad_request', message: 'nenhum arquivo enviado' });
+      sent = { fileName: file.filename, content: await file.toBuffer() };
+    } catch (e) {
+      const status = (e as { statusCode?: unknown } | null)?.statusCode;
+      if (typeof status === 'number' && status >= 400 && status < 500) throw e;
+      return reply.code(400).send({ error: 'bad_request', message: 'O envio do arquivo chegou incompleto ou em formato inválido. Envie o arquivo de novo.' });
+    }
+    const { content } = sent;
     const kind = sniffResume(content);
     if (!kind) {
       return reply.code(400).send({ error: 'unsupported_type', message: 'Envie um PDF ou um DOCX. O tipo é conferido pelo conteúdo do arquivo.' });
@@ -125,7 +135,7 @@ export function aiRoutes(app: FastifyInstance, db: Db, ctx: AiContext) {
     }
 
     const values = {
-      fileName: safeFileName(file.filename, `curriculo.${kind}`),
+      fileName: safeFileName(sent.fileName, `curriculo.${kind}`),
       mime: RESUME_MIME[kind],
       content,
       extractedText: extracted.text,

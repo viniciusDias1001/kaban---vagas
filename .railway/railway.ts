@@ -37,6 +37,10 @@ export default defineRailway(() => {
       // no .env.example). Defina no painel; ele nunca fica no repo. Trocar o valor invalida as chaves gravadas:
       // a tela pede as chaves de novo. Sem ele, a IA só funciona com a chave em variável do serviço.
       APP_SECRET: preserve(),
+      // ALLOWED_HOSTS não é necessária aqui: a API aceita sozinha o `Host` do domínio do serviço
+      // (RAILWAY_PUBLIC_DOMAIN / RAILWAY_PRIVATE_DOMAIN, injetadas pela plataforma) e o do healthcheck
+      // (healthcheck.railway.app). Só defina ALLOWED_HOSTS (nomes separados por vírgula) se o serviço for acessado
+      // por um domínio próprio; qualquer outro `Host` recebe 403 (proteção contra DNS rebinding).
     },
   });
 
