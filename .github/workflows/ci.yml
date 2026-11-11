@@ -56,6 +56,8 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      # Nenhum teste chama um provedor de IA de verdade: os adaptadores usam uma camada HTTP falsa e o resto, o
+      # provedor falso. Este workflow não usa (nem deve receber) chave de API ou APP_SECRET como segredo.
       - name: Testes unitários
         run: pnpm test
         timeout-minutes: 10
@@ -64,12 +66,18 @@ jobs:
       - name: Build do web sem Zod
         run: |
           pnpm --filter @kv/web build
+          # O "$" de $ZodType é literal (nome de classe do Zod), por isso as aspas simples.
+          # shellcheck disable=SC2016
           if grep -rlE 'ZodError|\$ZodType' apps/web/dist/assets; then echo 'Zod entrou no bundle do web' >&2; exit 1; fi
 
       - name: Instalar Chromium do Playwright
         run: pnpm --filter @kv/web exec playwright install --with-deps chromium
         timeout-minutes: 10
 
+      # Dois testes em sequência: o quadro e a IA de perfil. O servidor do e2e sobe com FAKE_CONNECTORS=1,
+      # AI_ALLOW_FAKE=1, as variáveis de chave vazias e um APP_SECRET sorteado na hora, tudo definido em
+      # apps/web/playwright.config.ts: nada disso precisa ser configurado aqui. O `pnpm ai:smoke` (provedores
+      # reais) não entra neste workflow e se recusa a rodar com CI definida.
       - name: Testes e2e
         run: pnpm e2e
         timeout-minutes: 10
