@@ -1,6 +1,7 @@
 import { createProvider, type AiConfig, type AiProvider } from '@kv/ai';
 import type { Db } from '@kv/db';
-import { extractInWorker, type ExtractResult, type ResumeKind } from '@kv/resume';
+import type { TailoredResume } from '@kv/shared';
+import { extractInWorker, renderResumePdf, type ExtractResult, type ResumeKind } from '@kv/resume';
 import { createSettingsService, type SettingsService } from '@kv/settings';
 import { createRateLimiter, type RateLimiter } from './rate-limit';
 
@@ -13,6 +14,8 @@ export interface AiContext {
   settings: SettingsService;
   /** Extrai o texto do currículo. Produção: worker thread com teto de tempo e memória. */
   extractResume: (buf: Uint8Array, kind: ResumeKind) => Promise<ExtractResult>;
+  /** Gera o PDF do currículo adaptado. Trocado nos testes; as rotas sempre o chamam uma vez por vez. */
+  renderPdf: (resume: TailoredResume) => Promise<Buffer>;
   /** Monta o provedor para o "Testar conexão". Trocado nos testes. */
   createProvider: (config: AiConfig) => AiProvider;
   /** Limite de frequência do "Testar conexão". */
@@ -30,6 +33,7 @@ export function createAiContext(db: Db, over: AiContextOptions = {}): AiContext 
   return {
     settings: over.settings ?? createSettingsService(db, { env: over.env, now }),
     extractResume: over.extractResume ?? ((buf, kind) => extractInWorker(buf, kind)),
+    renderPdf: over.renderPdf ?? renderResumePdf,
     createProvider: over.createProvider ?? createProvider,
     // No máximo um teste a cada 10 s e cinco a cada 10 min: o botão não vira amplificador de gasto.
     testLimiter: over.testLimiter ?? createRateLimiter({ minIntervalMs: 10_000, max: 5, windowMs: 10 * 60_000, now }),

@@ -177,6 +177,14 @@ export interface JobAiDetailDto {
   descriptionAvailable: boolean;
 }
 
+/** O que impediria o PDF de sair, para avisar o usuário antes de ele pedir o download. */
+export interface PdfWarningsDto {
+  /** Caracteres do currículo que nenhuma fonte do PDF desenha (sem repetição). Vazio = sem problema. */
+  unsupportedCharacters: string[];
+  /** O texto passa do tamanho que o gerador de PDF aceita. */
+  tooLong: boolean;
+}
+
 export interface TailoredDto {
   jobId: number;
   lang: ResumeLang;
@@ -185,6 +193,7 @@ export interface TailoredDto {
   stale: boolean;
   createdAt: number;
   editedAt: number | null;
+  pdfWarnings: PdfWarningsDto;
 }
 
 export interface TailoredStateDto extends LayerDto {
