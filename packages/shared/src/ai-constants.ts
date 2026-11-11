@@ -8,6 +8,13 @@ import type { CandidateProfile, JobAnalysis, TailoredDraft } from './ai';
 // Currículo e perfil do candidato. ("Perfil" sozinho, no resto do código, é o perfil de BUSCA.)
 // ---------------------------------------------------------------------------------------------
 
+/**
+ * Quanto da descrição de uma vaga a camada 2 lê, traduz e analisa (o que passar disso é cortado no fim). A tradução
+ * inteira precisa caber no teto de saída da chamada: 12 000 caracteres viram ~4 800 tokens em português, e sobram
+ * ~3 000 para as seis listas da análise. A tela usa o mesmo número para avisar que a tradução é parcial.
+ */
+export const AI_TIER2_DESCRIPTION_CHARS = 12_000;
+
 export const RESUME_LANGS = ['pt-BR', 'en'] as const;
 export type ResumeLang = (typeof RESUME_LANGS)[number];
 export const otherLang = (lang: ResumeLang): ResumeLang => (lang === 'pt-BR' ? 'en' : 'pt-BR');
@@ -119,6 +126,13 @@ export interface AiStatusDto {
   /** A análise (camada 2) dispara sozinha ao abrir a vaga ou movê-la; false = só pelo botão. */
   tier2Auto: boolean;
   budget: { dailyUsd: number; spentTodayUsd: number; exceeded: boolean; timeZone: string };
+  /**
+   * A triagem automática (camada 1) está em pausa porque o provedor está indisponível (chave recusada, conta sem
+   * crédito, modelo inexistente, limite de taxa que não passa); null quando não está. `message` é a frase fixa do
+   * adaptador, `retryAt` é quando a fila tenta de novo sozinha e `tasks` é quantas tarefas esperam. Corrigir a
+   * configuração na aba Configurações (ou um "Testar conexão" bem-sucedido) libera as tarefas na hora.
+   */
+  scoringPause: { message: string; retryAt: number; tasks: number } | null;
 }
 
 export type UsageByLayer = Record<AiLayer, number>;

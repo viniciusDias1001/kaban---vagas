@@ -4,7 +4,7 @@ import {
   AI_LAYERS, AI_PROVIDER_IDS, AI_PROVIDER_LABELS, SETTINGS_LIMITS, type AiLayer, type AiProviderId, type SettingSource,
   type SettingsDto,
 } from '@kv/shared/client';
-import { formatUsd } from '../lib/ai';
+import { formatUsd, scoringPauseText } from '../lib/ai';
 import { cn } from '../lib/utils';
 import { OUTCOME_TONE, SOURCE_LABELS, changeProvider, keyView, parseBudget, type SettingsForm, type SettingsFormErrors } from '../settingsForm';
 import { useAiStatus, useAiUsage, useTestConnection } from '../useAi';
@@ -125,6 +125,7 @@ function Usage() {
   const money = (value: number | undefined) =>
     value === undefined ? <Skeleton className="ml-auto h-4 w-14" /> : <span className={cn(value === 0 && 'text-faint')}>{formatUsd(value)}</span>;
   const share = budget && budget.dailyUsd > 0 ? Math.min(1, budget.spentTodayUsd / budget.dailyUsd) : budget?.exceeded ? 1 : 0;
+  const pause = status.data?.scoringPause ? scoringPauseText(status.data.scoringPause) : null;
   return (
     <div data-testid="settings-usage" className={cn(CARD, 'overflow-hidden')}>
       <div className="p-5 pb-4">
@@ -147,6 +148,12 @@ function Usage() {
         {budget?.exceeded && (
           <Notice tone="warn" role="status" data-testid="budget-exceeded" className="mt-3">
             Limite de hoje atingido. As notas automáticas voltam amanhã; análises e currículos pedem confirmação.
+          </Notice>
+        )}
+        {pause && (
+          <Notice tone="warn" role="status" data-testid="scoring-paused" title="As notas automáticas estão em pausa" className="mt-3">
+            <p className="break-words">{pause.reason}</p>
+            <p>{pause.next}</p>
           </Notice>
         )}
       </div>

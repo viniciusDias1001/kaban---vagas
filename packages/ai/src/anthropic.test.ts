@@ -70,6 +70,32 @@ describe('anthropic adapter', () => {
     expect(requests[0].body).not.toHaveProperty('betas');
   });
 
+  it('strong tier streams the response (long generations do not sit on an idle connection); fast tier does not', async () => {
+    const strong = setup({ json: message({ model: 'claude-opus-5-5' }) });
+    const res = await strong.call('strong');
+    expect(strong.requests[0].body).toMatchObject({ stream: true, max_tokens: 8_500 });
+    // O mesmo resultado da chamada comum: texto lido por tipo de bloco, uso do message_start + message_delta.
+    expect(res).toEqual({ data: { score: 82, reason: 'React e TypeScript' }, model: 'claude-opus-5-5', usage: { inputTokens: 640, outputTokens: 25 } });
+    // Sem fallback de recusa (modelo fora da lista) o nível forte também usa streaming, pela rota normal.
+    const other = createAnthropicProvider({ apiKey: 'sk-test', models: { fast: 'claude-haiku-5-5', strong: 'claude-outro-modelo' }, fetch: strong.fetch });
+    await other.generate({ tier: 'strong', system: 's', prompt: 'p', schema, maxOutputTokens: 500 });
+    expect(strong.requests[1].body).toMatchObject({ stream: true, model: 'claude-outro-modelo' });
+    expect(strong.requests[1].body).not.toHaveProperty('fallbacks');
+
+    const fast = setup({ json: message() });
+    await fast.call('fast');
+    expect(fast.requests[0].body).not.toHaveProperty('stream');
+  });
+
+  it('a streamed response that was cut or refused is still classified by stop_reason, with the billed usage', async () => {
+    const cut = setup({ json: message({ model: 'claude-opus-5-5', stop_reason: 'max_tokens', content: [{ type: 'text', text: '{"score":8' }] }) });
+    await expect(cut.call('strong')).rejects.toMatchObject({ kind: 'truncated', usage: { inputTokens: 640, outputTokens: 25 }, model: 'claude-opus-5-5' });
+    const refused = setup({ json: message({ stop_reason: 'refusal', content: [], stop_details: { type: 'refusal', category: 'cyber', explanation: null } }) });
+    await expect(refused.call('strong')).rejects.toMatchObject({ kind: 'refused', usage: { inputTokens: 640, outputTokens: 25 } });
+    await expect(setup(apiError(401, 'authentication_error')).call('strong')).rejects.toMatchObject({ kind: 'config', detail: 'auth' });
+    await expect(setup(apiError(429, 'rate_limit_error')).call('strong')).rejects.toMatchObject({ kind: 'rate_limited' });
+  });
+
   it('counts every attempt of a fallback response (usage.iterations), not only the one that answered', async () => {
     const usage = {
       input_tokens: 40, output_tokens: 25, cache_creation_input_tokens: 0, cache_read_input_tokens: 600,
@@ -148,6 +174,7 @@ describe('anthropic adapter', () => {
 
   it('turns an aborted signal into a transient error', async () => {
     const { call } = setup({ json: message() });
-    await expect(call('fast', AbortSignal.abort())).rejects.toMatchObject({ kind: 'transient' });
+    await expect(call('fast', AbortSignal.abort())).rejects.toMatchObject({ kind: 'transient', detail: 'timeout' });
+    await expect(call('strong', AbortSignal.abort())).rejects.toMatchObject({ kind: 'transient', detail: 'timeout' });
   });
 });

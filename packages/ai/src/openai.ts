@@ -1,11 +1,14 @@
 import OpenAI from 'openai';
 import { zodTextFormat } from 'openai/helpers/zod';
 import { AiError, detailFromStatus, kindFromStatus, parseJsonText, scrubSecrets, withUsage } from './errors';
+import { CALL_TIMEOUT_MS, REASONING_HEADROOM } from './limits';
 import type { AiProvider, AiTier } from './types';
 
 const EFFORT = { fast: 'low', strong: 'medium' } as const;
-/** Tokens de raciocínio contam em `max_output_tokens`. */
-const REASONING_HEADROOM: Record<AiTier, number> = { fast: 2_000, strong: 8_000 };
+/*
+ * Tokens de raciocínio contam em `max_output_tokens` (folga em REASONING_HEADROOM). A chamada NÃO usa streaming:
+ * o tempo limite por nível (CALL_TIMEOUT_MS) cobre a resposta inteira.
+ */
 /** Só modelos de raciocínio aceitam `reasoning.effort` (vale se AI_MODEL_* apontar para um modelo antigo). */
 const isReasoningModel = (model: string) => /^(gpt-[5-9]|o\d)/.test(model);
 
@@ -32,7 +35,8 @@ export interface OpenAiOptions {
  */
 function mapError(e: unknown, apiKey: string): AiError {
   if (e instanceof AiError) return e;
-  if (e instanceof OpenAI.APIUserAbortError) return new AiError('transient', 'chamada cancelada (tempo esgotado)');
+  if (e instanceof OpenAI.APIUserAbortError) return new AiError('transient', 'chamada cancelada (tempo esgotado)', 'timeout');
+  if (e instanceof OpenAI.APIConnectionTimeoutError) return new AiError('transient', 'tempo esgotado ao falar com a OpenAI', 'timeout');
   if (e instanceof OpenAI.APIConnectionError) return new AiError('transient', 'falha de rede ao falar com a OpenAI');
   if (e instanceof OpenAI.RateLimitError) {
     // Conta sem crédito ou no teto de gasto: a OpenAI responde 429 e o motivo vem em `error.code`
@@ -57,7 +61,7 @@ export function createOpenAiProvider(opts: OpenAiOptions): AiProvider {
   const client = new OpenAI({
     apiKey: opts.apiKey,
     maxRetries: 0, // quem tenta de novo é a fila de IA
-    timeout: 120_000,
+    timeout: CALL_TIMEOUT_MS.strong,
     ...(opts.fetch ? { fetch: opts.fetch } : {}),
   });
   return {
@@ -78,7 +82,7 @@ export function createOpenAiProvider(opts: OpenAiOptions): AiProvider {
             text: { format: zodTextFormat(req.schema, 'result') },
             store: false,
           },
-          { signal: req.signal },
+          { signal: req.signal, timeout: CALL_TIMEOUT_MS[req.tier] },
         );
       } catch (e) {
         throw mapError(e, opts.apiKey);

@@ -129,6 +129,6 @@ describe('gemini adapter', () => {
   });
 
   it('turns an aborted signal into a transient error', async () => {
-    await expect(setup({ json: response() }).call('fast', AbortSignal.abort())).rejects.toMatchObject({ kind: 'transient' });
+    await expect(setup({ json: response() }).call('fast', AbortSignal.abort())).rejects.toMatchObject({ kind: 'transient', detail: 'timeout' });
   });
 });

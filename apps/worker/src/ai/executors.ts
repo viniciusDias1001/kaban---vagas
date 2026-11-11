@@ -1,17 +1,17 @@
 import { eq, inArray, sql } from 'drizzle-orm';
 import {
-  AiError, analyzeJob, dayStartMs, draftTailored, estimateCostUsd, extractProfile, resolveTailored, scoreJobs,
-  tailoredLangFor, toCorrections, translateProfile, violationCodes, type AiConfig, type AiProvider, type AiTier, type AiUsage,
-  type TailoredCorrection,
+  AiError, analyzeJob, dayStartMs, draftTailored, estimateAbortedUsage, estimateCostUsd, estimateInterruptedUsage, extractProfile,
+  isTimeout, resolveTailored, scoreJobs, tailoredLangFor, toCorrections, translateProfile, violationCodes, type AiConfig,
+  type AiProvider, type AiTier, type AiUsage, type TailoredCorrection,
 } from '@kv/ai';
 import { MAX_DESCRIPTION_CHARS, type DescriptionFetcher } from '@kv/connectors';
 import {
-  aiSpentSince, aiTasks, baseProfile, jobAi, jobs, profileFor, recordUsage, resumes, saveProfile, tailoredResumes,
-  type AiTaskRow, type Db,
+  ESTIMATED_MODEL_SUFFIX, aiSpentSince, aiTasks, baseProfile, jobAi, jobs, profileFor, recordUsage, resumes, saveProfile,
+  tailoredResumes, type AiTaskRow, type CandidateProfileRow, type Db,
 } from '@kv/db';
 import { otherLang, type AiLayer, type JobAnalysis } from '@kv/shared';
 import type { UnitRunner } from './queue';
-import { DraftBlockedError } from './task-errors';
+import { DraftBlockedError, ProfileChangedError, TaskCancelledError } from './task-errors';
 
 export interface ExecutorDeps {
   db: Db;
@@ -54,15 +54,24 @@ function clipDescription(text: string): string {
 const keywordsOf = (ai: { tier2State: 'ok' | 'error' | null; analysis: JobAnalysis | null } | undefined): string[] =>
   ai?.tier2State === 'ok' && ai.analysis ? [...ai.analysis.keywordsMissing, ...ai.analysis.keywordsPresent] : [];
 
-/** Erro que não adianta tentar de novo (falta um dado do usuário): usa o tipo `config`, que a fila não repete. */
-const missing = (message: string) => new AiError('config', message);
+/**
+ * Erro que não adianta tentar de novo (falta um dado do usuário): usa o tipo `input`, que a fila não repete. Não é
+ * `config`: esse tipo quer dizer "o provedor está indisponível" e faz a fila pausar a triagem em vez de marcar a vaga.
+ */
+const missing = (message: string) => new AiError('input', message);
+
+const TIER_OF_TASK = { tier1: 'fast', tier2: 'strong', tier3: 'strong', profile_extract: 'strong', profile_translate: 'strong' } as const;
+const LAYER_OF_TASK = { tier1: 'tier1', tier2: 'tier2', tier3: 'tier3', profile_extract: 'profile', profile_translate: 'profile' } as const;
 
 /**
  * O que cada tipo de tarefa da fila de IA faz. Toda chamada ao provedor que foi cobrada grava uma linha em
  * `ai_usage` (provedor, modelo que respondeu, camada, tokens e custo estimado) ANTES de qualquer
  * verificação do resultado: uma resposta bloqueada pelo verificador também foi paga, e o mesmo vale para a
  * chamada que o provedor cobrou e depois recusou, cortou no teto de tokens ou devolveu fora do schema (o
- * `AiError` leva o uso). Chamada que falhou antes de qualquer resposta não grava nada.
+ * `AiError` leva o uso). Chamada que falhou antes de qualquer resposta não grava nada, com uma exceção: a chamada
+ * ABORTADA POR TEMPO. O provedor pode cobrá-la (a geração já estava em curso) e não informa o uso, então entra uma
+ * linha ESTIMADA (entrada pelo tamanho do prompt, saída no teto da chamada; `model` com ESTIMATED_MODEL_SUFFIX),
+ * para o limite de gasto do dia errar para o lado seguro.
  */
 export function createExecutor(deps: ExecutorDeps): UnitRunner {
   return async (tasks, signal) => {
@@ -71,13 +80,29 @@ export function createExecutor(deps: ExecutorDeps): UnitRunner {
   };
 }
 
-function bindExecutor(deps: ExecutorDeps, provider: AiProvider, config: AiConfig): UnitRunner {
+function bindExecutor(deps: ExecutorDeps, rawProvider: AiProvider, config: AiConfig): UnitRunner {
   const { db, fetchDescription, now = Date.now, log = () => {}, maxAttempts = 3 } = deps;
 
-  async function charge(layer: AiLayer, tier: AiTier, res: { usage: AiUsage; model: string }): Promise<void> {
+  /** O provedor em vigor, com a estimativa de uso anexada ao erro de uma chamada abortada por tempo. */
+  const provider: AiProvider = {
+    id: rawProvider.id,
+    async generate(req) {
+      try {
+        return await rawProvider.generate(req);
+      } catch (e) {
+        if (e instanceof AiError && !e.usage && (isTimeout(e) || req.signal?.aborted)) {
+          e.usage = estimateAbortedUsage(req);
+          e.estimated = true;
+        }
+        throw e;
+      }
+    },
+  };
+
+  async function charge(layer: AiLayer, tier: AiTier, res: { usage: AiUsage; model: string }, estimated = false): Promise<void> {
     await recordUsage(db, {
       provider: provider.id,
-      model: res.model,
+      model: estimated ? `${res.model}${ESTIMATED_MODEL_SUFFIX}` : res.model,
       layer,
       inputTokens: res.usage.inputTokens,
       outputTokens: res.usage.outputTokens,
@@ -97,7 +122,7 @@ function bindExecutor(deps: ExecutorDeps, provider: AiProvider, config: AiConfig
     } catch (e) {
       if (e instanceof AiError && e.usage) {
         try {
-          await charge(layer, tier, { usage: e.usage, model: e.model ?? config.models[tier] });
+          await charge(layer, tier, { usage: e.usage, model: e.model ?? config.models[tier] }, e.estimated === true);
         } catch (dbError) {
           log(`IA: não consegui registrar o uso de uma chamada que falhou (${layer}): ${errorText(dbError)}`);
         }
@@ -122,6 +147,37 @@ function bindExecutor(deps: ExecutorDeps, provider: AiProvider, config: AiConfig
       log(`IA: a vaga ${jobId} foi apagada durante a tarefa; o resultado foi descartado`);
       return false;
     }
+  }
+
+  /**
+   * Das tarefas dadas, as que ainda existem. A linha some quando o usuário apaga os dados de IA no meio da chamada:
+   * o resultado dessas é descartado em vez de recriar o que acabou de ser apagado.
+   */
+  async function stillWanted(ids: number[]): Promise<Set<number>> {
+    if (ids.length === 0) return new Set();
+    const rows = await db.select({ id: aiTasks.id }).from(aiTasks).where(inArray(aiTasks.id, ids));
+    return new Set(rows.map((r) => r.id));
+  }
+  const cancelled = async (task: AiTaskRow) => !(await stillWanted([task.id])).has(task.id);
+
+  /**
+   * Grava o perfil produzido por uma tarefa, a menos que (conferido dentro do lock de gravação de perfil):
+   * - a linha da tarefa tenha sido apagada (o usuário apagou os dados): `TaskCancelledError`;
+   * - `changed(perfil atual)` diga que o usuário mexeu no perfil depois de a tarefa ser pedida: `ProfileChangedError`.
+   */
+  async function saveTaskProfile(
+    task: AiTaskRow & { lang: NonNullable<AiTaskRow['lang']> },
+    data: CandidateProfileRow['data'],
+    origin: 'extraido' | 'traduzido',
+    changed: (current: CandidateProfileRow) => boolean,
+  ): Promise<void> {
+    await saveProfile(db, task.lang, data, origin, now(), {
+      guard: async (current, tx) => {
+        const [alive] = await tx.select({ id: aiTasks.id }).from(aiTasks).where(eq(aiTasks.id, task.id));
+        if (!alive) throw new TaskCancelledError();
+        if (current && changed(current)) throw new ProfileChangedError();
+      },
+    });
   }
 
   async function jobOf(task: AiTaskRow): Promise<JobRow> {
@@ -158,7 +214,10 @@ function bindExecutor(deps: ExecutorDeps, provider: AiProvider, config: AiConfig
     const failures = new Map<number, unknown>();
     if (rows.length > 0) {
       const res = await billed('tier1', 'fast', () => scoreJobs(provider, profile.data, rows, { signal }));
+      const wanted = await stillWanted(tasks.map((t) => t.id));
+      const wantedJobs = new Set(tasks.filter((t) => wanted.has(t.id)).map((t) => t.jobId));
       for (const r of res.data) {
+        if (!wantedJobs.has(r.jobId)) continue;
         const values = {
           language: r.language, titlePt: r.titlePt, score: r.score, reason: r.reason, tier1State: 'ok' as const,
           tier1ProfileVersion: profile.version, tier1At: now(),
@@ -189,6 +248,7 @@ function bindExecutor(deps: ExecutorDeps, provider: AiProvider, config: AiConfig
       language: res.data.language, descriptionPt: res.data.descriptionPt, analysis: res.data.analysis,
       descriptionAvailable: available, tier2State: 'ok' as const, tier2ProfileVersion: profile.version, tier2At: now(),
     };
+    if (await cancelled(task)) return;
     await writeForJob(job.id, () =>
       db.insert(jobAi).values({ jobId: job.id, ...values }).onConflictDoUpdate({ target: jobAi.jobId, set: values }),
     );
@@ -244,6 +304,7 @@ function bindExecutor(deps: ExecutorDeps, provider: AiProvider, config: AiConfig
       if (violations.length > 0) throw new DraftBlockedError(violationCodes(violations));
     }
     const values = { lang, content: resume, profileVersion: profile.version, createdAt: now(), editedAt: null };
+    if (await cancelled(task)) return;
     await writeForJob(job.id, () =>
       db
         .insert(tailoredResumes)
@@ -257,7 +318,10 @@ function bindExecutor(deps: ExecutorDeps, provider: AiProvider, config: AiConfig
     const [resume] = await db.select({ text: resumes.extractedText }).from(resumes).where(eq(resumes.lang, task.lang));
     if (!resume) throw missing('o currículo deste idioma não existe mais');
     const res = await billed('profile', 'strong', () => extractProfile(provider, resume.text, { signal }));
-    await saveProfile(db, task.lang, res.data, 'extraido', now());
+    // Quem enviou o arquivo aceitou substituir o perfil que existia ATÉ ALI (a tela pede confirmação quando ele foi
+    // editado). Uma edição salva depois do envio, com a leitura ainda na fila, não é sobrescrita.
+    const lang = task.lang;
+    await saveTaskProfile({ ...task, lang }, res.data, 'extraido', (current) => current.origin === 'editado' && current.updatedAt > task.createdAt);
   }
 
   async function profileTranslate(task: AiTaskRow, signal: AbortSignal): Promise<void> {
@@ -266,7 +330,9 @@ function bindExecutor(deps: ExecutorDeps, provider: AiProvider, config: AiConfig
     if (!source) throw missing(`não há perfil em ${LANG_NAMES[otherLang(task.lang)]} para traduzir`);
     const lang = task.lang;
     const res = await billed('profile', 'strong', () => translateProfile(provider, source.data, lang, { signal }));
-    await saveProfile(db, task.lang, res.data, 'traduzido', now());
+    // A API só aceita o pedido de tradução quando o destino não existe ou veio de tradução. Se agora ele é
+    // "editado" ou "extraído", o usuário mexeu nele (editou ou enviou um currículo) com a tradução na fila.
+    await saveTaskProfile({ ...task, lang }, res.data, 'traduzido', (current) => current.origin !== 'traduzido');
   }
 
   return async (tasks, signal) => {
@@ -282,6 +348,30 @@ function bindExecutor(deps: ExecutorDeps, provider: AiProvider, config: AiConfig
         return profileExtract(first, signal);
       case 'profile_translate':
         return profileTranslate(first, signal);
+    }
+  };
+}
+
+/**
+ * Para a opção `onInterrupted` da fila: uma tarefa ficou "running" porque o processo morreu (ou travou) no meio da
+ * chamada ao provedor. A chamada pode ter sido cobrada e o uso se perdeu: grava uma linha ESTIMADA em `ai_usage`
+ * (`estimateInterruptedUsage`: a maior entrada possível da tarefa e a saída no teto), para o limite de gasto do dia
+ * não ignorar o que um worker que reinicia em laço estaria gastando. Nunca lança: sem configuração de IA (ou com o
+ * banco fora do ar) só registra no log.
+ */
+export function createInterruptionRecorder(deps: Pick<ExecutorDeps, 'db' | 'ai' | 'now' | 'log'>) {
+  const { db, now = Date.now, log = () => {} } = deps;
+  return async (task: AiTaskRow): Promise<void> => {
+    try {
+      const { provider, config } = await deps.ai();
+      const model = config.models[TIER_OF_TASK[task.type]];
+      const usage = estimateInterruptedUsage(task.type);
+      await recordUsage(db, {
+        provider: provider.id, model: `${model}${ESTIMATED_MODEL_SUFFIX}`, layer: LAYER_OF_TASK[task.type],
+        inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, costUsd: estimateCostUsd(model, usage), createdAt: now(),
+      });
+    } catch (e) {
+      log(`IA: não consegui registrar o uso estimado da tarefa interrompida ${task.id} (${task.type}): ${errorText(e)}`);
     }
   };
 }

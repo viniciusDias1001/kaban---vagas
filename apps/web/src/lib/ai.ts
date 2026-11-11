@@ -1,5 +1,5 @@
 import {
-  LIMITS, type AiTaskDto, type JobAiSummaryDto, type LayerState, type PdfWarningsDto, type ProfileWire, type Violation,
+  LIMITS, type AiStatusDto, type AiTaskDto, type JobAiSummaryDto, type LayerState, type PdfWarningsDto, type ProfileWire, type Violation,
   type ViolationCode,
 } from '@kv/shared/client';
 import { NETWORK_ERROR, errorMessage } from '../apiError';
@@ -92,6 +92,19 @@ export function layerMessage(state: LayerState, task: AiTaskDto | null): string 
     case 'error':
       return taskErrorText(task?.error);
   }
+}
+
+/**
+ * A triagem automática em pausa (`AiStatusDto.scoringPause`), em duas frases para a tela: o que o provedor
+ * respondeu e o que acontece agora. `message` vem do worker (frase fixa do adaptador) e entra só como texto.
+ */
+export function scoringPauseText(pause: NonNullable<AiStatusDto['scoringPause']>): { reason: string; next: string } {
+  const at = new Date(pause.retryAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  const jobs = pause.tasks === 1 ? '1 vaga aguarda' : `${pause.tasks} vagas aguardam`;
+  return {
+    reason: `O provedor de IA respondeu: ${taskErrorText(pause.message)}`,
+    next: `${jobs} a nota. Nova tentativa automática às ${at}; corrigir a chave ou o modelo em Configurações, ou um "Testar conexão" que funcione, retoma na hora.`,
+  };
 }
 
 // ---------------------------------------------------------------------------------------------

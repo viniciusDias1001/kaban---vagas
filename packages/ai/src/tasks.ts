@@ -1,10 +1,11 @@
 import {
-  CandidateProfileSchema, LIMITS, ProfileWireSchema, TailoredDraftSchema, Tier1BatchSchema, Tier2OutputSchema,
-  normalizeProfile, type CandidateProfile, type ItemKind, type JobAnalysis, type ResumeLang,
+  AI_TIER2_DESCRIPTION_CHARS, CandidateProfileSchema, LIMITS, ProfileWireSchema, TailoredDraftSchema, Tier1BatchSchema, Tier2OutputSchema,
+  normalizeProfile, type AiTaskType, type CandidateProfile, type ItemKind, type JobAnalysis, type ResumeLang,
   type TailoredDraft, type Tier1Result, type Tier2Output,
 } from '@kv/shared';
 import { z } from 'zod';
 import { AiError, parseOutput, withUsage } from './errors';
+import { estimateTokens, outputAllowance } from './limits';
 import { buildPrompt, condenseProfile, type TailoredCorrection } from './prompts';
 import { ProfileTranslationError, mergeTranslation } from './translation';
 import type { AiProvider, AiUsage } from './types';
@@ -28,8 +29,19 @@ export interface JobForAi {
 export const TIER1_BATCH_SIZE = 10;
 /** A camada 1 só envia o começo da descrição. */
 export const TIER1_EXCERPT_CHARS = 1_200;
-/** Teto da descrição enviada nas camadas 2 e 3 (o que passar disso é cortado no fim). */
-export const TIER2_DESCRIPTION_CHARS = 20_000;
+/**
+ * Teto da descrição enviada na camada 2 (o que passar disso é cortado no fim). A camada 2 devolve a descrição
+ * INTEIRA traduzida mais seis listas, tudo dentro de TIER2_OUTPUT_TOKENS: 12 000 caracteres de descrição viram até
+ * ~14 400 de português (~4 800 tokens a 3 caracteres por token) e as listas (até 8 itens cada) ficam com o resto.
+ * Com 20 000 caracteres, como era antes, a tradução sozinha já estourava o teto e a chamada era cortada (e cobrada).
+ */
+export const TIER2_DESCRIPTION_CHARS = AI_TIER2_DESCRIPTION_CHARS;
+/** Teto da descrição enviada na camada 3, que só lê a vaga (não a traduz). */
+export const TIER3_DESCRIPTION_CHARS = 20_000;
+/** Tetos de saída VISÍVEL por chamada (o raciocínio é somado pelo adaptador: ver `outputAllowance`). */
+export const TIER1_OUTPUT_TOKENS = (jobs: number) => 300 + 150 * jobs;
+export const TIER2_OUTPUT_TOKENS = 8_000;
+export const TIER3_OUTPUT_TOKENS = 6_000;
 
 /** Teto de título, empresa e local de uma vaga dentro de qualquer prompt. */
 export const JOB_FIELD_CHARS = 300;
@@ -188,7 +200,7 @@ export async function scoreJobs(
   const res = await provider.generate({
     tier: 'fast',
     schema: Tier1BatchSchema,
-    maxOutputTokens: 300 + 150 * jobs.length,
+    maxOutputTokens: TIER1_OUTPUT_TOKENS(jobs.length),
     signal: opts.signal,
     ...buildPrompt('tier1', condenseProfile(profile), {
       jobs: jobs.map((j) => {
@@ -226,7 +238,7 @@ export async function analyzeJob(
   const res = await provider.generate({
     tier: 'strong',
     schema: Tier2OutputSchema,
-    maxOutputTokens: 8_000,
+    maxOutputTokens: TIER2_OUTPUT_TOKENS,
     signal: opts.signal,
     ...buildPrompt('tier2', profile, { job: jobFields(job, TIER2_DESCRIPTION_CHARS) }),
   });
@@ -262,16 +274,51 @@ export async function draftTailored(
   const res = await provider.generate({
     tier: 'strong',
     schema: TailoredDraftSchema,
-    maxOutputTokens: 6_000,
+    maxOutputTokens: TIER3_OUTPUT_TOKENS,
     signal: opts.signal,
     // `corrections` só existe na nova tentativa e vai no bloco de dados (o sufixo volátil): o prefixo em cache não muda.
     ...buildPrompt('tier3', profile, {
       lang,
-      job: jobFields(job, TIER2_DESCRIPTION_CHARS),
+      job: jobFields(job, TIER3_DESCRIPTION_CHARS),
       ...(opts.corrections?.length ? { corrections: opts.corrections } : {}),
     }),
   });
   return { data: res.data, usage: res.usage, model: res.model };
+}
+
+/** Instruções de qualquer tarefa mais as marcações do prompt: bem menos que isto, em caracteres. */
+const PROMPT_OVERHEAD_CHARS = 3_000;
+
+/**
+ * Uso ESTIMADO de uma tarefa que ficou em execução quando o processo morreu (o prompt não existe mais): a maior
+ * entrada que a tarefa poderia ter enviado e a saída no teto da chamada. Como `estimateAbortedUsage`, serve para
+ * o limite de gasto do dia errar para o lado seguro. Na camada 1 a estimativa é POR VAGA (um décimo do lote).
+ */
+export function estimateInterruptedUsage(type: AiTaskType): AiUsage {
+  const jobFieldsChars = 3 * JOB_FIELD_CHARS;
+  switch (type) {
+    case 'tier1':
+      return {
+        inputTokens: estimateTokens(TIER1_EXCERPT_CHARS + jobFieldsChars + PROMPT_OVERHEAD_CHARS / TIER1_BATCH_SIZE),
+        outputTokens: Math.ceil(outputAllowance('fast', TIER1_OUTPUT_TOKENS(TIER1_BATCH_SIZE)) / TIER1_BATCH_SIZE),
+      };
+    case 'tier2':
+      return {
+        inputTokens: estimateTokens(TIER2_DESCRIPTION_CHARS + jobFieldsChars + PROFILE_JSON_MAX_CHARS + PROMPT_OVERHEAD_CHARS),
+        outputTokens: outputAllowance('strong', TIER2_OUTPUT_TOKENS),
+      };
+    case 'tier3':
+      return {
+        inputTokens: estimateTokens(TIER3_DESCRIPTION_CHARS + jobFieldsChars + PROFILE_JSON_MAX_CHARS + PROMPT_OVERHEAD_CHARS),
+        outputTokens: outputAllowance('strong', TIER3_OUTPUT_TOKENS),
+      };
+    case 'profile_extract':
+    case 'profile_translate':
+      return {
+        inputTokens: estimateTokens(PROFILE_JSON_MAX_CHARS + PROMPT_OVERHEAD_CHARS),
+        outputTokens: outputAllowance('strong', PROFILE_OUTPUT_TOKENS),
+      };
+  }
 }
 
 /**

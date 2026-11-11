@@ -38,6 +38,7 @@ describe('GET /ai/status and /ai/usage', () => {
     expect(status).toEqual({
       configured: true, problem: null, provider: 'fake', models: { fast: 'fake-fast', strong: 'fake-strong' }, tier2Auto: true,
       budget: { dailyUsd: 1, spentTodayUsd: expect.closeTo(1.1), exceeded: true, timeZone: 'America/Sao_Paulo' },
+      scoringPause: null,
     });
     const usageDto = (await app.inject({ method: 'GET', url: '/api/ai/usage' })).json();
     expect(usageDto.today).toEqual({ profile: 0, tier1: 0.4, tier2: 0.7, tier3: 0, test: 0 });

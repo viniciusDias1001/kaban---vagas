@@ -19,8 +19,12 @@ export interface AiErrorExtra {
   model?: string;
 }
 
-/** Detalhe de um erro `config`, para o "Testar conexão" dizer o que está errado. */
-export type AiErrorDetail = 'auth' | 'model' | 'billing';
+/**
+ * Detalhe de um erro. `auth`, `model` e `billing` acompanham `config`, para o "Testar conexão" dizer o que está
+ * errado. `timeout` acompanha `transient`: a chamada foi abortada por tempo (pela fila ou pelo SDK), e o provedor
+ * pode tê-la cobrado mesmo sem resposta.
+ */
+export type AiErrorDetail = 'auth' | 'model' | 'billing' | 'timeout';
 
 /**
  * Único tipo de erro que sai de um AiProvider. `kind` decide a nova tentativa na fila.
@@ -34,6 +38,8 @@ export class AiError extends Error {
   /** Presente quando o provedor respondeu (e cobrou) antes de a chamada falhar: quem chama deve contabilizar. */
   usage?: AiUsage;
   model?: string;
+  /** `usage` não veio do provedor: é uma estimativa conservadora de uma chamada abortada por tempo. */
+  estimated?: boolean;
   constructor(
     readonly kind: AiErrorKind,
     message: string,
@@ -79,6 +85,31 @@ export function isRetryable(kindOrError: AiErrorKind | Error): boolean {
   const kind = typeof kindOrError === 'string' ? kindOrError : kindOrError instanceof AiError ? kindOrError.kind : 'other';
   return !NOT_RETRYABLE.has(kind);
 }
+
+const kindOf = (kindOrError: AiErrorKind | unknown): AiErrorKind =>
+  typeof kindOrError === 'string' ? (kindOrError as AiErrorKind) : kindOrError instanceof AiError ? kindOrError.kind : 'other';
+
+/**
+ * O provedor está indisponível para QUALQUER pedido (chave recusada, modelo inexistente, conta sem crédito, limite
+ * de taxa): o problema não é da vaga nem do conteúdo, e some quando o usuário corrige a configuração ou o provedor
+ * volta. A fila não marca as vagas da triagem por causa disso (ver `createAiQueue`).
+ */
+export const isProviderUnavailable = (kindOrError: AiErrorKind | unknown): boolean => {
+  const kind = kindOf(kindOrError);
+  return kind === 'config' || kind === 'rate_limited';
+};
+
+/**
+ * A falha é do CONTEÚDO do pedido (o modelo recusou, cortou ou devolveu algo inválido). Em um lote da camada 1 pode
+ * ser culpa de uma vaga só: a fila refaz as vagas uma a uma para marcar apenas a que falha.
+ */
+export const isContentFailure = (kindOrError: AiErrorKind | unknown): boolean => {
+  const kind = kindOf(kindOrError);
+  return kind === 'refused' || kind === 'invalid_output' || kind === 'truncated';
+};
+
+/** A chamada foi abortada por tempo (pela fila ou pelo SDK do provedor). */
+export const isTimeout = (error: unknown): boolean => error instanceof AiError && error.detail === 'timeout';
 
 /** Classificação por status HTTP, usada pelos três adaptadores depois dos casos específicos de cada SDK. */
 export function kindFromStatus(status: number | undefined): AiErrorKind {

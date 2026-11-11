@@ -1,7 +1,6 @@
 import { getConnectors } from '@kv/connectors';
 import { closeDb, createDb, waitForDb, type Db } from '@kv/db';
 import { createSettingsService } from '@kv/settings';
-import { requeueRunningAiTasks } from './ai/queue';
 import { createAiRuntime } from './ai/runtime';
 import { createQueue, failStaleRuns, isDue, scheduleHourly } from './scheduler';
 
@@ -66,8 +65,10 @@ void poll();
 // trabalhar quando a IA é configurada na aba Configurações, sem reiniciar o worker.
 const ai = createAiRuntime(db, settings, { log });
 {
-  const requeued = await requeueRunningAiTasks(db);
-  if (requeued > 0) log(`IA: ${requeued} tarefas interrompidas voltaram para a fila`);
+  // Tarefas que ficaram "running" de um processo anterior: passam pelo mesmo caminho de qualquer falha (a
+  // tentativa conta, o uso estimado da chamada perdida é registrado, e quem esgotou as tentativas termina em erro).
+  const interrupted = await ai.recoverInterrupted();
+  if (interrupted > 0) log(`IA: ${interrupted} tarefas interrompidas pelo encerramento anterior foram tratadas`);
 }
 /** Último estado registrado no log, para avisar só quando muda. */
 let aiState = '';
@@ -79,11 +80,12 @@ async function pollAi() {
       ? `IA ligada: ${state.provider} (${state.models?.fast} / ${state.models?.strong}), limite de US$ ${state.dailyBudgetUsd} por dia`
       : `IA desligada: ${state.problem}`;
     if (line !== aiState) log((aiState = line));
-    const { started, swept, blocked, released, requeued } = await ai.tick();
+    const { started, swept, blocked, released, requeued, pruned } = await ai.tick();
     if (swept > 0) log(`IA: ${swept} vagas novas na fila da camada 1`);
     if (blocked > 0) log(`IA: limite de gasto do dia atingido, ${blocked} tarefas aguardando`);
     if (released > 0) log(`IA: ${released} tarefas liberadas`);
     if (requeued > 0) log(`IA: ${requeued} tarefas interrompidas voltaram para a fila`);
+    if (pruned > 0) log(`IA: ${pruned} tarefas terminadas há mais de 30 dias foram apagadas`);
     if (started > 0) log(`IA: ${started} chamadas iniciadas`);
   } catch (e) {
     log(`erro na fila de IA: ${errorText(e)}`);

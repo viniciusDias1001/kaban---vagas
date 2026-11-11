@@ -130,15 +130,17 @@ describe('tier 1', () => {
     expect((await db.select().from(aiTasks)).map((t) => t.jobId)).toEqual([fresh.id]);
   });
 
-  it('marks the job when tier 1 fails for good, so the sweep does not queue it forever', async () => {
+  it('marks the job when tier 1 fails for good, so the sweep does not queue it again right away', async () => {
     const job = await seedJob();
     await enqueueAiTask(db, { type: 'tier1', jobId: job.id });
-    // Sem perfil: erro de configuração, sem nova tentativa.
+    // Sem perfil: falta um dado do usuário, sem nova tentativa.
     await queue().drain();
     expect(await taskStates()).toEqual(['tier1:error']);
     expect(await db.select().from(jobAi)).toMatchObject([{ jobId: job.id, tier1State: 'error', score: null }]);
     await saveProfile(db, 'pt-BR', SAMPLE_PROFILE, 'extraido');
-    expect(await enqueueTier1ForNewJobs(db)).toBe(0);
+    expect(await enqueueTier1ForNewJobs(db, 50, NOW)).toBe(0);
+    // Horas depois a varredura dá outra chance à vaga (ver resilience.test.ts).
+    expect(await enqueueTier1ForNewJobs(db, 50, NOW + 7 * 3_600_000)).toBe(1);
   });
 });
 

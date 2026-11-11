@@ -33,6 +33,30 @@ export class DraftBlockedError extends AiError {
   }
 }
 
+/** O que fica em `ai_tasks.error` quando a tarefa de perfil termina e o usuário editou o perfil nesse meio-tempo. */
+export const PROFILE_CHANGED_ERROR =
+  'Você editou este perfil enquanto a IA trabalhava. A sua versão foi mantida e o resultado da IA foi descartado. ' +
+  'Se ainda quiser o resultado da IA, peça de novo.';
+
+/**
+ * A tarefa de perfil (leitura do currículo ou tradução) terminou, mas o perfil de destino foi editado pelo usuário
+ * depois de ela ser pedida: nada é gravado. `input` = a fila não repete (repetir daria no mesmo).
+ */
+export class ProfileChangedError extends AiError {
+  override name = 'ProfileChangedError';
+  constructor() {
+    super('input', PROFILE_CHANGED_ERROR);
+  }
+}
+
+/** A linha da tarefa foi apagada enquanto ela rodava (o usuário apagou os dados): o resultado é descartado. */
+export class TaskCancelledError extends AiError {
+  override name = 'TaskCancelledError';
+  constructor() {
+    super('input', 'tarefa cancelada: os dados foram apagados');
+  }
+}
+
 /** Teto do que vai para `ai_tasks.error` quando a mensagem é fixa; as demais continuam limitadas a 2 000. */
 export const FIXED_MESSAGE_MAX = 400;
 

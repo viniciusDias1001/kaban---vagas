@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { AiError, estimateCostUsd, testConnection } from '@kv/ai';
-import { recordUsage, type Db } from '@kv/db';
+import { recordUsage, resumeProviderWaits, type Db } from '@kv/db';
 import { EnvKeyError, SecretMissingError, SettingsValidationError } from '@kv/settings';
 import {
   AI_PROVIDER_LABELS, AiProviderIdSchema, ApiKeyInputSchema, SettingsPatchSchema, type AiProviderId, type SettingsDto,
@@ -41,6 +41,9 @@ const OUTCOME_MESSAGES: Record<TestConnectionOutcome, (label: string, model: str
   other: (label) => `${label} respondeu com um erro inesperado. Confira o provedor e os modelos.`,
 };
 
+/** Campos de PATCH /settings que mudam qual provedor ou modelo atende as chamadas. */
+const PROVIDER_FIELDS = ['provider', 'modelFast', 'modelStrong'] as const;
+
 export function settingsRoutes(app: FastifyInstance, db: Db, ctx: AiContext) {
   const dto = (): Promise<SettingsDto> => ctx.settings.dto(nextRunAt(ctx.now()));
 
@@ -55,6 +58,8 @@ export function settingsRoutes(app: FastifyInstance, db: Db, ctx: AiContext) {
       if (e instanceof SettingsValidationError) return reply.code(400).send({ error: 'validation', message: e.message });
       throw e;
     }
+    // Trocar de provedor ou de modelo pode ser a correção do que pausou a triagem: as tarefas em espera rodam já.
+    if (PROVIDER_FIELDS.some((field) => patch[field] !== undefined)) await resumeProviderWaits(db);
     return dto();
   });
 
@@ -63,7 +68,10 @@ export function settingsRoutes(app: FastifyInstance, db: Db, ctx: AiContext) {
     const provider = providerParam(req);
     const { key } = ApiKeyInputSchema.parse(req.body);
     try {
-      return await ctx.settings.saveKey(provider, key);
+      const meta = await ctx.settings.saveKey(provider, key);
+      // Chave nova: se a triagem estava em pausa porque a antiga foi recusada, ela retoma na próxima verificação.
+      await resumeProviderWaits(db);
+      return meta;
     } catch (e) {
       if (e instanceof EnvKeyError) return reply.code(409).send({ error: 'env_key', message: e.message });
       if (e instanceof SecretMissingError) return reply.code(409).send({ error: 'no_app_secret', message: e.message });
@@ -104,6 +112,8 @@ export function settingsRoutes(app: FastifyInstance, db: Db, ctx: AiContext) {
         createdAt: ctx.now(),
       });
       body = { outcome: 'ok', message: OUTCOME_MESSAGES.ok(label, res.model), provider: config.provider, model: res.model, latencyMs: ctx.now() - started };
+      // O provedor respondeu: o que estivesse esperando por ele (crédito reposto, limite de taxa que passou) roda já.
+      await resumeProviderWaits(db);
     } catch (e) {
       // Uma resposta cortada, recusada ou fora do formato foi cobrada: entra no uso (e no limite do dia).
       if (e instanceof AiError && e.usage) {

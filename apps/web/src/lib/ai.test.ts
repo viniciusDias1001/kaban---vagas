@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ProfileWireSchema, VIOLATION_CODES, type AiTaskDto, type JobAiSummaryDto, type Violation, type ViolationCode } from '@kv/shared';
 import {
   VIOLATION_LABELS, blankItem, cardTitle, drawerTitle, formatUsd, isPending, languageBadge, layerMessage, parsePdfFailure, pdfBlockers,
-  pollMs, resumeFileProblem, retryNote, scoreTone, sortByScore, taskErrorText, toScoreMap, violationPlace, violationView,
+  pollMs, resumeFileProblem, retryNote, scoreTone, scoringPauseText, sortByScore, taskErrorText, toScoreMap, violationPlace, violationView,
 } from './ai';
 
 const summary = (jobId: number, score: number | null, titlePt: string | null = null): JobAiSummaryDto => ({
@@ -227,5 +227,16 @@ describe('blankItem', () => {
     };
     expect(ProfileWireSchema.safeParse(wire).success).toBe(true);
     expect(blankItem.skill()).not.toBe(blankItem.skill());
+  });
+});
+
+describe('scoringPauseText', () => {
+  it('says what the provider answered, how many jobs wait and what resumes the scoring', () => {
+    const text = scoringPauseText({ message: 'a chave de API da OpenAI é inválida ou não tem permissão', retryAt: Date.UTC(2026, 10, 11, 15, 30), tasks: 12 });
+    expect(text.reason).toBe('O provedor de IA respondeu: A chave de API da OpenAI é inválida ou não tem permissão.');
+    expect(text.next).toContain('12 vagas aguardam a nota.');
+    expect(text.next).toMatch(/Nova tentativa automática às \d{2}:\d{2}/);
+    expect(text.next).toContain('Testar conexão');
+    expect(scoringPauseText({ message: '', retryAt: 0, tasks: 1 }).next).toContain('1 vaga aguarda a nota.');
   });
 });

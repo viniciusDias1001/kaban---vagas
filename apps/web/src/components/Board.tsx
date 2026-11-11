@@ -10,7 +10,7 @@ import { motion, useReducedMotion } from 'motion/react';
 import { memo, useCallback, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { COLUMNS, COLUMN_LABELS, LIMITS, type Column, type JobListItemDto } from '@kv/shared/client';
 import { api } from '../api';
-import type { ColumnSort, ScoreMap } from '../lib/ai';
+import { scoringPauseText, type ColumnSort, type ScoreMap } from '../lib/ai';
 import { LAYOUT_ANIMATED, PAGE_SIZE, countJobs, displayColumn, filterByColumn, groupByColumn, normalizeText, remainingAfter, type ByColumn } from '../lib/board';
 import { COLUMN_COLOR } from '../lib/columns';
 import { useDebouncedValue, useScrollEdges } from '../lib/hooks';
@@ -22,6 +22,7 @@ import { JobCard, JobCardBody } from './JobCard';
 import { StatsBar } from './StatsBar';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
+import { Notice } from './ui/notice';
 import { Skeleton } from './ui/skeleton';
 import { Tooltip } from './ui/tooltip';
 
@@ -260,7 +261,10 @@ export const Board = memo(function Board({ onOpen }: { onOpen: (id: number) => v
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
   const { moveTo, moveToColumn } = useMoveJob();
   // Notas da IA: chegam por uma consulta própria (GET /jobs/ai) e são juntadas às vagas pelo id.
-  const aiConfigured = useAiStatus().data?.configured === true;
+  const aiStatus = useAiStatus().data;
+  const aiConfigured = aiStatus?.configured === true;
+  // As notas pararam de chegar porque o provedor está indisponível: o quadro diz o motivo em vez de só ficar sem notas.
+  const scoringPause = aiConfigured && aiStatus?.scoringPause ? scoringPauseText(aiStatus.scoringPause) : null;
   const { scores } = useJobScores(aiConfigured);
   const canSort = aiConfigured && scores.size > 0;
   const [sort, setSort] = useState<SortByColumn>(readSort);
@@ -437,6 +441,12 @@ export const Board = memo(function Board({ onOpen }: { onOpen: (id: number) => v
           </div>
         </div>
       </motion.div>
+
+      {scoringPause && (
+        <Notice tone="warn" role="status" data-testid="scoring-paused" title="As notas automáticas estão em pausa" className="shrink-0">
+          <p className="break-words">{scoringPause.reason} {scoringPause.next}</p>
+        </Notice>
+      )}
 
       {isPending ? (
         <BoardSkeleton />

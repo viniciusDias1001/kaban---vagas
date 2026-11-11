@@ -8,7 +8,7 @@ import {
 } from '@kv/db';
 import { createTestDb, resetTestDb } from '@kv/db/testing';
 import { createQueue } from '../scheduler';
-import { createAiQueue, requeueRunningAiTasks, type AiQueueOptions, type AiQueueSettings, type UnitRunner } from './queue';
+import { createAiQueue, type AiQueueOptions, type AiQueueSettings, type UnitRunner } from './queue';
 import { UNKNOWN_TASK_ERROR } from './task-errors';
 
 const TZ = 'America/Sao_Paulo';
@@ -185,16 +185,17 @@ describe('createAiQueue', () => {
     const [a, b, c] = await seedJobs(3);
     for (const id of [a, b, c]) await enqueueAiTask(db, { type: 'tier2', jobId: id });
     const [first, second, third] = await all();
-    await db.update(aiTasks).set({ status: 'running', attempts: 1, startedAt: clock - 10 * 60_000 }).where(eq(aiTasks.id, first.id));
-    await db.update(aiTasks).set({ status: 'running', attempts: 3, startedAt: clock - 10 * 60_000 }).where(eq(aiTasks.id, second.id));
+    await db.update(aiTasks).set({ status: 'running', attempts: 1, startedAt: clock - 30 * 60_000 }).where(eq(aiTasks.id, first.id));
+    await db.update(aiTasks).set({ status: 'running', attempts: 3, startedAt: clock - 30 * 60_000 }).where(eq(aiTasks.id, second.id));
     await db.update(aiTasks).set({ status: 'running', attempts: 1, startedAt: clock - 5_000 }).where(eq(aiTasks.id, third.id));
     const queue = createAiQueue(db, recorder().run, options({ maxConcurrent: 0 }));
     expect((await queue.tick()).requeued).toBe(2);
     expect((await all()).map((t) => t.status)).toEqual(['queued', 'error', 'running']);
     expect((await all())[1].error).toBe('execução interrompida');
 
-    expect(await requeueRunningAiTasks(db)).toBe(1);
-    expect((await all())[2].status).toBe('queued');
+    // No start do worker toda tarefa "running" é de um processo que morreu, por mais recente que seja.
+    expect(await queue.recoverInterrupted()).toBe(1);
+    expect((await all())[2]).toMatchObject({ status: 'queued', attempts: 1, error: 'execução interrompida' });
   });
 
   it('does not throw from tick when the runner breaks in an unexpected way', async () => {

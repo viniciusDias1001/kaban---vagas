@@ -3,7 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { RESUME_TEXT_MAX_CHARS, dayStartMs, resumeTextChars } from '@kv/ai';
 import {
-  aiSpentSince, candidateProfiles, confirmAiTask, enqueueAiTask, langSubject, latestAiTasks, profileFor, resumes,
+  aiSpentSince, candidateProfiles, confirmAiTask, enqueueAiTask, langSubject, latestAiTasks, profileFor, providerWait, resumes,
   saveProfile, toAiTaskDto, usageByLayer, type CandidateProfileRow, type Db,
 } from '@kv/db';
 import { EXTRACT_LIMITS, RESUME_MIME, sniffResume, type ExtractFailure, type ResumeKind } from '@kv/resume';
@@ -62,6 +62,7 @@ export function aiRoutes(app: FastifyInstance, db: Db, ctx: AiContext) {
       models: state.models,
       tier2Auto: state.tier2Auto,
       budget: { dailyUsd, spentTodayUsd, exceeded: spentTodayUsd >= dailyUsd, timeZone },
+      scoringPause: state.configured ? await providerWait(db, ctx.now()) : null,
     };
   });
 

@@ -4,8 +4,10 @@ import { AiError } from './errors';
 import { readBlock } from './prompts';
 import {
   InputTooLargeError, JOB_FIELD_CHARS, PROFILE_JSON_MAX_CHARS, PROFILE_OUTPUT_TOKENS, RESUME_TEXT_MAX_CHARS, TIER1_EXCERPT_CHARS,
-  TIER2_DESCRIPTION_CHARS, analyzeJob, draftTailored, extractProfile, scoreJobs, testConnection, translateProfile,
+  TIER2_DESCRIPTION_CHARS, TIER2_OUTPUT_TOKENS, TIER3_DESCRIPTION_CHARS, analyzeJob, draftTailored, estimateInterruptedUsage, extractProfile,
+  scoreJobs, testConnection, translateProfile,
 } from './tasks';
+import { CALL_TIMEOUT_MS, estimateAbortedUsage, outputAllowance } from './limits';
 import { REALISTIC_PROFILE, SAMPLE_JOB, SAMPLE_PROFILE, SAMPLE_RESUME_TEXT } from './testing';
 import { ProfileTranslationError, numberMismatch } from './translation';
 import type { AiProvider, AiRequest } from './types';
@@ -235,12 +237,37 @@ describe('A1: inputs are bounded before the call and failures after it carry the
     await analyzeJob(t2.provider, SAMPLE_PROFILE, job);
     const t3 = scripted(() => ({ summary: '', experiences: [], educationIds: [], skillIds: [], languageIds: [], certificationIds: [], linkIds: [] }));
     await draftTailored(t3.provider, SAMPLE_PROFILE, job, 'en');
-    for (const { requests } of [t2, t3]) {
+    // A camada 2 traduz a descrição inteira, então lê menos que a camada 3 (que só a consulta).
+    for (const [{ requests }, descriptionChars] of [[t2, TIER2_DESCRIPTION_CHARS], [t3, TIER3_DESCRIPTION_CHARS]] as const) {
       const sent = readBlock<{ job: Record<string, string> }>(requests[0].prompt, 'dados')!.job;
       expect([sent.title.length, sent.company.length, sent.location.length, sent.description.length]).toEqual([
-        JOB_FIELD_CHARS, JOB_FIELD_CHARS, JOB_FIELD_CHARS, TIER2_DESCRIPTION_CHARS,
+        JOB_FIELD_CHARS, JOB_FIELD_CHARS, JOB_FIELD_CHARS, descriptionChars,
       ]);
     }
+  });
+
+  it('the tier-2 description bound leaves room for the whole translation and the lists inside the output cap', () => {
+    // 3 caracteres por token (conservador), tradução para o português até 20% maior que o original.
+    const translationTokens = Math.ceil((TIER2_DESCRIPTION_CHARS * 1.2) / 3);
+    // Seis listas de até 8 itens (o que o prompt pede) com ~150 caracteres cada.
+    const listTokens = Math.ceil((6 * 8 * 150) / 3);
+    expect(TIER2_DESCRIPTION_CHARS).toBe(12_000);
+    expect(translationTokens + listTokens).toBeLessThanOrEqual(TIER2_OUTPUT_TOKENS);
+    expect(TIER2_DESCRIPTION_CHARS).toBeLessThan(TIER3_DESCRIPTION_CHARS);
+  });
+
+  it('estimates the usage of an aborted or interrupted call on the safe side: prompt size in, output cap out', () => {
+    expect(estimateAbortedUsage({ tier: 'strong', system: 'a'.repeat(3_000), prompt: 'b'.repeat(601), maxOutputTokens: 8_000 })).toEqual({
+      inputTokens: 1_201, outputTokens: 16_000,
+    });
+    expect(outputAllowance('fast', 1_800)).toBe(3_800);
+    expect(estimateInterruptedUsage('tier2')).toEqual({ inputTokens: 13_300, outputTokens: 16_000 });
+    expect(estimateInterruptedUsage('tier3')).toEqual({ inputTokens: 15_967, outputTokens: 14_000 });
+    expect(estimateInterruptedUsage('profile_translate')).toEqual({ inputTokens: 9_000, outputTokens: 16_000 });
+    expect(estimateInterruptedUsage('tier1')).toEqual({ inputTokens: 800, outputTokens: 380 });
+    // O tempo limite do SDK comporta o teto de saída do nível a 40 tokens por segundo.
+    expect(CALL_TIMEOUT_MS.strong / 1000).toBeGreaterThanOrEqual(outputAllowance('strong', TIER2_OUTPUT_TOKENS) / 40);
+    expect(CALL_TIMEOUT_MS.fast / 1000).toBeGreaterThanOrEqual(outputAllowance('fast', 1_800) / 40);
   });
 
   it('testConnection keeps reporting a cut answer as invalid_output (key and model work), with the usage', async () => {
