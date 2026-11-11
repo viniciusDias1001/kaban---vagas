@@ -8,8 +8,10 @@
     "start": "tsx src/index.ts"
   },
   "dependencies": {
+    "@kv/ai": "workspace:*",
     "@kv/connectors": "workspace:*",
     "@kv/db": "workspace:*",
+    "@kv/settings": "workspace:*",
     "@kv/shared": "workspace:*",
     "drizzle-orm": "^0.45.4"
   }
