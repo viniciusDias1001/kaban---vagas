@@ -110,13 +110,19 @@ describe('assertDbReady', () => {
     await expect(assertDbReady(db)).resolves.toBeUndefined();
   });
 
-  it('asks for pnpm db:migrate when the tables are missing', async () => {
-    const empty = drizzle(new PGlite(), { schema });
-    try {
+  // Banco vazio (sem migrar). A instância do PGlite sobe num hook, e não dentro do teste: o start-up é lento
+  // sob CPU disputada e estourava o timeout de 5 s do teste; hooks têm `hookTimeout` (60 s, vitest.config.ts).
+  describe('with an unmigrated database', () => {
+    let empty: Db;
+    beforeAll(async () => {
+      empty = drizzle(new PGlite(), { schema });
+      await empty.execute(sql`select 1`); // força o start-up já no hook
+    });
+    afterAll(() => closeDb(empty));
+
+    it('asks for pnpm db:migrate when the tables are missing', async () => {
       await expect(assertDbReady(empty)).rejects.toThrow(/search_profiles.*rode pnpm db:migrate/);
-    } finally {
-      await closeDb(empty);
-    }
+    });
   });
 
   it('reports an unreachable database', async () => {
