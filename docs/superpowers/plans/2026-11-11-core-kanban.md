@@ -89,7 +89,7 @@ apps/web/
     "worker:install": "node scripts/install-worker.mjs"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["better-sqlite3", "esbuild"]
+    "onlyBuiltDependencies": ["esbuild"]
   }
 }
 ```
