@@ -18,6 +18,14 @@ interface GupyJob {
   jobUrl: string;
 }
 
+/**
+ * A resposta não traz país. Vagas no Brasil vêm com cidade e estado (ou com os dois vazios, quando são
+ * remotas); cidade sem estado é o que aparece nas vagas de fora (ex.: "Bogotá, D.c.").
+ */
+function gupyCountry(j: GupyJob): 'BR' | 'INT' {
+  return j.city?.trim() && !j.state?.trim() ? 'INT' : 'BR';
+}
+
 export function mapGupy(data: { data: GupyJob[] }): NormalizedJob[] {
   return keepValid(
     data.data.map((j) => ({
@@ -27,7 +35,7 @@ export function mapGupy(data: { data: GupyJob[] }): NormalizedJob[] {
       title: j.name,
       company: j.careerPageName,
       location: [j.city, j.state].filter(Boolean).join(', ') || 'Brasil',
-      country: 'BR' as const,
+      country: gupyCountry(j),
       remote: j.workplaceType === 'remote' || Boolean(j.isRemoteWork),
       stacks: stacksWithQuery(j.name),
       description: stripHtml(j.description ?? ''),

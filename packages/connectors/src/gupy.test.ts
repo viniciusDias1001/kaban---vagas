@@ -28,4 +28,21 @@ describe('mapGupy', () => {
     const noStack = { ...fixture.data[0], name: 'Analista de Suporte' };
     expect(mapGupy({ data: [noStack] })[0].stacks).toEqual([]);
   });
+
+  it('derives remote from workplaceType', () => {
+    // fixture: remote, remote, remote, hybrid (Bogotá), remote
+    expect(fixture.data.map((d: { workplaceType: string }) => d.workplaceType)).toEqual([
+      'remote', 'remote', 'remote', 'hybrid', 'remote',
+    ]);
+    expect(mapGupy(fixture).map((j) => j.remote)).toEqual([true, true, true, false, true]);
+  });
+
+  it('marks a job with a city but no Brazilian state as international', () => {
+    const jobs = mapGupy(fixture);
+    expect(jobs.map((j) => j.country)).toEqual(['BR', 'BR', 'BR', 'INT', 'BR']);
+    expect(jobs[3].location).toBe('Bogotá, D.c.');
+    expect(jobs[0].location).toBe('Brasil');
+    const sp = { ...fixture.data[0], city: 'São Paulo', state: 'São Paulo' };
+    expect(mapGupy({ data: [sp] })[0]).toMatchObject({ country: 'BR', location: 'São Paulo, São Paulo' });
+  });
 });

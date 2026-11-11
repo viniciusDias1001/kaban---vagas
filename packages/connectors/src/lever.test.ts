@@ -17,4 +17,23 @@ describe('mapLever', () => {
       expect(j.postedAt).toBeGreaterThan(1_500_000_000_000);
     }
   });
+
+  it('derives country and remote from the posting', () => {
+    const jobs = mapLever(fixture, 'palantir');
+    // fixture: SG hybrid, GB onsite, US remote, GB hybrid, US hybrid
+    expect(fixture.map((p: { country: string }) => p.country)).toEqual(['SG', 'GB', 'US', 'GB', 'US']);
+    expect(jobs.map((j) => j.country)).toEqual(['INT', 'INT', 'INT', 'INT', 'INT']);
+    expect(jobs.map((j) => j.remote)).toEqual([false, false, true, false, false]);
+    expect(jobs[0].location).toBe('Singapore, Singapore');
+  });
+
+  it('uses the posting country code before guessing from the location', () => {
+    const base = fixture[0];
+    const country = (over: object) => mapLever([{ ...base, ...over }], 'palantir')[0].country;
+    expect(country({ country: 'BR', categories: { location: 'São Paulo' } })).toBe('BR');
+    expect(country({ country: 'br', categories: { location: 'Remote' } })).toBe('BR');
+    expect(country({ country: 'US', categories: { location: 'Brazil, Indiana' } })).toBe('INT');
+    expect(country({ country: undefined, categories: { location: 'Remote - Brazil' } })).toBe('BR');
+    expect(country({ country: null, categories: { location: 'Lisbon' } })).toBe('INT');
+  });
 });

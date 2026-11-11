@@ -11,10 +11,19 @@ interface LeverPosting {
   createdAt: number;
   descriptionPlain?: string;
   workplaceType?: string;
+  /** Código ISO de duas letras do país da vaga. */
+  country?: string | null;
   categories?: { location?: string };
 }
 
 const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+/** Usa o código de país da vaga; sem ele, tenta reconhecer o Brasil no texto da localização. */
+function leverCountry(code: string | null | undefined, location: string): 'BR' | 'INT' {
+  const iso = code?.trim().toUpperCase();
+  if (iso) return iso === 'BR' ? 'BR' : 'INT';
+  return /bra[sz]il/i.test(location) ? 'BR' : 'INT';
+}
 
 export function mapLever(postings: LeverPosting[], company: string): NormalizedJob[] {
   return keepValid(
@@ -27,7 +36,7 @@ export function mapLever(postings: LeverPosting[], company: string): NormalizedJ
         title: j.text,
         company: capitalize(company),
         location,
-        country: /bra[sz]il/i.test(location) ? ('BR' as const) : ('INT' as const),
+        country: leverCountry(j.country, location),
         remote: j.workplaceType === 'remote' || /remote|remoto/i.test(location),
         stacks: stacksWithQuery(j.text),
         description: (j.descriptionPlain ?? '').trim(),
