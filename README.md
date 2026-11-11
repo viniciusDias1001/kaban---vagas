@@ -52,6 +52,8 @@ No `pnpm dev` o Vite repassa `/api` para a API. O worker nunca é chamado por HT
 
 A API não envia cabeçalhos CORS: o web está sempre na mesma origem que ela (proxy do Vite em dev, a própria API quando serve o `apps/web/dist`), então outros sites abertos no navegador não conseguem ler as respostas. Requisições que alteram dados (`POST`, `PATCH`, `PUT`, `DELETE`) com um cabeçalho `Origin` de outro host são recusadas com 403; chamadas sem `Origin` (curl, scripts) passam.
 
+A API também confere o cabeçalho `Host` de **toda** requisição: só aceita `localhost`, `host.docker.internal`, um endereço IP ou um nome listado em `ALLOWED_HOSTS`; o resto recebe 403. É a proteção contra *DNS rebinding*: uma página maliciosa aberta no seu navegador pode fazer o próprio domínio apontar para `127.0.0.1` e, a partir daí, falar com a API local como se fosse a mesma origem (ler o seu currículo, gastar a sua chave). O `Host` continua sendo o nome do atacante, e é por ele que a requisição é recusada. Em uso local (`pnpm dev`, `pnpm start:prod`, `docker run -p 8080:8080` aberto em `localhost`) não há nada a configurar; atrás de um domínio próprio, defina `ALLOWED_HOSTS=seu.dominio`.
+
 **Worker.** Ao iniciar, ele busca na hora se não houve nenhuma busca bem-sucedida na última hora; depois busca a cada hora cheia (10:00, 11:00, ...). Para cada perfil ativo há um run por fonte, executado com timeout de 60 s e uma nova tentativa (a tentativa que estoura o tempo é cancelada antes de a seguinte começar). A fila é verificada a cada 5 s: cada fonte executa um run por vez (os runs da mesma fonte, de perfis diferentes, rodam em sequência), fontes diferentes rodam em paralelo, até 4 runs ao mesmo tempo, e os pedidos manuais passam na frente dos horários. Se o banco estiver fora do ar na hora cheia, a busca daquela hora é enfileirada assim que ele voltar. Uma vaga que já existe (mesma URL, ou mesmo hash de empresa + título + local, mesmo vindo de outra fonte) é ignorada; as novas entram no topo de **Descobertas**. Runs que ficaram "em execução" quando o worker caiu viram erro no próximo start; os que ficaram assim com o worker ainda rodando (a conexão com o banco caiu no meio do run) viram erro em cerca de 5 minutos, na própria verificação da fila, e a fonte volta a ser buscada.
 
 **Buscar agora.** O botão enfileira um run por fonte do perfil; o worker inicia em até 5 s os das fontes que estão livres. O de uma fonte que está no meio de outro run (a busca horária de outro perfil, por exemplo) espera esse run terminar, o que pode levar até cerca de 2 minutos, e o mesmo vale quando já há 4 runs em andamento. Enquanto isso o quadro, os contadores e a saúde das fontes são recarregados a cada 2 s por 30 s; depois voltam ao intervalo normal (15 s). Fontes do perfil que já têm um run na fila ou em andamento são puladas; se todas já têm, a interface avisa que há uma busca em andamento.
@@ -66,12 +68,12 @@ A API não envia cabeçalhos CORS: o web está sempre na mesma origem que ela (p
 
 Opcional. Sem um provedor de IA configurado, nada desta seção acontece e o resto do app funciona igual.
 
-> **Privacidade.** Com um provedor configurado, o texto do seu currículo, o perfil extraído dele e o texto das vagas são enviados a esse provedor (Anthropic, OpenAI ou Google) a cada chamada. O arquivo original do currículo e o perfil ficam guardados só no seu banco. Leia a política de uso de dados do provedor antes de ligar.
+> **Privacidade.** Com um provedor configurado, o texto do seu currículo, o perfil extraído dele e o texto das vagas são enviados a esse provedor (Anthropic, OpenAI ou Google) a cada chamada. O arquivo original do currículo e o perfil ficam guardados só no seu banco. Leia a política de uso de dados do provedor antes de ligar. O que fica guardado e como apagar está em [Seus dados](#seus-dados-o-que-fica-guardado-e-como-apagar).
 
 **O que faz.** Em **Meu perfil** você envia o currículo em português e/ou em inglês. O app lê o texto do arquivo e pede ao modelo um perfil estruturado (contato, resumo, experiências com realizações, formação, habilidades, idiomas, certificações, links), que você revisa e edita; é desse perfil, e não do arquivo, que sai tudo o que a IA escreve depois. Se você só tem o currículo em um idioma, o botão "Gerar por tradução" cria o perfil do outro. Daí em diante há três camadas:
 
 - **Camada 1 (nota).** Toda vaga nova recebe, sozinha, uma nota de 0 a 100 de aderência ao perfil, o idioma da vaga e o título em português. Aparece no card; cada coluna pode ser ordenada por nota.
-- **Camada 2 (análise).** Ao abrir a vaga ou movê-la para Selecionadas: tradução da descrição para o português e análise (pontos fortes, lacunas, palavras-chave presentes e ausentes, o que revisar para a entrevista, perguntas prováveis).
+- **Camada 2 (análise).** Ao abrir a vaga ou movê-la para Selecionadas: tradução da descrição para o português e análise (pontos fortes, lacunas, palavras-chave presentes e ausentes, o que revisar para a entrevista, perguntas prováveis). A IA lê e traduz os primeiros 12 000 caracteres da descrição (quase toda vaga cabe; quando não cabe, a tela avisa que a tradução é parcial). Uma análise que **falhou** não é refeita sozinha quando você abre a vaga de novo ou move o card: o erro fica na tela com o botão "Tentar de novo", porque cada tentativa é uma chamada paga.
 - **Camada 3 (currículo adaptado).** O botão "Adaptar currículo" gera uma versão do seu perfil voltada à vaga, no idioma dela, que você revisa, edita e baixa em PDF.
 
 **Como ligar.** Na aba **Configurações**: escolha o provedor, confira os dois modelos (vêm preenchidos com os padrões), abra o bloco do provedor em "Chaves de API", cole a chave e salve; depois salve as configurações e clique em "Testar conexão". Vale na hora, sem reiniciar nada. Para gravar a chave pela tela o servidor precisa da variável `APP_SECRET` (veja [Configurações](#a-aba-configurações)). A alternativa é definir `AI_PROVIDER` e a variável da chave no `.env`.
@@ -84,19 +86,45 @@ Opcional. Sem um provedor de IA configurado, nada desta seção acontece e o res
 | OpenAI | `gpt-6-luna`: US$ 0,10 / 0,50 | `gpt-6.1-sol`: US$ 2,00 / 10,00 |
 | Gemini (Google) | `gemini-3.5-flash-lite`: US$ 0,30 / 2,50 | `gemini-4-carbon`: US$ 4,00 / 20,00 (a partir de 2026-12-01; até 30/11, a metade) |
 
-Preços por milhão de tokens, entrada / saída. Com os modelos padrão, uma ordem de grandeza por vaga:
+Preços por milhão de tokens, entrada / saída. **A saída cobrada inclui os tokens de raciocínio**: os modelos dos dois níveis pensam antes de responder (esforço `low` no rápido, `medium` no forte), e esse raciocínio é cobrado como saída mesmo sem aparecer na resposta. Por isso cada chamada tem dois tetos somados: o do texto visível e uma folga de raciocínio (2 000 tokens no nível rápido, 8 000 no forte).
 
-| O que | Claude | OpenAI | Gemini |
+| Chamada | Saída visível (teto) | Raciocínio (teto) | Total cobrável (teto) |
 |---|---|---|---|
-| Camada 1, por vaga (em lotes de 10) | US$ 0,0001 | US$ 0,0001 | US$ 0,0003 |
-| Camada 2, vaga em inglês (com a tradução) | US$ 0,045 | US$ 0,022 | US$ 0,045 |
-| Camada 2, vaga em português | US$ 0,022 | US$ 0,011 | US$ 0,022 |
-| Camada 3, por currículo adaptado | US$ 0,034 | US$ 0,017 | US$ 0,034 |
-| Perfil, uma vez por currículo enviado | US$ 0,06 | US$ 0,03 | US$ 0,06 |
+| Camada 1, lote de 10 vagas | 1 800 | 2 000 | 3 800 |
+| Camada 2 | 8 000 | 8 000 | 16 000 |
+| Camada 3 (cada chamada) | 6 000 | 8 000 | 14 000 |
+| Perfil (ler um currículo ou traduzir um perfil) | 8 000 | 8 000 | 16 000 |
 
-A conta supõe um perfil de uma página, descrição de vaga de 4 000 caracteres e cerca de 3,5 caracteres por token; vaga mais longa ou perfil maior custam mais. A camada 3 pode fazer duas chamadas (veja "Não inventa"), o que dobra o valor dela. A estimativa usa o preço cheio de entrada (ignora desconto de cache), então tende a errar para mais. Mil vagas novas custam de US$ 0,10 a US$ 0,30 na camada 1, conforme o provedor; o que pesa são as análises e os currículos, que só rodam para as vagas que você abre ou seleciona.
+Com os modelos padrão, o custo **típico** e o **pior caso** de cada chamada:
+
+| O que | Claude | OpenAI | Gemini (a partir de 2026-12-01) |
+|---|---|---|---|
+| Camada 1, por vaga (em lotes de 10): típico | US$ 0,0001 | US$ 0,0001 | US$ 0,0005 |
+| Camada 1, por vaga: pior caso | US$ 0,0003 | US$ 0,0003 | US$ 0,0012 |
+| Camada 2, vaga em inglês (com a tradução): típico | US$ 0,09 | US$ 0,045 | US$ 0,09 |
+| Camada 2, vaga em português: típico | US$ 0,065 | US$ 0,032 | US$ 0,065 |
+| Camada 2: pior caso | US$ 0,37 | US$ 0,19 | US$ 0,37 |
+| Camada 3, por chamada: típico | US$ 0,07 | US$ 0,035 | US$ 0,07 |
+| Camada 3, por chamada: pior caso | US$ 0,34 | US$ 0,17 | US$ 0,34 |
+| Perfil, por currículo enviado ou tradução: típico | US$ 0,07 | US$ 0,035 | US$ 0,07 |
+| Perfil: pior caso | US$ 0,36 | US$ 0,18 | US$ 0,36 |
+
+Como a conta foi feita (os tetos vêm de `packages/ai/src/limits.ts` e `tasks.ts`; os preços, de `config.ts`):
+
+- **Típico:** perfil de uma página (cerca de 4 000 caracteres de JSON), descrição de vaga de 4 000 caracteres, 3,5 caracteres por token e **cerca de 2 000 tokens de raciocínio** por chamada do nível forte (500 por lote no nível rápido). O raciocínio é uma suposição, não uma medida: ele varia com a vaga e com o modelo, e é a maior parte do custo. Exemplo, camada 2 de uma vaga em inglês no Claude: 2 700 tokens de entrada × US$ 4 + (2 000 visíveis + 2 000 de raciocínio) × US$ 20, por milhão = US$ 0,011 + US$ 0,08.
+- **Pior caso:** a maior entrada que a chamada pode enviar (descrição no teto de 12 000 caracteres na camada 2 e 20 000 na camada 3, perfil de 24 000 caracteres, 3 caracteres por token) e a saída **no teto** da tabela acima. Exemplo, camada 2 no Claude: 13 300 × US$ 4 + 16 000 × US$ 20, por milhão = US$ 0,053 + US$ 0,32 = US$ 0,37.
+- A camada 3 pode fazer **duas** chamadas (veja "Não inventa"): o pior caso de um currículo adaptado é o dobro da linha da tabela (US$ 0,69 no Claude).
+- O Gemini custa a metade do que está na tabela até 2026-11-30.
+- **Cache de prompt.** A estimativa cobra toda a entrada pelo preço cheio. Na Anthropic, gravar o prefixo em cache custa 1,25× o preço de entrada e ler custa 0,1×: a primeira chamada de uma sequência sai até uns 25% mais cara **na parte da entrada** do que o estimado (menos de um centavo por chamada do nível forte), e as seguintes, mais baratas. A estimativa **não** tende a errar para mais: o que domina é a saída, e ela é contada como o provedor a informa.
+- **Chamadas sem resposta.** Uma chamada abortada por tempo, ou interrompida porque o worker foi encerrado no meio dela, pode ter sido cobrada pelo provedor sem que ele informe o uso. Nesses casos o app grava uma linha **estimada pelo pior caso** (o modelo aparece com o sufixo "(estimativa)" em `ai_usage`), para o limite diário errar para o lado seguro.
+
+Mil vagas novas custam de US$ 0,10 a US$ 0,50 na camada 1, conforme o provedor; o que pesa são as análises e os currículos, que só rodam para as vagas que você abre ou seleciona.
+
+> **Comece com um limite diário baixo** e, depois do primeiro dia de uso, compare o "Gasto estimado" da aba Configurações com a página de uso do próprio provedor. Os números daqui são estimativas; a fatura do provedor é a verdade.
 
 **Limite diário.** Padrão de US$ 1,00 por dia, editável em Configurações (de 0 a 100). Quando o gasto estimado do dia atinge o limite: as notas automáticas (camada 1) pausam até o dia seguinte, e análises, currículos adaptados e leituras de currículo ficam esperando, com um botão "Executar mesmo assim" que vale para aquela execução. Com limite 0, toda chamada pede essa confirmação. O "dia" vira à meia-noite do fuso `AI_BUDGET_TZ` (padrão `America/Sao_Paulo`).
+
+Quanto o limite padrão compra, com o Claude (no OpenAI, o dobro): cerca de **11 análises típicas** de vagas em inglês por dia (15 em português), ou cerca de 14 currículos adaptados. No **pior caso** (US$ 0,37 por análise) são só **2 a 3**: o limite é conferido antes de cada chamada, não durante, então a terceira ainda começa com US$ 0,75 gastos e o dia fecha perto de US$ 1,12. As notas da camada 1 praticamente não pesam nessa conta. Com a "análise automática" ligada (o padrão), cada vaga aberta ou movida para Selecionadas pela primeira vez é uma dessas análises; desligue-a em Configurações se preferir pedir uma a uma pelo botão.
 
 **Não inventa.** O currículo adaptado é montado por referência a itens do seu perfil: empresa, cargo, datas, formação, habilidades, idiomas, certificações e links são copiados do perfil pelo servidor; o modelo só reescreve o resumo e as realizações. Antes de qualquer coisa ser gravada, um verificador em código confere o que o modelo devolveu. Se algo diverge, o modelo recebe uma única nova tentativa com a lista do que divergiu; se ainda assim não passar, o resultado é descartado e a tela diz o porquê. Ao editar o texto você mesmo, estrutura e limites continuam bloqueando o salvamento, e o resto vira aviso, porque o autor passa a ser você. O download do PDF confere tudo de novo contra o perfil atual.
 
@@ -110,11 +138,40 @@ O verificador garante ids, campos copiados, limites, números e termos reconhec�
 
 Esses casos ficam com o prompt e com a revisão do usuário. **Leia sempre o currículo adaptado inteiro antes de enviá-lo**: a responsabilidade pelo que vai para a empresa é sua.
 
+**Editar o perfil.** O editor manda, ao salvar, a versão do perfil em que as suas alterações se baseiam. Se o perfil mudou no servidor nesse meio-tempo (uma tradução ou a leitura de um currículo terminou, ou outra aba salvou), nada é sobrescrito em silêncio: aparece o aviso "O perfil mudou no servidor", com as opções de recarregar ou de continuar editando e gravar por cima. No sentido inverso, uma tradução ou leitura de currículo que termina depois de você ter editado e salvo o perfil é descartada, e a tela diz por quê.
+
+### Seus dados: o que fica guardado e como apagar
+
+Tudo fica no **seu** banco de dados (o do `DATABASE_URL`); o app não tem servidor próprio nem telemetria.
+
+| O que | Onde (tabela) | Como apagar |
+|---|---|---|
+| Arquivo do currículo como você enviou e o texto lido dele | `resumes` | **Meu perfil**, botão "Apagar" do idioma |
+| Perfil estruturado de cada idioma (com as suas edições) | `profiles` | o mesmo botão |
+| Currículos adaptados (um por vaga) | `tailored_resumes` | o mesmo botão apaga os escritos naquele idioma |
+| Nota, título traduzido, tradução e análise de cada vaga | `job_ai` | "Apagar todos os dados de IA" |
+| Fila de tarefas da IA (tipo, estado, mensagem de erro; nunca o texto do currículo) | `ai_tasks` | "Apagar todos os dados de IA"; as terminadas somem sozinhas depois de 30 dias |
+| Histórico de gasto: provedor, modelo, camada, tokens e custo estimado de cada chamada | `ai_usage` | não é apagado pela tela: não tem conteúdo pessoal e é o que mantém o limite diário valendo |
+| Chaves de API, cifradas | `ai_keys` | aba **Configurações**, "Remover" |
+
+- **Apagar um idioma** (`DELETE /api/ai/resumes/:lang`) remove o arquivo, o texto lido, o perfil daquele idioma, os currículos adaptados escritos nele e as leituras/traduções de perfil que estejam na fila. As notas e análises das vagas ficam, marcadas como desatualizadas.
+- **Apagar todos os dados de IA** (`DELETE /api/ai/data`) remove currículos, perfis, currículos adaptados, notas, títulos traduzidos, análises e a fila inteira. Ficam as vagas com as suas anotações, o histórico de gasto, as configurações e as chaves.
+- As duas ações pedem confirmação e **não têm volta**. Uma chamada de IA que esteja em andamento termina, mas o resultado dela é descartado.
+- O que já foi enviado ao provedor de IA não é apagado por aqui: vale a política de retenção do provedor.
+- A descrição de uma vaga buscada sob demanda (LinkedIn, Indeed) fica na própria vaga e sai com ela.
+
 **Currículo enviado: limites.** PDF ou DOCX, até 5 MB; o tipo é conferido pelo conteúdo do arquivo, não pela extensão. O PDF precisa ter texto selecionável: um currículo escaneado (só imagem) é recusado na hora, com a sugestão de exportar de novo ou enviar um DOCX. Também são recusados: PDF com mais de 30 páginas, arquivo protegido por senha, arquivo que leva mais de 15 s para ser lido e texto com mais de cerca de 6 páginas (o que o modelo lê de uma vez com folga para devolver o perfil). A recusa aparece no próprio cartão do idioma e o currículo anterior continua valendo.
 
 **PDF gerado.** Uma coluna, texto selecionável, sem tabelas nem imagens, na fonte Noto Sans embutida. Ela desenha o alfabeto latino com todos os acentos (português, espanhol, francês, alemão, polonês, tcheco, turco...), vietnamita, cirílico e grego. Não desenha chinês, japonês, coreano, árabe, hebraico, devanágari, emoji nem símbolos como "✓": se o currículo tiver um desses caracteres, o editor avisa quais são e o download só é liberado depois de trocá-los, em vez de gerar um PDF com buracos no texto.
 
-**Fila.** A IA roda no worker, em uma fila separada da busca de vagas: até 2 chamadas ao mesmo tempo, 3 tentativas com espera de 30 s e 120 s (o dobro em limite de taxa), tempo limite por chamada. Erro que repetir não resolve (chave inválida, modelo inexistente, conta sem crédito, resposta cortada, recusa do modelo, rascunho barrado pelo verificador) não é repetido. Lentidão ou falha do provedor não atrasa a busca. Nenhuma chamada de IA acontece dentro de uma requisição da API, exceto o "Testar conexão".
+**Fila.** A IA roda no worker, em uma fila separada da busca de vagas: até 2 chamadas ao mesmo tempo, 3 tentativas com espera de 30 s e 120 s (o dobro em limite de taxa). Erro que repetir não resolve (resposta cortada, recusa do modelo, rascunho barrado pelo verificador, dado que falta) não é repetido. Lentidão ou falha do provedor não atrasa a busca. Nenhuma chamada de IA acontece dentro de uma requisição da API, exceto o "Testar conexão".
+
+- **Provedor indisponível não queima as vagas.** Se a triagem (camada 1) bate em chave recusada, conta sem crédito, modelo inexistente ou limite de taxa que não passa, nenhuma vaga é marcada com erro: as tarefas esperam (30 min; 15 min no limite de taxa) e são tentadas de novo sozinhas, e o quadro e a aba Configurações mostram o aviso "As notas automáticas estão em pausa" com o motivo. Gravar uma chave, trocar o provedor ou o modelo, ou um "Testar conexão" que funcione retoma na hora.
+- **Uma vaga problemática não derruba as vizinhas.** Quando um lote de 10 vagas falha inteiro por causa do conteúdo (o modelo recusou, cortou ou devolveu algo inválido), as vagas são refeitas uma a uma, respeitando o limite diário, e só a que falha sozinha fica com erro.
+- **Erro na nota não é para sempre.** Uma vaga cuja nota falhou volta para a fila sozinha depois de 6 horas, no máximo 3 vezes (4 falhas em 30 dias); pelo painel da vaga, "Tentar de novo" vale na hora.
+- **Tempo limite.** O SDK corta uma chamada do nível rápido em 120 s e uma do forte em 480 s (o teto de 16 000 tokens a 40 tokens por segundo, com folga); a fila corta um pouco depois (150 s na camada 1, 540 s na camada 2, 510 s no perfil, 1 020 s na camada 3, que pode fazer duas chamadas). No Claude, as chamadas do nível forte usam *streaming*, para uma geração longa não ficar em uma conexão sem tráfego; no OpenAI e no Gemini a resposta vem de uma vez. Uma chamada do nível forte que estoura o tempo ganha **uma** nova tentativa, não duas.
+- **Reinício do worker.** Uma tarefa que estava em execução quando o worker foi encerrado conta a tentativa interrompida (uma tarefa que derruba o processo toda vez para na terceira) e grava o uso estimado da chamada perdida.
+- **Limpeza.** Tarefas terminadas há mais de 30 dias são apagadas da fila.
 
 **Descrições do LinkedIn e do Indeed.** Essas duas fontes não entregam a descrição na busca; ela é buscada só quando a vaga é analisada, uma por vez, sem login. Limites conhecidos:
 
@@ -200,6 +257,7 @@ As marcadas com (*) são só o **valor inicial**: podem ser trocadas na aba Conf
 | `API_PORT` | `3333` | Porta da API. O proxy do Vite só enxerga a variável se ela estiver no ambiente do shell, não só no `.env` |
 | `PORT` | nenhum | Porta da API em plataformas que a injetam (Railway); tem precedência sobre `API_PORT` |
 | `HOST` | `127.0.0.1` | Endereço em que a API escuta; o container usa `0.0.0.0` |
+| `ALLOWED_HOSTS` | nenhum | Nomes de host aceitos no cabeçalho `Host` além de `localhost`, `host.docker.internal` e de qualquer IP, separados por vírgula (`kanban.exemplo.com,outro.exemplo.com`; porta e esquema são ignorados). Qualquer outro `Host` recebe 403 (proteção contra DNS rebinding). No Railway, o domínio do serviço e `healthcheck.railway.app` entram sozinhos |
 | `WEB_DIST` | `apps/web/dist` | Diretório do web buildado que a API serve, quando tem `index.html` |
 | `GREENHOUSE_BOARDS` (*) | `gitlab,stripe,cloudflare,figma` | Boards do Greenhouse, separados por vírgula |
 | `LEVER_COMPANIES` (*) | `palantir,spotify` | Empresas do Lever, separadas por vírgula |
@@ -280,6 +338,7 @@ O alvo é **um serviço** construído pelo `Dockerfile`. Um container roda a API
 - **Memória:** a leitura de um currículo enviado roda em uma thread à parte que pode ocupar algumas centenas de megabytes por alguns segundos (teto de 256 MB de heap e 384 MB de crescimento do processo; acima disso o arquivo é recusado). Deixe folga: um serviço com menos de 1 GB pode ser encerrado pela plataforma no meio de um upload.
 - **Migrations:** o `start-prod.mjs` aplica as migrations pendentes antes de subir a API e o worker. API e worker não migram. Se o banco ainda não aceita conexões (redeploy junto com o banco), as migrations, a API e o worker esperam por ele até 5 minutos cada antes de sair com erro.
 - **Healthcheck:** `/api/stats`, que consulta o banco.
+- **`ALLOWED_HOSTS`:** a API recusa (403) requisições cujo `Host` ela não conhece. No Railway ela aceita sozinha o domínio do serviço (variáveis `RAILWAY_PUBLIC_DOMAIN` e `RAILWAY_PRIVATE_DOMAIN`, injetadas pela plataforma) e `healthcheck.railway.app`, o `Host` das requisições de healthcheck. Só defina `ALLOWED_HOSTS` se o serviço for acessado por um domínio próprio. Como o resto da configuração do Railway, isto **não foi validado contra a plataforma**: se o healthcheck falhar com 403, confira nos logs o `Host` que chegou e acrescente-o a `ALLOWED_HOSTS`.
 - **Uma réplica só.** O worker e as migrations do start não foram feitos para rodar em paralelo; com mais de uma réplica as buscas e as chamadas de IA rodariam em dobro, duas réplicas poderiam migrar ao mesmo tempo, e o limite de frequência do "Testar conexão" (que é por processo) deixaria de valer.
 - Se a API ou o worker cair, o container sai com erro e o Railway o reinicia.
 - **Indeed não funciona no container:** a imagem não tem Chromium. A fonte falha com erro claro na tela de saúde das fontes, e a análise das vagas do Indeed usa só título, empresa e local.
@@ -299,7 +358,7 @@ docker run --rm -p 8080:8080 \
   kanban-vagas
 ```
 
-Abra http://localhost:8080. O `APP_SECRET` só é necessário para gravar chaves de API pela aba Configurações; use sempre o mesmo valor, senão as chaves gravadas deixam de decifrar. No Docker Desktop (Windows e macOS) `host.docker.internal` já existe; no Linux acrescente `--add-host=host.docker.internal:host-gateway`.
+Abra http://localhost:8080 (por `localhost` ou pelo IP da máquina; outro nome de host precisa estar em `ALLOWED_HOSTS`, com `-e ALLOWED_HOSTS=nome`). O `APP_SECRET` só é necessário para gravar chaves de API pela aba Configurações; use sempre o mesmo valor, senão as chaves gravadas deixam de decifrar. No Docker Desktop (Windows e macOS) `host.docker.internal` já existe; no Linux acrescente `--add-host=host.docker.internal:host-gateway`.
 
 Sem Docker, `pnpm --filter @kv/web build && pnpm start:prod` faz o mesmo no host: migra, sobe API e worker e serve o web buildado (porta 3333, ou `PORT`).
 

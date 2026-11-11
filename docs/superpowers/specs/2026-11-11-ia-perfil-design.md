@@ -175,3 +175,15 @@ O resumo de gasto e o estado da IA, antes previstos em "Meu perfil", ficam em Co
 10. Nenhuma resposta da API, log ou linha do banco contém a chave em texto puro.
 11. Com a variável de ambiente da chave definida, a tela não permite sobrescrevê-la e indica a origem.
 12. Sem `APP_SECRET`, a gravação de chave é recusada com instrução clara e o restante do app funciona.
+
+## Adendo (2026-11-11): correções da revisão final
+
+Decisões tomadas na revisão final, que refinam (sem contrariar) o que está acima:
+
+- **Camada 2 automática.** Continua disparando ao abrir a vaga ou movê-la para Selecionadas, mas um gatilho automático nunca refaz uma camada que terminou em erro: só um pedido explícito do usuário ("Tentar de novo", "Analisar esta vaga"), que vai marcado na requisição (`explicit: true`). A camada 2 lê e traduz os primeiros 12 000 caracteres da descrição, para a tradução inteira caber no teto de saída.
+- **Triagem resiliente.** Falha da camada 1 por indisponibilidade do provedor (chave, crédito, modelo, limite de taxa persistente) não marca a vaga: as tarefas esperam e o estado da IA expõe o motivo (`scoringPause`). Um lote que falha por conteúdo é refeito vaga a vaga. A varredura volta a enfileirar vagas com erro depois de 6 h, até 4 falhas por vaga.
+- **Custo.** Chamada abortada por tempo ou interrompida pelo encerramento do worker grava uso estimado pelo pior caso; a tentativa interrompida conta; tempo esgotado no modelo forte tem uma nova tentativa só. O padrão de US$ 1,00 por dia foi mantido.
+- **Perfil.** O `PUT` do perfil leva a versão de base e responde 409 em conflito; tarefas de perfil não sobrescrevem um perfil editado depois de pedidas.
+- **Privacidade.** `DELETE /ai/resumes/:lang` e `DELETE /ai/data` apagam os dados pessoais pela tela; `ai_usage` fica como contabilidade sem conteúdo pessoal; tarefas terminadas são apagadas depois de 30 dias.
+- **Rede.** A API recusa requisições cujo `Host` não é local, um IP ou um nome de `ALLOWED_HOSTS` (DNS rebinding).
+- **Dados.** Nenhuma migration nova: a pausa da triagem é derivada de `ai_tasks` (tarefa da camada 1 na fila, sem tentativa contada e com erro) e a marca de estimativa vai no texto de `ai_usage.model`.
