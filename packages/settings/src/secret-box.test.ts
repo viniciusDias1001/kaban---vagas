@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { DecryptError, SecretMissingError, appSecretProblem, openApiKey, sealApiKey } from './secret-box';
+import type { AiProviderId } from '@kv/shared';
+import { DecryptError, SecretInputError, SecretMissingError, appSecretProblem, openApiKey, sealApiKey } from './secret-box';
 
 const SECRET = 'segredo-de-teste-com-mais-de-32-caracteres-0001';
 const OTHER_SECRET = 'outro-segredo-de-teste-com-mais-de-32-caracteres';
@@ -90,6 +91,54 @@ describe('sealApiKey / openApiKey', () => {
       }
     }
     expect(() => sealApiKey(KEY, 'openai', 'x'.repeat(32))).not.toThrow();
+  });
+
+  it('refuses to seal an empty or blank key, with a typed error and before producing any blob', () => {
+    for (const blank of ['', ' ', '   ', '\n', '\t \r\n', '\u00a0', 12345, null, undefined]) {
+      try {
+        sealApiKey(blank as string, 'openai', SECRET);
+        expect.unreachable(`sealed ${JSON.stringify(blank)}`);
+      } catch (e) {
+        expect(e).toBeInstanceOf(SecretInputError);
+        expect((e as SecretInputError).reason).toBe('empty_key');
+      }
+    }
+    // Espaço em volta de uma chave real continua valendo: quem apara é quem chama (a rota já apara).
+    expect(openApiKey(sealApiKey(` ${KEY}\n`, 'openai', SECRET), 'openai', SECRET)).toBe(` ${KEY}\n`);
+  });
+
+  it('refuses a provider outside the known list, when sealing and when opening', () => {
+    const sealed = sealApiKey(KEY, 'openai', SECRET);
+    for (const bogus of [undefined, null, '', 'fake', 'OpenAI', 'openai ', 'toString', '__proto__', 7, ['openai']]) {
+      for (const run of [
+        () => sealApiKey(KEY, bogus as AiProviderId, SECRET),
+        () => openApiKey(sealed, bogus as AiProviderId, SECRET),
+      ]) {
+        try {
+          run();
+          expect.unreachable(`accepted ${JSON.stringify(bogus)}`);
+        } catch (e) {
+          expect(e).toBeInstanceOf(SecretInputError);
+          expect((e as SecretInputError).reason).toBe('unknown_provider');
+          expect(String((e as Error).stack)).not.toContain(KEY);
+        }
+      }
+    }
+    for (const provider of ['anthropic', 'openai', 'gemini'] as const) {
+      expect(openApiKey(sealApiKey(KEY, provider, SECRET), provider, SECRET)).toBe(KEY);
+    }
+  });
+
+  it('checks the arguments before the secret: a bad argument is reported even without APP_SECRET', () => {
+    expect(() => sealApiKey('', 'openai', undefined)).toThrow(SecretInputError);
+    expect(() => sealApiKey(KEY, 'nope' as AiProviderId, undefined)).toThrow(SecretInputError);
+    expect(() => openApiKey(Buffer.alloc(40), 'nope' as AiProviderId, undefined)).toThrow(SecretInputError);
+  });
+
+  it('does not let a tampered blob that authenticates as empty pass for a key', () => {
+    // Um blob só de cabeçalho (texto cifrado vazio) continua sendo erro de decifragem, não uma chave ''.
+    const sealed = sealApiKey(KEY, 'openai', SECRET);
+    expect(() => openApiKey(sealed.subarray(0, 29), 'openai', SECRET)).toThrow(DecryptError);
   });
 
   it('appSecretProblem explains what is wrong, or returns null', () => {

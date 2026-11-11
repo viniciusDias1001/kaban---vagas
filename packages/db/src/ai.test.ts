@@ -3,8 +3,14 @@ import { eq, sql } from 'drizzle-orm';
 import type { CandidateProfile } from '@kv/shared';
 import {
   aiSpentSince, aiTasks, baseProfile, candidateProfiles, closeDb, confirmAiTask, enqueueAiTask, jobAi, jobs,
-  latestAiTasks, jobSubject, profileFor, recordUsage, resumes, saveProfile, usageByLayer, type Db,
+  JOBS_WRITE_LOCK, PROFILE_VERSION_LOCK, latestAiTasks, jobSubject, profileFor, recordUsage, resumes, saveProfile,
+  usageByLayer, type Db,
 } from './index';
+import { PGlite } from '@electric-sql/pglite';
+import { drizzle } from 'drizzle-orm/pglite';
+import { migrate } from 'drizzle-orm/pglite/migrator';
+import { MIGRATIONS_FOLDER } from './migrate';
+import * as schema from './schema';
 import { createTestDb, resetTestDb } from './testing';
 
 let db: Db;
@@ -130,6 +136,54 @@ describe('profiles', () => {
     expect(await db.select().from(candidateProfiles)).toHaveLength(2);
     expect((await profileFor(db, 'en'))?.data.summary).toBe('Edited');
   });
+
+  it('concurrent saves get distinct, increasing versions and leave the highest one in the table', async () => {
+    const langs = ['en', 'pt-BR'] as const;
+    const saved = await Promise.all(
+      Array.from({ length: 12 }, (_, i) =>
+        saveProfile(db, langs[i % 2], { ...profile, summary: `v${i}` }, i % 2 ? 'traduzido' : 'editado', 100 + i),
+      ),
+    );
+    const versions = saved.map((row) => row.version);
+    expect(new Set(versions).size).toBe(12);
+    expect([...versions].sort((a, b) => a - b)).toEqual(Array.from({ length: 12 }, (_, i) => i + 1));
+    const rows = await db.select().from(candidateProfiles);
+    expect(rows).toHaveLength(2);
+    expect(Math.max(...rows.map((r) => r.version))).toBe(12);
+    expect(new Set(rows.map((r) => r.version)).size).toBe(2);
+    // Cada linha ficou com a gravação de maior versão do seu idioma, não com uma mais antiga.
+    for (const row of rows) {
+      const winner = saved.filter((s) => s.lang === row.lang).sort((a, b) => b.version - a.version)[0];
+      expect(row).toMatchObject({ version: winner.version, updatedAt: winner.updatedAt });
+      expect(row.data.summary).toBe(winner.data.summary);
+    }
+    expect((await saveProfile(db, 'en', profile, 'editado', 999)).version).toBe(13);
+  });
+
+  it('saveProfile takes its own transaction-scoped advisory lock before reading the current version', async () => {
+    // O PGlite tem uma conexão só: não dá para pôr duas transações lado a lado. O que dá para conferir é a
+    // ordem dos comandos: o lock vem dentro da transação, antes do max(version), e é solto no commit.
+    const queries: string[] = [];
+    const logged = drizzle(new PGlite(), { schema, logger: { logQuery: (query) => queries.push(query) } });
+    try {
+      await migrate(logged, { migrationsFolder: MIGRATIONS_FOLDER });
+      queries.length = 0;
+      await saveProfile(logged, 'en', profile, 'extraido', 1);
+      const lockAt = queries.findIndex((q) => q.includes(`pg_advisory_xact_lock(${PROFILE_VERSION_LOCK})`));
+      const readAt = queries.findIndex((q) => /max\(.*"version"\)/.test(q));
+      const writeAt = queries.findIndex((q) => /^insert into "profiles"/i.test(q));
+      expect(lockAt).toBeGreaterThanOrEqual(0);
+      expect(readAt).toBeGreaterThan(lockAt);
+      expect(writeAt).toBeGreaterThan(readAt);
+      const held = (await logged.execute(sql`select count(*)::int as n from pg_locks where locktype = 'advisory'`)) as unknown as {
+        rows: { n: number }[];
+      };
+      expect(held.rows[0].n).toBe(0);
+    } finally {
+      await closeDb(logged);
+    }
+    expect(PROFILE_VERSION_LOCK).not.toBe(JOBS_WRITE_LOCK);
+  }, 60_000);
 });
 
 describe('usage', () => {

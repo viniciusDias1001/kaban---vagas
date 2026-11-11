@@ -74,8 +74,19 @@ export async function baseProfile(db: Db): Promise<CandidateProfileRow | null> {
 }
 
 /**
+ * Chave (arbitrária, fixa) do advisory lock que serializa as gravações de perfil. Diferente de
+ * `JOBS_WRITE_LOCK`: gravar um perfil não espera a inserção de vagas, nem o contrário.
+ */
+export const PROFILE_VERSION_LOCK = 7461002;
+
+/**
  * Grava (cria ou substitui) o perfil de um idioma com a próxima versão global. Tudo que foi calculado
  * com uma versão anterior passa a contar como desatualizado.
+ *
+ * Ler `max(version)` e gravar `max + 1` não é atômico em READ COMMITTED: a edição pela API e a tradução
+ * do worker poderiam ler o mesmo máximo e gravar a mesma versão. O advisory lock de transação faz a
+ * segunda gravação esperar o commit da primeira; como cada comando em READ COMMITTED enxerga o que já
+ * foi confirmado, o `max(version)` lido depois do lock já inclui a gravação anterior.
  */
 export async function saveProfile(
   db: Db,
@@ -85,6 +96,7 @@ export async function saveProfile(
   now: number = Date.now(),
 ): Promise<CandidateProfileRow> {
   return db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(${sql.raw(String(PROFILE_VERSION_LOCK))})`);
     const [{ next }] = await tx
       .select({ next: sql<number>`coalesce(max(${candidateProfiles.version}), 0)::int + 1`.mapWith(Number) })
       .from(candidateProfiles);

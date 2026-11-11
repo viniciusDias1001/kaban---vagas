@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from 'node:crypto';
-import { APP_SECRET_COMMAND, APP_SECRET_MIN_LENGTH, type AiProviderId } from '@kv/shared';
+import { AI_PROVIDER_IDS, APP_SECRET_COMMAND, APP_SECRET_MIN_LENGTH, type AiProviderId } from '@kv/shared';
 
 /**
  * Cifra das chaves de API gravadas pela aba Configurações. Só `node:crypto`.
@@ -21,7 +21,17 @@ import { APP_SECRET_COMMAND, APP_SECRET_MIN_LENGTH, type AiProviderId } from '@k
  * - A versão permite trocar o esquema depois: `openApiKey` escolhe o caminho pelo primeiro byte.
  * - Comparação em tempo constante: a única comparação de segredo é a da tag do GCM, feita pelo OpenSSL
  *   dentro de `decipher.final()`. Este módulo não compara chaves nem segredos por conta própria.
- * - A chave derivada é zerada depois de cada uso; nada é guardado em memória entre chamadas.
+ * - Entradas: `sealApiKey` recusa chave vazia ou só de espaços (um `sealed` de texto vazio não abriria
+ *   depois), e as duas funções recusam provedor fora de `AI_PROVIDER_IDS` (senão `undefined` viraria o AAD
+ *   `…:undefined`). As duas recusas são `SecretInputError`, conferidas antes de tocar em APP_SECRET.
+ * - Memória: este módulo não guarda nada entre chamadas. O que ele zera ao terminar cada chamada são os
+ *   Buffers que ele mesmo criou: a chave do AES derivada, a cópia em bytes de APP_SECRET usada no HKDF e,
+ *   em `openApiKey`, os bytes decifrados. O que NÃO é zerado, e não há como zerar daqui: as strings (a
+ *   chave de API recebida ou devolvida e APP_SECRET, que continua em `process.env`; strings do JavaScript
+ *   são imutáveis e ficam na memória até o coletor de lixo), a cópia da chave do AES dentro do objeto de
+ *   cifra do OpenSSL (liberada quando ele é coletado) e o que quem chama fizer com o valor devolvido.
+ *   Zerar os Buffers só encurta o tempo em que a chave derivada existe; não protege de quem lê a
+ *   memória do processo.
  */
 
 const VERSION = 1;
@@ -58,17 +68,43 @@ export function appSecretProblem(secret: string | undefined): string | null {
   return null;
 }
 
+/** Argumento inválido para cifrar ou decifrar: chave de API vazia, ou provedor fora de `AI_PROVIDER_IDS`. */
+export class SecretInputError extends Error {
+  override name = 'SecretInputError';
+  constructor(readonly reason: 'empty_key' | 'unknown_provider') {
+    // A mensagem nunca inclui o valor recebido: ele pode ser (parte de) um segredo.
+    super(reason === 'empty_key' ? 'a chave de API está vazia' : `provedor de IA desconhecido (use ${AI_PROVIDER_IDS.join(', ')})`);
+  }
+}
+
+function assertProvider(provider: unknown): asserts provider is AiProviderId {
+  if (typeof provider !== 'string' || !(AI_PROVIDER_IDS as readonly string[]).includes(provider)) {
+    throw new SecretInputError('unknown_provider');
+  }
+}
+
 function deriveKey(appSecret: string | undefined): Buffer {
   if (!appSecret || appSecret.trim() === '') throw new SecretMissingError('missing');
   const secret = appSecret.trim();
   if (secret.length < APP_SECRET_MIN_LENGTH) throw new SecretMissingError('too_short');
-  return Buffer.from(hkdfSync('sha256', Buffer.from(secret, 'utf8'), HKDF_SALT, HKDF_INFO, 32));
+  const ikm = Buffer.from(secret, 'utf8');
+  try {
+    // `hkdfSync` devolve um ArrayBuffer; o Buffer é uma visão dele, então zerar o Buffer zera a chave.
+    return Buffer.from(hkdfSync('sha256', ikm, HKDF_SALT, HKDF_INFO, 32));
+  } finally {
+    ikm.fill(0);
+  }
 }
 
 const aad = (provider: AiProviderId) => Buffer.from(`kv:ai-key:v${VERSION}:${provider}`, 'utf8');
 
-/** Cifra a chave de API de um provedor. Cada chamada usa um nonce novo. Lança SecretMissingError. */
+/**
+ * Cifra a chave de API de um provedor. Cada chamada usa um nonce novo. Lança SecretInputError (chave vazia
+ * ou só de espaços, provedor desconhecido) ou SecretMissingError. A chave não é aparada: isso é de quem chama.
+ */
 export function sealApiKey(plaintext: string, provider: AiProviderId, appSecret: string | undefined): Buffer {
+  assertProvider(provider);
+  if (typeof plaintext !== 'string' || plaintext.trim() === '') throw new SecretInputError('empty_key');
   const key = deriveKey(appSecret);
   try {
     const nonce = randomBytes(NONCE_BYTES);
@@ -81,20 +117,30 @@ export function sealApiKey(plaintext: string, provider: AiProviderId, appSecret:
   }
 }
 
-/** Decifra. Lança SecretMissingError (sem APP_SECRET) ou DecryptError (todo o resto). */
+/**
+ * Decifra. Lança SecretInputError (provedor desconhecido), SecretMissingError (sem APP_SECRET) ou
+ * DecryptError (todo o resto).
+ */
 export function openApiKey(sealed: Uint8Array, provider: AiProviderId, appSecret: string | undefined): string {
+  assertProvider(provider);
   const key = deriveKey(appSecret);
+  const parts: Buffer[] = [];
   try {
     const buf = Buffer.from(sealed);
     if (buf.length <= HEADER_BYTES || buf[0] !== VERSION) throw new DecryptError();
     const decipher = createDecipheriv('aes-256-gcm', key, buf.subarray(1, 1 + NONCE_BYTES), { authTagLength: TAG_BYTES });
     decipher.setAAD(aad(provider));
     decipher.setAuthTag(buf.subarray(1 + NONCE_BYTES, HEADER_BYTES));
-    return Buffer.concat([decipher.update(buf.subarray(HEADER_BYTES)), decipher.final()]).toString('utf8');
+    parts.push(decipher.update(buf.subarray(HEADER_BYTES)));
+    parts.push(decipher.final());
+    const plain = Buffer.concat(parts);
+    parts.push(plain);
+    return plain.toString('utf8');
   } catch (e) {
     if (e instanceof SecretMissingError) throw e;
     throw new DecryptError();
   } finally {
     key.fill(0);
+    for (const part of parts) part.fill(0);
   }
 }
