@@ -1,0 +1,42 @@
+# Dependências e builds são refeitos dentro da imagem.
+**/node_modules
+**/dist
+
+# Segredos e configuração local: a imagem recebe tudo por variável de ambiente.
+.env
+.env.*
+**/.env
+**/.env.*
+
+# Git, CI, documentação e arquivos de deploy não fazem parte do runtime.
+.git
+.gitignore
+.github
+.railway
+.claude
+.vscode
+docs
+data
+README.md
+LICENSE
+Dockerfile
+.dockerignore
+docker-compose.yml
+railway.json
+railway.toml
+worker.cmd
+*.log
+
+# Testes e seus artefatos. As fixtures dos conectores só são lidas pelos testes.
+**/*.test.ts
+vitest.config.ts
+packages/connectors/fixtures
+packages/connectors/scripts
+apps/web/e2e
+apps/web/playwright.config.ts
+**/test-results
+**/playwright-report
+
+# Scripts de desenvolvimento; só o start de produção entra na imagem.
+scripts/*
+!scripts/start-prod.mjs
