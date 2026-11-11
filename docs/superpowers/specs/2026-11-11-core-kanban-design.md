@@ -150,3 +150,14 @@ Decidido durante a implementação:
 - **Alvo de deploy:** Railway, em **um serviço**: um container roda API, worker e o web já buildado (servido pela API), com o SQLite em um volume do Railway (`DB_PATH` apontando para o volume). O uso local com `pnpm dev` não muda.
 - **Acesso:** o app ainda não tem login. Contas de usuário são um sub-projeto próprio. **Até esse sub-projeto existir, o app não deve ser exposto em URL pública**; o Core entrega só o container e a configuração prontos, sem domínio gerado.
 - Indeed depende de navegador e fica desligado por padrão no container.
+
+## Adendo (2026-11-11): Postgres / Supabase no lugar do SQLite
+
+Decidido durante a implementação; substitui as partes deste spec que citam SQLite e o volume do Railway:
+
+- **Banco:** Postgres sempre, via `DATABASE_URL`. Em produção, um projeto Supabase criado pelo dono do app; em desenvolvimento, Supabase ou o Postgres do `docker-compose.yml` incluído. Não há mais SQLite.
+- **Schema legível no Supabase:** datas como `timestamptz`, listas como `text[]`, booleanos nativos. O código continua trabalhando com epoch em milissegundos; a conversão fica na camada de banco.
+- **Migrations:** SQL versionado em `packages/db/migrations`, aplicado por `pnpm db:migrate` (rodado antes de `pnpm dev` e no start de produção).
+- **Segurança:** RLS habilitado em todas as tabelas, sem policies. O app acessa pelo `DATABASE_URL` (papel dono); a API pública do Supabase (chave anon) não enxerga nada.
+- **Testes:** unitários rodam em PGlite (Postgres em memória, sem serviço externo); e2e e CI usam um Postgres real.
+- **Railway:** continua um serviço só; o volume deixa de ser necessário.
