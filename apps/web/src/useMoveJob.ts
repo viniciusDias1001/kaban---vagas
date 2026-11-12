@@ -72,5 +72,18 @@ export function useMoveJob() {
     [qc, mutate],
   );
 
-  return { moveTo, isPending: mutation.isPending };
+  /**
+   * Muda só a coluna, sem calcular posição (a API mantém a atual). É o que o quadro usa quando a coluna de
+   * destino está ordenada por nota: ali a ordem exibida não corresponde às posições gravadas.
+   */
+  const moveToColumn = useCallback(
+    (id: number, column: Column) => {
+      const current = qc.getQueryData<JobListItemDto[]>(JOBS_KEY)?.find((j) => j.id === id);
+      if (current?.column === column) return;
+      mutate({ id, column });
+    },
+    [qc, mutate],
+  );
+
+  return { moveTo, moveToColumn, isPending: mutation.isPending };
 }

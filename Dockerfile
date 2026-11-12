@@ -4,8 +4,15 @@
 #
 #   docker build -t kanban-vagas .
 #   docker run --rm -p 8080:8080 -e DATABASE_URL=postgres://... kanban-vagas
+#   -e APP_SECRET=...   (necessário para gravar chaves de API pela aba Configurações; 32 caracteres ou mais,
+#                        sempre o mesmo valor: trocá-lo invalida as chaves gravadas)
 #
-# ATENÇÃO: o app ainda não tem login. Não publique este container em uma URL pública.
+# A IA de perfil não precisa de mais nada na imagem: as fontes do PDF (@fontsource/noto-sans) e os leitores de
+# PDF/DOCX são dependências de produção de @kv/resume, e a worker thread que lê os currículos
+# (packages/resume/src/extract-worker.ts) roda com o mesmo `--import tsx` do processo da API.
+#
+# ATENÇÃO: o app ainda não tem login. Não publique este container em uma URL pública: quem tiver a URL lê
+# tudo e, com uma chave de API gravada, gasta o seu dinheiro com ela.
 
 ARG NODE_IMAGE=node:24.15.0-bookworm-slim
 
@@ -22,8 +29,11 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/api/package.json apps/api/
 COPY apps/web/package.json apps/web/
 COPY apps/worker/package.json apps/worker/
+COPY packages/ai/package.json packages/ai/
 COPY packages/connectors/package.json packages/connectors/
 COPY packages/db/package.json packages/db/
+COPY packages/resume/package.json packages/resume/
+COPY packages/settings/package.json packages/settings/
 COPY packages/shared/package.json packages/shared/
 
 # --- build: todas as dependências (inclusive dev) só para gerar apps/web/dist -------------------------

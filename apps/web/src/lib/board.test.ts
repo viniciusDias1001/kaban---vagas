@@ -1,14 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import type { Column, JobDto, JobListItemDto } from '@kv/shared/client';
+import { toScoreMap } from './ai';
 import {
-  applyMove, countJobs, filterByColumn, groupByColumn, matchesFilter, mergeServerJob, normalizeText, remainingAfter,
+  applyMove, countJobs, displayColumn, filterByColumn, groupByColumn, matchesFilter, mergeServerJob, normalizeText, remainingAfter,
 } from './board';
 
 const job = (id: number, over: Partial<JobListItemDto> = {}): JobListItemDto => ({
   id, source: 'gupy', externalId: String(id), url: `https://example.com/${id}`, title: `Vaga ${id}`, company: 'Acme',
   location: 'SP', country: 'BR', remote: false, level: null, stacks: [], postedAt: null, discoveredAt: 1,
   profileId: null, column: 'descobertas', position: id, appliedBy: null, needsHuman: false, needsHumanReason: null,
-  notes: '', ...over,
+  notes: '', descriptionFetchedAt: null, ...over,
 });
 
 describe('normalizeText / matchesFilter', () => {
@@ -92,5 +93,17 @@ describe('remainingAfter', () => {
   it('never goes below zero', () => {
     expect(remainingAfter(700, 60)).toBe(640);
     expect(remainingAfter(40, 60)).toBe(0);
+  });
+});
+
+describe('displayColumn', () => {
+  const jobs = [{ id: 1 }, { id: 2 }, { id: 3 }];
+  const scores = toScoreMap([
+    { jobId: 2, score: 90, titlePt: null, language: null, stale: false },
+    { jobId: 3, score: 60, titlePt: null, language: null, stale: false },
+  ]);
+  it('keeps the board order (same array) unless sorting by score', () => {
+    expect(displayColumn(jobs, 'board', scores)).toBe(jobs);
+    expect(displayColumn(jobs, 'score', scores).map((j) => j.id)).toEqual([2, 3, 1]);
   });
 });

@@ -1,29 +1,6 @@
 import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
-
-/**
- * Junta erros de console, exceções da página, requisições que falharam e respostas 4xx/5xx. Nenhum 404 é
- * tolerado: as imagens do app (logo.png, empty.png, header-bg.jpg) existem em apps/web/public.
- */
-function collectProblems(page: Page) {
-  const problems: string[] = [];
-  const state = { navigating: false };
-  page.on('console', (msg) => {
-    if (msg.type() !== 'error') return;
-    problems.push(`console.error: ${msg.text()} (${msg.location().url})`);
-  });
-  page.on('pageerror', (err) => problems.push(`pageerror: ${err.message}`));
-  page.on('requestfailed', (req) => {
-    // Recarregar a página aborta as requisições em andamento; isso não é falha do app.
-    if (state.navigating && req.failure()?.errorText === 'net::ERR_ABORTED') return;
-    problems.push(`requestfailed: ${req.method()} ${req.url()} ${req.failure()?.errorText ?? ''}`);
-  });
-  page.on('response', (res) => {
-    if (res.status() < 400) return;
-    problems.push(`http ${res.status()}: ${res.request().method()} ${res.url()}`);
-  });
-  return { problems, state };
-}
+import { collectProblems } from './problems';
 
 /** Só grava screenshots quando E2E_SCREENSHOT_DIR está definida (inspeção visual manual). */
 async function snapshot(page: Page, name: string) {

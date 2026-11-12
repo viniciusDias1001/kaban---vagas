@@ -127,3 +127,71 @@ Tabelas novas, com RLS habilitado como as demais:
 6. Ao atingir o limite diário, nenhuma chamada automática é feita até o dia seguinte.
 7. Sem provedor configurado, todas as funções do Core continuam funcionando.
 8. Uma falha do provedor de IA não impede nem atrasa a busca horária de vagas.
+
+## Adendo (2026-11-11): aba Configurações
+
+Decidido após a aprovação do spec; onde conflitar com as seções acima, vale este adendo.
+
+**Motivo.** Configurar provedor, chave, modelos, orçamento e listas de empresas só por `.env` é pouco prático. O app ganha uma aba **Configurações**.
+
+**Conteúdo da aba**
+
+- *IA:* provedor (Claude, OpenAI, Gemini); modelo rápido e modelo forte, com os padrões do provedor pré-preenchidos; chave de API; limite diário de gasto; liga/desliga da camada 1 (triagem automática) e do disparo automático da camada 2; botão "Testar conexão"; gasto de hoje e dos últimos 30 dias.
+- *Fontes:* empresas consultadas no Greenhouse e no Lever; aviso de que o Indeed exige navegador visível e não funciona no container.
+- *Geral:* estado do worker e horário da próxima busca. O idioma de tradução permanece pt-BR nesta versão.
+
+O resumo de gasto e o estado da IA, antes previstos em "Meu perfil", ficam em Configurações; "Meu perfil" mantém currículo e perfil estruturado, com um atalho para Configurações quando a IA não está configurada.
+
+**Chave de API**
+
+- Digitada na aba e gravada no banco **cifrada** (AES-256-GCM, nonce aleatório por gravação) com chave derivada de `APP_SECRET`, que existe apenas no ambiente do servidor.
+- É de escrita apenas: a API nunca devolve a chave; a tela mostra só provedor, os quatro últimos caracteres e a data da gravação. Há ação para remover.
+- Uma chave por provedor; trocar de provedor não apaga as outras.
+- Se a variável de ambiente do provedor (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`) estiver definida, ela tem prioridade e a tela informa "definida pelo ambiente" sem permitir edição.
+- Sem `APP_SECRET`, gravar chave pela tela fica desabilitado, com a instrução de como gerar o segredo; as demais configurações funcionam.
+- Trocar `APP_SECRET` invalida as chaves gravadas: a decifragem falha de forma tratada e a tela pede a chave de novo.
+- A chave nunca aparece em log, mensagem de erro, resposta de API ou registro de uso.
+
+**Demais configurações**
+
+- Gravadas em uma tabela `settings` (chave, valor JSON, atualizado em), com RLS como as demais.
+- Precedência para valores não secretos: configuração gravada pela tela, depois variável de ambiente, depois padrão do código. As variáveis `AI_PROVIDER`, `AI_MODEL_FAST`, `AI_MODEL_STRONG`, `AI_DAILY_BUDGET_USD`, `GREENHOUSE_BOARDS` e `LEVER_COMPANIES` continuam válidas como padrão inicial.
+- API e worker leem a configuração do banco a cada uso (com cache curto), de modo que uma mudança na tela vale sem reiniciar processos.
+- Valores validados no servidor: modelos como texto curto, orçamento entre 0 e um teto, listas de empresas com tamanho e formato limitados.
+
+**Testar conexão**
+
+- Faz uma chamada mínima ao provedor com o modelo rápido e informa sucesso, chave inválida, modelo inexistente, sem crédito ou erro de rede, sem expor a chave.
+- Custa uma fração de centavo; é registrada no uso; tem limite de frequência no servidor.
+
+**Segurança**
+
+- As rotas de configuração seguem as proteções existentes (validação, guarda de origem, erro genérico em falha interna).
+- O alerta do Core continua: sem login, quem alcança o app consegue trocar o provedor e gastar a chave gravada, embora não consiga lê-la. O app não deve ficar em URL pública antes do sub-projeto de login.
+
+**Critérios de aceite adicionais**
+
+9. Configurar provedor, modelos, chave e orçamento pela tela põe a IA para funcionar sem editar arquivos nem reiniciar processos.
+10. Nenhuma resposta da API, log ou linha do banco contém a chave em texto puro.
+11. Com a variável de ambiente da chave definida, a tela não permite sobrescrevê-la e indica a origem.
+12. Sem `APP_SECRET`, a gravação de chave é recusada com instrução clara e o restante do app funciona.
+
+## Adendo (2026-11-11): correções da revisão final
+
+Decisões tomadas na revisão final, que refinam (sem contrariar) o que está acima:
+
+- **Camada 2 automática.** Continua disparando ao abrir a vaga ou movê-la para Selecionadas, mas um gatilho automático nunca refaz uma camada que terminou em erro: só um pedido explícito do usuário ("Tentar de novo", "Analisar esta vaga"), que vai marcado na requisição (`explicit: true`). A camada 2 lê e traduz os primeiros 12 000 caracteres da descrição, para a tradução inteira caber no teto de saída.
+- **Triagem resiliente.** Falha da camada 1 por indisponibilidade do provedor (chave, crédito, modelo, limite de taxa persistente) não marca a vaga: as tarefas esperam e o estado da IA expõe o motivo (`scoringPause`). Um lote que falha por conteúdo é refeito vaga a vaga. A varredura volta a enfileirar vagas com erro depois de 6 h, até 4 falhas por vaga.
+- **Custo.** Chamada abortada por tempo ou interrompida pelo encerramento do worker grava uso estimado pelo pior caso; a tentativa interrompida conta; tempo esgotado no modelo forte tem uma nova tentativa só. O padrão de US$ 1,00 por dia foi mantido.
+- **Perfil.** O `PUT` do perfil leva a versão de base e responde 409 em conflito; tarefas de perfil não sobrescrevem um perfil editado depois de pedidas.
+- **Privacidade.** `DELETE /ai/resumes/:lang` e `DELETE /ai/data` apagam os dados pessoais pela tela; `ai_usage` fica como contabilidade sem conteúdo pessoal; tarefas terminadas são apagadas depois de 30 dias.
+- **Rede.** A API recusa requisições cujo `Host` não é local, um IP ou um nome de `ALLOWED_HOSTS` (DNS rebinding).
+- **Dados.** Nenhuma migration nova: a pausa da triagem é derivada de `ai_tasks` (tarefa da camada 1 na fila, sem tentativa contada e com erro) e a marca de estimativa vai no texto de `ai_usage.model`.
+
+## Adendo (2026-11-11): análise automática desligada por padrão
+
+Decidido pelo dono após a revisão final, ao ver o custo real por chamada do modelo forte (cerca de US$ 0,07 típico e até US$ 0,37 no pior caso por análise, com o limite padrão de US$ 1 por dia). Substitui o comportamento padrão descrito em "Camadas de processamento":
+
+- A camada 1 (nota e título traduzido) continua automática em toda vaga nova.
+- A camada 2 (análise e tradução completa) **não dispara sozinha por padrão**: roda quando o usuário clica em "Analisar esta vaga". O interruptor "análise automática" em Configurações liga o disparo ao abrir a vaga e ao movê-la para Selecionadas.
+- O critério de aceite 2 passa a valer para a análise pedida pelo botão, ou para o movimento a Selecionadas quando a análise automática está ligada.

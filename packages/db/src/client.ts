@@ -90,7 +90,9 @@ export function dbErrorMessage(e: unknown): string {
   return root?.message || root?.errors?.[0]?.message || root?.code || outer?.message || String(e);
 }
 
-const TABLES = ['search_profiles', 'jobs', 'job_events', 'runs'];
+const TABLES = [
+  'search_profiles', 'jobs', 'job_events', 'runs', 'resumes', 'profiles', 'job_ai', 'tailored_resumes', 'ai_tasks', 'ai_usage', 'settings', 'ai_keys',
+];
 
 /** O banco respondeu, mas faltam tabelas: esperar não resolve, é preciso rodar as migrations. */
 export class DbNotMigratedError extends Error {

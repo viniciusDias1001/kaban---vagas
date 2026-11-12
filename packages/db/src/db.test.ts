@@ -57,17 +57,17 @@ describe('createDb', () => {
 });
 
 describe('migrations', () => {
-  it('creates the four tables with row level security enabled', async () => {
+  it('creates every table with row level security enabled', async () => {
     const rows = await rowsOf<{ relname: string; relrowsecurity: boolean }>(
       sql`select relname, relrowsecurity from pg_class
           where relnamespace = 'public'::regnamespace and relkind = 'r' order by relname`,
     );
-    expect(rows).toEqual([
-      { relname: 'job_events', relrowsecurity: true },
-      { relname: 'jobs', relrowsecurity: true },
-      { relname: 'runs', relrowsecurity: true },
-      { relname: 'search_profiles', relrowsecurity: true },
-    ]);
+    expect(rows).toEqual(
+      [
+        'ai_keys', 'ai_tasks', 'ai_usage', 'job_ai', 'job_events', 'jobs', 'profiles', 'resumes', 'runs', 'search_profiles',
+        'settings', 'tailored_resumes',
+      ].map((relname) => ({ relname, relrowsecurity: true })),
+    );
   });
 
   it('creates the indexes, including the partial unique one', async () => {
@@ -91,8 +91,11 @@ describe('migrations', () => {
     expect(position?.data_type).toBe('double precision');
     const times = rows.filter((r) => r.column_name !== 'position');
     expect(times.map((r) => `${r.table_name}.${r.column_name}`).sort()).toEqual([
-      'job_events.created_at', 'jobs.discovered_at', 'jobs.posted_at', 'runs.created_at',
-      'runs.finished_at', 'runs.started_at', 'search_profiles.created_at',
+      'ai_keys.updated_at', 'ai_tasks.created_at', 'ai_tasks.finished_at', 'ai_tasks.started_at', 'ai_usage.created_at',
+      'job_ai.tier1_at', 'job_ai.tier2_at', 'job_events.created_at', 'jobs.description_fetched_at', 'jobs.discovered_at',
+      'jobs.posted_at', 'profiles.updated_at', 'resumes.uploaded_at', 'runs.created_at', 'runs.finished_at',
+      'runs.started_at', 'search_profiles.created_at', 'settings.updated_at', 'tailored_resumes.created_at',
+      'tailored_resumes.edited_at',
     ]);
     expect(times.every((r) => r.data_type === 'timestamp with time zone')).toBe(true);
   });

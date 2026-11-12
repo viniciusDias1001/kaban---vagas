@@ -261,3 +261,19 @@ describe('insertNewJobs', () => {
     expect(await insertNewJobs(db, profile.id, [])).toBe(0);
   });
 });
+
+describe('descriptions from the connectors', () => {
+  it('are clipped to MAX_DESCRIPTION_CHARS before they are stored', async () => {
+    const { MAX_DESCRIPTION_CHARS } = await import('@kv/connectors');
+    const [profile] = await db
+      .insert(searchProfiles)
+      .values({ name: 'P', stacks: [], levels: [], maxAgeDays: 7, regions: [], sources: ['a'], active: true, createdAt: 1 })
+      .returning();
+    const huge = `${'x'.repeat(MAX_DESCRIPTION_CHARS - 1)}\u{1F600}${'y'.repeat(5_000)}`;
+    expect(await insertNewJobs(db, profile.id, [job(1, { description: huge }), job(2, { description: 'curta' })])).toBe(2);
+    const stored = await db.select().from(jobs).orderBy(asc(jobs.externalId));
+    expect(stored[0].description.length).toBeLessThanOrEqual(MAX_DESCRIPTION_CHARS);
+    expect(stored[0].description).not.toMatch(/[\ud800-\udbff]$/);
+    expect(stored[1].description).toBe('curta');
+  });
+});

@@ -1,18 +1,21 @@
 import { useDraggable, useDroppable } from '@dnd-kit/core';
 import { motion } from 'motion/react';
 import { memo, useCallback, useMemo, type KeyboardEvent } from 'react';
-import type { JobListItemDto } from '@kv/shared/client';
+import type { JobAiListItemDto, JobListItemDto } from '@kv/shared/client';
 import { ageLabel } from '../age';
+import { cardTitle } from '../lib/ai';
 import { spring } from '../lib/motion';
 import { cn } from '../lib/utils';
+import { LanguageBadge, ScoreBadge } from './ScoreBadge';
 import { SourceMark, sourceInfo } from './SourceMark';
 import { Badge } from './ui/badge';
+import { Tooltip } from './ui/tooltip';
 
 function Age({ postedAt }: { postedAt: number | null }) {
   const label = ageLabel(postedAt);
   const fresh = label === 'hoje';
   return (
-    <span className={cn('ml-auto flex shrink-0 items-center gap-1 pl-1 text-[11px] tabular-nums', fresh ? 'text-ok' : 'text-muted')}>
+    <span className={cn('flex shrink-0 items-center gap-1 pl-1 text-[11px] tabular-nums', fresh ? 'text-ok' : 'text-muted')}>
       {fresh && <span aria-hidden className="size-1.5 rounded-full bg-ok" />}
       {label}
     </span>
@@ -22,29 +25,49 @@ function Age({ postedAt }: { postedAt: number | null }) {
 /**
  * Hierarquia do card: título (o que se lê primeiro) → fonte + empresa + local → nível/stacks e idade.
  * No modo compacto ficam só as duas primeiras linhas, com a idade na segunda.
+ *
+ * Com `ai` (a vaga já tem nota) entram a nota ao lado do título, o idioma original e o título traduzido,
+ * com o original na dica. Sem `ai` o card fica exatamente como sempre foi: nada é reservado.
  */
-export function JobCardBody({ job, compact = false }: { job: JobListItemDto; compact?: boolean }) {
+export function JobCardBody({ job, compact = false, ai }: { job: JobListItemDto; compact?: boolean; ai?: JobAiListItemDto }) {
+  const shown = cardTitle(job.title, ai);
+  const scored = ai !== undefined && ai.score !== null;
+  const heading = (
+    <h3
+      title={shown.original ?? undefined}
+      className={cn('min-w-0 flex-1 text-[13px] font-semibold leading-[1.35] text-ink', compact ? 'truncate' : 'line-clamp-2')}
+    >
+      {shown.title}
+      {shown.original && <span className="sr-only"> (título original: {shown.original})</span>}
+    </h3>
+  );
+  const language = scored ? <LanguageBadge language={ai.language} /> : null;
   return (
     <div className={compact ? 'px-2.5 py-2' : 'p-3'}>
-      <h3 className={cn('text-[13px] font-semibold leading-[1.35] text-ink', compact ? 'truncate' : 'line-clamp-2')}>
-        {job.title}
-      </h3>
+      <div className="flex items-start gap-2">
+        {shown.original ? <Tooltip label={`Original: ${shown.original}`} side="top">{heading}</Tooltip> : heading}
+        {scored && <ScoreBadge ai={ai} className="-mr-0.5 -mt-px" />}
+      </div>
       <div className={cn('flex items-center gap-1.5 text-xs text-muted', compact ? 'mt-1' : 'mt-1.5')}>
         <SourceMark source={job.source} />
         <span className="sr-only">{sourceInfo(job.source).name}: </span>
         <p className="min-w-0 truncate">
           <span className="text-ink-2">{job.company}</span> · {job.remote ? 'Remoto' : job.location || 'Local n/d'}
         </p>
-        {compact && <Age postedAt={job.postedAt} />}
+        {compact && <span className="ml-auto flex shrink-0 items-center gap-1.5">{language}<Age postedAt={job.postedAt} /></span>}
       </div>
       {!compact && (
-        <div className="mt-2.5 flex items-center gap-1 overflow-hidden">
-          {job.level && <Badge tone="accent" className="capitalize">{job.level}</Badge>}
-          {job.stacks.slice(0, 3).map((s) => (
-            <Badge key={s}>{s}</Badge>
-          ))}
-          {job.needsHuman && <Badge tone="warn">precisa de você</Badge>}
-          <Age postedAt={job.postedAt} />
+        // As etiquetas quebram de linha quando não cabem; a idade fica fora delas e nunca é cortada ("hoje" virava "ho").
+        <div className="mt-2.5 flex items-start gap-1">
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
+            {language}
+            {job.level && <Badge tone="accent" className="capitalize">{job.level}</Badge>}
+            {job.stacks.slice(0, 3).map((s) => (
+              <Badge key={s} className="max-w-full truncate">{s}</Badge>
+            ))}
+            {job.needsHuman && <Badge tone="warn">precisa de você</Badge>}
+          </div>
+          <span className="flex h-5 shrink-0 items-center"><Age postedAt={job.postedAt} /></span>
         </div>
       )}
       {compact && job.needsHuman && <Badge tone="warn" className="mt-1.5">precisa de você</Badge>}
@@ -64,6 +87,10 @@ interface JobCardProps {
   animateLayout: boolean;
   index: number;
   compact: boolean;
+  /** Nota, idioma e título traduzido desta vaga; ausente quando a IA ainda não a avaliou. */
+  ai?: JobAiListItemDto;
+  /** false na coluna ordenada por nota: soltar sobre o card não o coloca "antes dele", então sem linha de inserção. */
+  insertable?: boolean;
 }
 
 /** Quantos cards do topo entram em cascata; os demais (fora da tela) aparecem de uma vez. */
@@ -117,7 +144,7 @@ const CardView = memo(function CardView(p: CardViewProps) {
       {...p.listeners}
       {...p.attributes}
     >
-      <JobCardBody job={job} compact={p.compact} />
+      <JobCardBody job={job} compact={p.compact} ai={p.ai} />
     </motion.article>
   );
 });
@@ -142,7 +169,7 @@ export const JobCard = memo(function JobCard(props: JobCardProps) {
       listeners={drag.listeners}
       attributes={drag.attributes}
       dragging={drag.isDragging}
-      over={drop.isOver && !drag.isDragging}
+      over={drop.isOver && !drag.isDragging && props.insertable !== false}
     />
   );
 });

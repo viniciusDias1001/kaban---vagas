@@ -20,6 +20,27 @@ export function resolveListen(env: Env = process.env): { host: string; port: num
   return { host: env.HOST || '127.0.0.1', port };
 }
 
+/** Só o nome: sem esquema, porta, caminho nem ponto final. Vazio quando não sobra um nome válido. */
+function bareHostname(raw: string): string {
+  const name = raw.trim().toLowerCase().replace(/^[a-z]+:\/\//, '').replace(/[/:].*$/, '').replace(/\.$/, '');
+  return /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/.test(name) ? name : '';
+}
+
+/**
+ * Nomes de host que a API aceita no cabeçalho `Host` ALÉM dos locais (`localhost`, `host.docker.internal` e
+ * qualquer IP), que valem sempre. Ver a trava de `Host` em app.ts (proteção contra DNS rebinding).
+ * - `ALLOWED_HOSTS`: nomes separados por vírgula (`kanban.exemplo.com,outro.exemplo.com`). Porta, esquema e
+ *   caminho são ignorados. É o que um deploy atrás de um domínio próprio precisa definir.
+ * - No Railway nada precisa ser definido: o domínio público (`RAILWAY_PUBLIC_DOMAIN`), o privado
+ *   (`RAILWAY_PRIVATE_DOMAIN`) e `healthcheck.railway.app` (o `Host` das requisições de healthcheck) entram sozinhos.
+ */
+export function resolveAllowedHosts(env: Env = process.env): string[] {
+  const listed = (env.ALLOWED_HOSTS ?? '').split(',');
+  const railway = [env.RAILWAY_PUBLIC_DOMAIN, env.RAILWAY_PRIVATE_DOMAIN].filter((d): d is string => !!d?.trim());
+  if (railway.length > 0) railway.push('healthcheck.railway.app');
+  return [...new Set([...listed, ...railway].map(bareHostname).filter(Boolean))];
+}
+
 /**
  * Diretório do web buildado a servir, ou undefined quando não há build (dev: o Vite serve o web e faz
  * proxy de /api). `WEB_DIST` aponta para outro diretório; sem ela vale `apps/web/dist`.

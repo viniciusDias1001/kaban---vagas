@@ -1,4 +1,5 @@
 import { COLUMNS, type Column, type JobDto, type JobListItemDto } from '@kv/shared/client';
+import { sortByScore, type ColumnSort, type ScoreMap } from './ai';
 
 export type ByColumn = Record<Column, JobListItemDto[]>;
 
@@ -63,3 +64,8 @@ export function mergeServerJob(jobs: readonly JobListItemDto[], server: JobDto |
 
 /** Quantos cards da coluna ficam fora da tela com o limite atual. */
 export const remainingAfter = (total: number, limit: number) => Math.max(0, total - limit);
+
+/** A lista de uma coluna na ordem de exibição: a do quadro, ou por nota. */
+export function displayColumn<T extends { id: number }>(jobs: readonly T[], sort: ColumnSort, scores: ScoreMap): readonly T[] {
+  return sort === 'score' ? sortByScore(jobs, scores) : jobs;
+}

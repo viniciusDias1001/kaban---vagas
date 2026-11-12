@@ -89,12 +89,12 @@ export interface TickResult {
 export function createQueue(db: Db, connectors: () => Connector[], opts: QueueOptions = {}) {
   const {
     maxConcurrent = 4,
-    run: runOptions = {},
-    staleAfterMs = maxSearchMs(runOptions) + STALE_MARGIN_MS,
+    staleAfterMs = maxSearchMs(opts.run) + STALE_MARGIN_MS,
     enqueue = () => enqueueAllActive(db),
     now = Date.now,
     log = () => {},
   } = opts;
+  const runOptions: RunOptions = { log, ...opts.run };
 
   /** Runs em execução neste processo: id -> fonte. */
   const inFlight = new Map<number, string>();

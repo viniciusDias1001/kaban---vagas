@@ -26,11 +26,21 @@ export default defineRailway(() => {
       // Tempo entre o SIGTERM e o SIGKILL no deploy anterior. API e worker encerram sozinhos em até ~9 s.
       drainingSeconds: 15,
     },
-    // Uma réplica só: o worker (busca horária + fila) e as migrations do start não foram feitos para rodar em paralelo.
+    // Uma réplica só: o worker (busca horária + fila de buscas + fila de IA) e as migrations do start não foram
+    // feitos para rodar em paralelo. Memória: a leitura de um currículo enviado pode ocupar algumas centenas de
+    // MB por alguns segundos; deixe o serviço com 1 GB ou mais.
     replicas: 1,
     env: {
       // Connection string do Postgres (Supabase). Defina o valor no painel do Railway; ele nunca fica no repo.
       DATABASE_URL: preserve(),
+      // Segredo que cifra as chaves de API gravadas pela aba Configurações (32 caracteres ou mais; como gerar,
+      // no .env.example). Defina no painel; ele nunca fica no repo. Trocar o valor invalida as chaves gravadas:
+      // a tela pede as chaves de novo. Sem ele, a IA só funciona com a chave em variável do serviço.
+      APP_SECRET: preserve(),
+      // ALLOWED_HOSTS não é necessária aqui: a API aceita sozinha o `Host` do domínio do serviço
+      // (RAILWAY_PUBLIC_DOMAIN / RAILWAY_PRIVATE_DOMAIN, injetadas pela plataforma) e o do healthcheck
+      // (healthcheck.railway.app). Só defina ALLOWED_HOSTS (nomes separados por vírgula) se o serviço for acessado
+      // por um domínio próprio; qualquer outro `Host` recebe 403 (proteção contra DNS rebinding).
     },
   });
 

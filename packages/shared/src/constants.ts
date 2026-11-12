@@ -33,6 +33,19 @@ export const LIMITS = {
   sources: 50,
   notes: 20_000,
   search: 100,
+  /** Currículo enviado: 5 MiB. O mesmo valor está no CHECK da tabela resumes. */
+  resumeBytes: 5 * 1024 * 1024,
+  resumeFileName: 200,
+  /** Texto extraído do currículo que segue para o modelo. */
+  resumeText: 60_000,
+  /** Campos curtos do perfil do candidato (nome, cargo, empresa, habilidade, datas, URL). */
+  profileShort: 200,
+  /** Resumo e cada realização. */
+  profileLong: 2_000,
+  /** Itens por lista do perfil (experiências, habilidades...). */
+  profileItems: 60,
+  /** Realizações por experiência. */
+  achievements: 20,
 } as const;
 
 /** O Postgres não aceita o caractere NUL em `text`: barrado na validação, em vez de virar erro 500. */

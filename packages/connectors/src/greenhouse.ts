@@ -1,4 +1,4 @@
-import type { NormalizedJob } from '@kv/shared';
+import { DEFAULT_GREENHOUSE_BOARDS, type NormalizedJob } from '@kv/shared';
 import { fetchJson } from './http';
 import { expectList, keepValid, stacksWithQuery, toMs } from './normalize';
 import { decodeEntities, stripHtml } from './text';
@@ -48,8 +48,11 @@ export function mapGreenhouse(data: { jobs: GreenhouseJob[] }, board: string): N
 export const greenhouse: Connector = {
   id: 'greenhouse',
   name: 'Greenhouse',
-  async search(_filters, signal) {
-    const boards = boardList('GREENHOUSE_BOARDS', ['gitlab', 'stripe', 'cloudflare', 'figma']);
+  async search(_filters, signal, config) {
+    // Lista da aba Configurações (entregue pelo worker); sem ela, a variável de ambiente ou o padrão.
+    const boards = config?.greenhouseBoards?.length
+      ? [...config.greenhouseBoards]
+      : boardList('GREENHOUSE_BOARDS', [...DEFAULT_GREENHOUSE_BOARDS]);
     const results = await Promise.allSettled(
       boards.map(async (b) =>
         mapGreenhouse(

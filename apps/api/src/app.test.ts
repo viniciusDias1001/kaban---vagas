@@ -152,6 +152,7 @@ describe('jobs', () => {
       location: 'SP', country: 'BR', remote: false, level: null, stacks: ['react', 'node'],
       postedAt: now, discoveredAt: now + 1, profileId: null, column: 'descobertas',
       position: -now + 0.5, appliedBy: null, needsHuman: false, needsHumanReason: null, notes: '',
+      descriptionFetchedAt: null,
     };
     // A lista do quadro não traz a descrição (nem o hash interno de deduplicação)...
     const [dto] = (await app.inject({ method: 'GET', url: '/jobs' })).json();

@@ -2,11 +2,12 @@ import { load } from 'cheerio';
 import type { NormalizedJob, Region } from '@kv/shared';
 import { collectQueries } from './collect';
 import { fetchText, sleep } from './http';
+import { LINKEDIN_MIN_INTERVAL_MS, createLane, linkedinLane, type Lane } from './lane';
 import { queriesFor, stacksWithQuery, toMs, validateJobs } from './normalize';
 import type { Connector } from './types';
 
 const BASE = 'https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search';
-const PAUSE_MS = 1500;
+const PAUSE_MS = LINKEDIN_MIN_INTERVAL_MS;
 
 export interface LinkedinTarget {
   /** Valor do parâmetro `location` da busca. */
@@ -99,12 +100,19 @@ function mergeById(jobs: NormalizedJob[]): NormalizedJob[] {
 export interface LinkedinDeps {
   fetchHtml: (url: string, signal?: AbortSignal) => Promise<string>;
   sleep: (ms: number) => Promise<void>;
+  /**
+   * Faixa das requisições ao LinkedIn. Sem ela o conector cria uma só dele, que só impede sobreposição
+   * (a pausa entre consultas continua sendo a de `sleep`); `linkedin` recebe `linkedinLane`, a mesma da
+   * busca de descrição.
+   */
+  lane: Lane;
 }
 
 export function createLinkedin(deps: Partial<LinkedinDeps> = {}): Connector {
   const {
     fetchHtml = (url: string, signal?: AbortSignal) => fetchText(url, {}, signal),
     sleep: pause = sleep,
+    lane = createLane(),
   } = deps;
   return {
     id: 'linkedin',
@@ -117,7 +125,11 @@ export function createLinkedin(deps: Partial<LinkedinDeps> = {}): Connector {
         'linkedin',
         searches,
         async ({ target, query }) => {
-          const html = await fetchHtml(linkedinUrl(target, query, filters.maxAgeDays), signal);
+          // Só a requisição ocupa a faixa: entre uma consulta e outra, um detalhe de vaga pode passar.
+          const html = await lane.run(async () => {
+            if (signal?.aborted) throw new Error('linkedin: busca cancelada');
+            return fetchHtml(linkedinUrl(target, query, filters.maxAgeDays), signal);
+          });
           return parseLinkedin(html, { country: target.country, remote: target.remote, query });
         },
         { pause: () => pause(PAUSE_MS), shouldStop: () => signal?.aborted === true },
@@ -127,4 +139,5 @@ export function createLinkedin(deps: Partial<LinkedinDeps> = {}): Connector {
   };
 }
 
-export const linkedin = createLinkedin();
+/** O conector em uso: divide a faixa do LinkedIn com a busca de descrição (`fetchJobDescription`). */
+export const linkedin = createLinkedin({ lane: linkedinLane });

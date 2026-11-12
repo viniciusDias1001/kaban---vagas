@@ -3,8 +3,10 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { JOBS_WRITE_LOCK, jobEvents, jobs, type Db } from '@kv/db';
 import { ColumnSchema, JobPatchSchema, LIMITS, hasNul, type Column, type JobListItemDto } from '@kv/shared';
+import type { AiContext } from '../ai-context';
 import { intendedIndex } from '../position';
 import { idParam, parseId } from './ids';
+import { requestAnalysis } from './job-ai';
 
 const notFound = { error: 'not_found', message: 'vaga não encontrada' };
 
@@ -31,7 +33,7 @@ const { description: _description, dedupHash: _dedupHash, ...LIST_COLUMNS } = ge
 /** `%`, `_` e a barra invertida são curingas/escape do LIKE: escapados, casam literalmente. */
 export const escapeLike = (term: string) => term.replace(/[\\%_]/g, (ch) => `\\${ch}`);
 
-export function jobRoutes(app: FastifyInstance, db: Db) {
+export function jobRoutes(app: FastifyInstance, db: Db, ctx: AiContext) {
   app.get('/jobs', async (req): Promise<JobListItemDto[]> => {
     // Parâmetro vazio (`?q=`) é o mesmo que ausente.
     const raw = Object.fromEntries(Object.entries(req.query as Record<string, unknown>).filter(([, v]) => v !== ''));
@@ -93,6 +95,13 @@ export function jobRoutes(app: FastifyInstance, db: Db) {
       return row;
     });
     if (!updated) return reply.code(404).send(notFound);
+    // Mover para Selecionadas pede a análise da vaga (camadas 1 e 2). É idempotente, e uma falha aqui
+    // não desfaz o movimento do card.
+    if (patch.column === 'selecionadas') {
+      await requestAnalysis(db, ctx, id, { auto: true }).catch((e) =>
+        console.error(`[api] análise da vaga ${id} não enfileirada: ${e instanceof Error ? e.message : String(e)}`),
+      );
+    }
     return updated;
   });
 }
