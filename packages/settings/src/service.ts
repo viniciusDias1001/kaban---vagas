@@ -144,7 +144,8 @@ export function createSettingsService(db: Db, opts: SettingsServiceOptions = {})
         DEFAULT_DAILY_BUDGET_USD,
       ),
       tier1Enabled: pick(stored.tier1Enabled as boolean | undefined, undefined, true),
-      tier2Auto: pick(stored.tier2Auto as boolean | undefined, undefined, true),
+      // Desligada por padrão: cada análise usa o modelo forte e custa bem mais que a nota da camada 1.
+      tier2Auto: pick(stored.tier2Auto as boolean | undefined, undefined, false),
       greenhouseBoards: pick(stored.greenhouseBoards as string[] | undefined, envList('GREENHOUSE_BOARDS'), [...DEFAULT_GREENHOUSE_BOARDS]),
       leverCompanies: pick(stored.leverCompanies as string[] | undefined, envList('LEVER_COMPANIES'), [...DEFAULT_LEVER_COMPANIES]),
       budgetTimeZone: tz && isTimeZone(tz) ? tz : DEFAULT_BUDGET_TIME_ZONE,

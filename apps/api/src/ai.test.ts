@@ -36,7 +36,7 @@ describe('GET /ai/status and /ai/usage', () => {
 
     const status = (await app.inject({ method: 'GET', url: '/ai/status' })).json();
     expect(status).toEqual({
-      configured: true, problem: null, provider: 'fake', models: { fast: 'fake-fast', strong: 'fake-strong' }, tier2Auto: true,
+      configured: true, problem: null, provider: 'fake', models: { fast: 'fake-fast', strong: 'fake-strong' }, tier2Auto: false,
       budget: { dailyUsd: 1, spentTodayUsd: expect.closeTo(1.1), exceeded: true, timeZone: 'America/Sao_Paulo' },
       scoringPause: null,
     });

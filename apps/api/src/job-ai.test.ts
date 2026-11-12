@@ -67,20 +67,19 @@ describe('moving a job to selecionadas', () => {
   const move = (id: number, column: string) =>
     app.inject({ method: 'PATCH', url: `/api/jobs/${id}`, payload: { column, position: 0 } });
 
-  it('queues the analysis; other columns do not', async () => {
+  it('with automatic analysis on, queues the analysis; other columns do not', async () => {
     await saveProfile(db, 'pt-BR', SAMPLE_PROFILE, 'extraido');
     const job = await seedJob(db);
+    expect((await app.inject({ method: 'PATCH', url: '/settings', payload: { tier2Auto: true } })).statusCode).toBe(200);
     expect((await move(job.id, 'arquivada')).statusCode).toBe(200);
     expect(await taskTypes()).toEqual([]);
     expect((await move(job.id, 'selecionadas')).json().column).toBe('selecionadas');
     expect(await taskTypes()).toEqual(['tier1:queued', 'tier2:queued']);
   });
 
-  it('respects the "automatic analysis" setting: off means the move queues nothing, an explicit request still does', async () => {
+  it('automatic analysis is off by default: the move queues nothing, an explicit request still does', async () => {
     await saveProfile(db, 'pt-BR', SAMPLE_PROFILE, 'extraido');
     const job = await seedJob(db);
-    const off = await app.inject({ method: 'PATCH', url: '/settings', payload: { tier2Auto: false } });
-    expect(off.statusCode).toBe(200);
     expect((await move(job.id, 'selecionadas')).statusCode).toBe(200);
     expect(await taskTypes()).toEqual([]);
     expect((await app.inject({ method: 'GET', url: '/ai/status' })).json().tier2Auto).toBe(false);

@@ -59,7 +59,7 @@ describe('GET /settings and PATCH /settings', () => {
       modelFast: { value: 'gpt-6-luna', source: 'default' },
       dailyBudgetUsd: { value: 1, source: 'default' },
       tier1Enabled: { value: true, source: 'default' },
-      tier2Auto: { value: true, source: 'default' },
+      tier2Auto: { value: false, source: 'default' },
       canStoreKeys: true, secretProblem: null, configured: false,
     });
     expect(dto.ai.problem).toMatch(/Falta a chave de API de OpenAI/);

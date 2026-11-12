@@ -178,6 +178,9 @@ test('settings from the screen, write-only key, resume upload, score, analysis, 
   await expect(drawer.getByRole('heading', { name: JOB_TITLE })).toBeVisible();
   await expect(drawer.getByTestId('job-original-title')).toHaveCount(0);
   const analysis = drawer.getByTestId('ai-analysis');
+  // A análise automática vem desligada: abrir a vaga não gasta; o usuário pede pelo botão.
+  await expect(analysis).toContainText('A análise automática está desligada em Configurações.');
+  await analysis.getByRole('button', { name: 'Analisar esta vaga' }).click();
   await expect(analysis).toContainText('Experiência com React', { timeout: 60_000 });
   await expect(analysis).toContainText('Conte sobre um projeto recente.');
 

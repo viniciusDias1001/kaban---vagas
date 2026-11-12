@@ -32,7 +32,7 @@ describe('precedence: screen > environment > code default', () => {
       modelStrong: { value: null, source: 'default' },
       dailyBudgetUsd: { value: 1, source: 'default' },
       tier1Enabled: { value: true, source: 'default' },
-      tier2Auto: { value: true, source: 'default' },
+      tier2Auto: { value: false, source: 'default' },
       greenhouseBoards: { value: ['gitlab', 'stripe', 'cloudflare', 'figma'], source: 'default' },
       leverCompanies: { value: ['palantir', 'spotify'], source: 'default' },
       budgetTimeZone: 'America/Sao_Paulo',

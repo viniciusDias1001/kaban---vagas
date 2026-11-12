@@ -124,7 +124,7 @@ Mil vagas novas custam de US$ 0,10 a US$ 0,50 na camada 1, conforme o provedor; 
 
 **Limite diário.** Padrão de US$ 1,00 por dia, editável em Configurações (de 0 a 100). Quando o gasto estimado do dia atinge o limite: as notas automáticas (camada 1) pausam até o dia seguinte, e análises, currículos adaptados e leituras de currículo ficam esperando, com um botão "Executar mesmo assim" que vale para aquela execução. Com limite 0, toda chamada pede essa confirmação. O "dia" vira à meia-noite do fuso `AI_BUDGET_TZ` (padrão `America/Sao_Paulo`).
 
-Quanto o limite padrão compra, com o Claude (no OpenAI, o dobro): cerca de **11 análises típicas** de vagas em inglês por dia (15 em português), ou cerca de 14 currículos adaptados. No **pior caso** (US$ 0,37 por análise) são só **2 a 3**: o limite é conferido antes de cada chamada, não durante, então a terceira ainda começa com US$ 0,75 gastos e o dia fecha perto de US$ 1,12. As notas da camada 1 praticamente não pesam nessa conta. Com a "análise automática" ligada (o padrão), cada vaga aberta ou movida para Selecionadas pela primeira vez é uma dessas análises; desligue-a em Configurações se preferir pedir uma a uma pelo botão.
+Quanto o limite padrão compra, com o Claude (no OpenAI, o dobro): cerca de **11 análises típicas** de vagas em inglês por dia (15 em português), ou cerca de 14 currículos adaptados. No **pior caso** (US$ 0,37 por análise) são só **2 a 3**: o limite é conferido antes de cada chamada, não durante, então a terceira ainda começa com US$ 0,75 gastos e o dia fecha perto de US$ 1,12. As notas da camada 1 praticamente não pesam nessa conta. Por isso a "análise automática" começa **desligada**: a análise só roda quando você clica em "Analisar esta vaga". Se você ligá-la em Configurações, cada vaga aberta ou movida para Selecionadas pela primeira vez passa a ser uma dessas análises.
 
 **Não inventa.** O currículo adaptado é montado por referência a itens do seu perfil: empresa, cargo, datas, formação, habilidades, idiomas, certificações e links são copiados do perfil pelo servidor; o modelo só reescreve o resumo e as realizações. Antes de qualquer coisa ser gravada, um verificador em código confere o que o modelo devolveu. Se algo diverge, o modelo recebe uma única nova tentativa com a lista do que divergiu; se ainda assim não passar, o resultado é descartado e a tela diz o porquê. Ao editar o texto você mesmo, estrutura e limites continuam bloqueando o salvamento, e o resto vira aviso, porque o autor passa a ser você. O download do PDF confere tudo de novo contra o perfil atual.
 
@@ -277,7 +277,7 @@ As marcadas com (*) são só o **valor inicial**: podem ser trocadas na aba Conf
 | `E2E_SCREENSHOT_DIR` | desligado | Só no `pnpm e2e`: pasta onde o teste grava screenshots |
 | `CI` | desligado | No `pnpm e2e`: com `CI` definida, o Playwright gera relatório HTML e proíbe `test.only`. No `pnpm ai:smoke`: com `CI` definida, ele se recusa a rodar |
 
-A triagem automática e a análise automática (os dois interruptores da aba Configurações) não têm variável de ambiente: começam ligadas e só mudam pela tela.
+A triagem automática e a análise automática (os dois interruptores da aba Configurações) não têm variável de ambiente e só mudam pela tela: a triagem começa ligada (custa quase nada por vaga) e a análise automática começa desligada (usa o modelo forte).
 
 ## Desenvolvimento
 

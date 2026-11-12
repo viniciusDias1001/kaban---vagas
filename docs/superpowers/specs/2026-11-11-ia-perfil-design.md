@@ -187,3 +187,11 @@ Decisões tomadas na revisão final, que refinam (sem contrariar) o que está ac
 - **Privacidade.** `DELETE /ai/resumes/:lang` e `DELETE /ai/data` apagam os dados pessoais pela tela; `ai_usage` fica como contabilidade sem conteúdo pessoal; tarefas terminadas são apagadas depois de 30 dias.
 - **Rede.** A API recusa requisições cujo `Host` não é local, um IP ou um nome de `ALLOWED_HOSTS` (DNS rebinding).
 - **Dados.** Nenhuma migration nova: a pausa da triagem é derivada de `ai_tasks` (tarefa da camada 1 na fila, sem tentativa contada e com erro) e a marca de estimativa vai no texto de `ai_usage.model`.
+
+## Adendo (2026-11-11): análise automática desligada por padrão
+
+Decidido pelo dono após a revisão final, ao ver o custo real por chamada do modelo forte (cerca de US$ 0,07 típico e até US$ 0,37 no pior caso por análise, com o limite padrão de US$ 1 por dia). Substitui o comportamento padrão descrito em "Camadas de processamento":
+
+- A camada 1 (nota e título traduzido) continua automática em toda vaga nova.
+- A camada 2 (análise e tradução completa) **não dispara sozinha por padrão**: roda quando o usuário clica em "Analisar esta vaga". O interruptor "análise automática" em Configurações liga o disparo ao abrir a vaga e ao movê-la para Selecionadas.
+- O critério de aceite 2 passa a valer para a análise pedida pelo botão, ou para o movimento a Selecionadas quando a análise automática está ligada.
