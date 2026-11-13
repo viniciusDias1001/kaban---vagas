@@ -2,7 +2,8 @@ import { sql } from 'drizzle-orm';
 import { boolean, check, doublePrecision, index, integer, jsonb, pgTable, text, uniqueIndex } from 'drizzle-orm/pg-core';
 import type {
   Actor, AiLayer, AiProviderId, AiTaskStatus, AiTaskType, CandidateProfile, Column, JobAnalysis, Level, MaxAge, ProfileOrigin, Region,
-  ResumeLang, TailoredResume,
+  ResumeLang, TailoredResume, AnswerRecord, AnswerScope, ApplicationReason, ApplicationStatus, ApplyMode, ApplySiteId, ApplyTrigger,
+  PendingQuestion, ShotKind, SitePauseReason, SiteSession,
 } from '@kv/shared';
 import { bytea } from './bytea';
 import { epochMs } from './epoch-ms';
@@ -250,4 +251,124 @@ export const aiKeys = pgTable('ai_keys', {
   sealed: bytea('sealed').notNull(),
   last4: text('last4').notNull(),
   updatedAt: epochMs('updated_at').notNull(),
+}).enableRLS();
+
+// ---------------------------------------------------------------------------------------------
+// Candidatura automática
+// ---------------------------------------------------------------------------------------------
+
+/** Uma candidatura por vaga (índice único em `job_id`). */
+export const applications = pgTable(
+  'applications',
+  {
+    id: integer('id').primaryKey().generatedAlwaysAsIdentity(),
+    jobId: integer('job_id')
+      .notNull()
+      .references(() => jobs.id, { onDelete: 'cascade' }),
+    site: text('site').$type<ApplySiteId>().notNull(),
+    status: text('status').$type<ApplicationStatus>().notNull(),
+    reason: text('reason').$type<ApplicationReason>(),
+    detail: text('detail'),
+    trigger: text('trigger').$type<ApplyTrigger>().notNull(),
+    mode: text('mode').$type<ApplyMode>().notNull(),
+    gateScore: integer('gate_score'),
+    resumeLang: text('resume_lang').$type<ResumeLang>(),
+    resumeFileName: text('resume_file_name'),
+    /** Nunca selecione esta coluna em listagens: são até 2 MiB por linha. */
+    resumePdf: bytea('resume_pdf'),
+    answers: jsonb('answers').$type<AnswerRecord[]>().notNull().default([]),
+    pendingQuestions: jsonb('pending_questions').$type<PendingQuestion[]>().notNull().default([]),
+    confirmation: text('confirmation'),
+    contactEmail: text('contact_email'),
+    shots: jsonb('shots').$type<Partial<Record<ShotKind, string>>>().notNull().default({}),
+    attempts: integer('attempts').notNull().default(0),
+    cancelRequested: boolean('cancel_requested').notNull().default(false),
+    waitingGate: text('waiting_gate').$type<'captcha' | 'verification_code' | 'login' | 'restricted'>(),
+    runAfter: epochMs('run_after'),
+    viewedAt: epochMs('viewed_at'),
+    formOpenedAt: epochMs('form_opened_at'),
+    createdAt: epochMs('created_at').notNull(),
+    startedAt: epochMs('started_at'),
+    submittedAt: epochMs('submitted_at'),
+    finishedAt: epochMs('finished_at'),
+  },
+  (t) => [
+    uniqueIndex('applications_job_idx').on(t.jobId),
+    index('applications_status_idx').on(t.status),
+    // 2 MiB; a API recusa antes, este é o cinto de segurança.
+    check('applications_pdf_size_check', sql`octet_length(${t.resumePdf}) <= 2097152`),
+  ],
+).enableRLS();
+
+export const applicationEvents = pgTable(
+  'application_events',
+  {
+    id: integer('id').primaryKey().generatedAlwaysAsIdentity(),
+    applicationId: integer('application_id')
+      .notNull()
+      .references(() => applications.id, { onDelete: 'cascade' }),
+    status: text('status').$type<ApplicationStatus>().notNull(),
+    message: text('message'),
+    createdAt: epochMs('created_at').notNull(),
+  },
+  (t) => [index('application_events_application_idx').on(t.applicationId)],
+).enableRLS();
+
+/** Banco de respostas do dono para perguntas de formulário. */
+export const applyAnswers = pgTable(
+  'apply_answers',
+  {
+    id: integer('id').primaryKey().generatedAlwaysAsIdentity(),
+    question: text('question').notNull(),
+    normalized: text('normalized').notNull(),
+    key: text('key'),
+    answer: text('answer').notNull().default(''),
+    kind: text('kind').$type<'text' | 'number' | 'boolean' | 'choice'>().notNull(),
+    scope: text('scope').$type<AnswerScope>().notNull().default('always'),
+    scopeValue: text('scope_value'),
+    country: text('country'),
+    aliases: jsonb('aliases').$type<{ normalized: string; options: string[]; value: string }[]>().notNull().default([]),
+    usedCount: integer('used_count').notNull().default(0),
+    createdAt: epochMs('created_at').notNull(),
+    updatedAt: epochMs('updated_at').notNull(),
+  },
+  (t) => [
+    index('apply_answers_normalized_idx').on(t.normalized),
+    /** `key` nulo não conflita (nulos são distintos); preenchido, é único por país. */
+    uniqueIndex('apply_answers_key_idx').on(t.key, t.country),
+  ],
+).enableRLS();
+
+/** Comandos do app para o worker (abrir login, conferir sessão...). */
+export const applyCommands = pgTable(
+  'apply_commands',
+  {
+    id: integer('id').primaryKey().generatedAlwaysAsIdentity(),
+    kind: text('kind').notNull(),
+    site: text('site').$type<ApplySiteId>().notNull(),
+    status: text('status').$type<RunStatus>().notNull(),
+    result: text('result'),
+    createdAt: epochMs('created_at').notNull(),
+    finishedAt: epochMs('finished_at'),
+  },
+  (t) => [
+    uniqueIndex('apply_commands_pending_idx')
+      .on(t.kind, t.site)
+      .where(sql`${t.status} IN ('queued', 'running')`),
+  ],
+).enableRLS();
+
+/** Estado de execução de cada site: sessão, pausa e sequências de falha. */
+export const applySites = pgTable('apply_sites', {
+  site: text('site').$type<ApplySiteId>().primaryKey(),
+  session: text('session').$type<SiteSession>().notNull().default('unknown'),
+  sessionCheckedAt: epochMs('session_checked_at'),
+  paused: boolean('paused').notNull().default(false),
+  pauseReason: text('pause_reason').$type<SitePauseReason>(),
+  pausedAt: epochMs('paused_at'),
+  consecutiveFailures: integer('consecutive_failures').notNull().default(0),
+  consecutiveRejections: integer('consecutive_rejections').notNull().default(0),
+  humanTimeouts: integer('human_timeouts').notNull().default(0),
+  lastFormAt: epochMs('last_form_at'),
+  lastViewAt: epochMs('last_view_at'),
 }).enableRLS();

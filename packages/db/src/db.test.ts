@@ -64,7 +64,7 @@ describe('migrations', () => {
     );
     expect(rows).toEqual(
       [
-        'ai_keys', 'ai_tasks', 'ai_usage', 'job_ai', 'job_events', 'jobs', 'profiles', 'resumes', 'runs', 'search_profiles',
+        'ai_keys', 'ai_tasks', 'ai_usage', 'application_events', 'applications', 'apply_answers', 'apply_commands', 'apply_sites', 'job_ai', 'job_events', 'jobs', 'profiles', 'resumes', 'runs', 'search_profiles',
         'settings', 'tailored_resumes',
       ].map((relname) => ({ relname, relrowsecurity: true })),
     );
@@ -96,7 +96,11 @@ describe('migrations', () => {
       'jobs.posted_at', 'profiles.updated_at', 'resumes.uploaded_at', 'runs.created_at', 'runs.finished_at',
       'runs.started_at', 'search_profiles.created_at', 'settings.updated_at', 'tailored_resumes.created_at',
       'tailored_resumes.edited_at',
-    ]);
+      'application_events.created_at', 'applications.created_at', 'applications.finished_at', 'applications.form_opened_at',
+      'applications.started_at', 'applications.submitted_at', 'applications.viewed_at',
+      'apply_answers.created_at', 'apply_answers.updated_at', 'apply_commands.created_at', 'apply_commands.finished_at',
+      'apply_sites.last_form_at', 'apply_sites.last_view_at', 'apply_sites.paused_at', 'apply_sites.session_checked_at',
+    ].sort());
     expect(times.every((r) => r.data_type === 'timestamp with time zone')).toBe(true);
   });
 

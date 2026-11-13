@@ -19,6 +19,6 @@ export async function createTestDb(): Promise<Db> {
 /** Esvazia todas as tabelas e reinicia os ids — bem mais rápido que criar um banco por teste. */
 export async function resetTestDb(db: Db): Promise<void> {
   await db.execute(sql`truncate table search_profiles, jobs, job_events, runs, resumes, profiles, job_ai, tailored_resumes, ai_tasks, ai_usage,
-        settings, ai_keys
+        settings, ai_keys, applications, application_events, apply_answers, apply_commands, apply_sites
         restart identity cascade`);
 }

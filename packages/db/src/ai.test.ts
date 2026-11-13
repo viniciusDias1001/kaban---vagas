@@ -49,7 +49,7 @@ describe('ai tables', () => {
           where relnamespace = 'public'::regnamespace and relkind = 'r' order by relname`,
     );
     expect(rows.map((r) => r.relname)).toEqual([
-      'ai_keys', 'ai_tasks', 'ai_usage', 'job_ai', 'job_events', 'jobs', 'profiles', 'resumes', 'runs', 'search_profiles',
+      'ai_keys', 'ai_tasks', 'ai_usage', 'application_events', 'applications', 'apply_answers', 'apply_commands', 'apply_sites', 'job_ai', 'job_events', 'jobs', 'profiles', 'resumes', 'runs', 'search_profiles',
       'settings', 'tailored_resumes',
     ]);
     expect(rows.every((r) => r.relrowsecurity)).toBe(true);

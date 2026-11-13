@@ -15,6 +15,13 @@
       "when": 1794426621672,
       "tag": "0001_ai_profile",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1794539851122,
+      "tag": "0002_auto_apply",
+      "breakpoints": true
     }
   ]
 }
