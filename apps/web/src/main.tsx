@@ -11,8 +11,8 @@ import { showToast } from './toast';
 
 const onError = (e: Error) => showToast(e.message);
 const queryClient = new QueryClient({
-  queryCache: new QueryCache({ onError }),
-  // `meta.inlineError`: a tela que disparou a mutação mostra o erro junto do campo; o aviso flutuante repetiria.
+  // `meta.inlineError`: a tela que pediu os dados (ou disparou a mutação) mostra o erro nela; o aviso flutuante repetiria.
+  queryCache: new QueryCache({ onError: (e, query) => { if (query.meta?.inlineError !== true) onError(e); } }),
   mutationCache: new MutationCache({ onError: (e, _vars, _ctx, mutation) => { if (mutation.meta?.inlineError !== true) onError(e); } }),
   defaultOptions: { queries: { retry: 1, staleTime: 5_000 } },
 });

@@ -11,5 +11,7 @@ export function useDashboard(period: DashboardPeriod) {
     queryFn: () => getDashboard(period),
     refetchInterval: DASHBOARD_REFETCH_MS,
     placeholderData: keepPreviousData,
+    // O Painel mostra o erro na própria página, com "Tentar de novo": sem o aviso flutuante repetindo a frase.
+    meta: { inlineError: true },
   });
 }

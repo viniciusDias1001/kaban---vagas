@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { Activity, CircleAlert, CircleCheck, Columns3, Send, Settings, SlidersHorizontal, TriangleAlert, UserRound } from 'lucide-react';
+import { Activity, ChartColumn, CircleAlert, CircleCheck, Columns3, Send, Settings, SlidersHorizontal, TriangleAlert, UserRound } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Suspense, lazy, useCallback, useEffect, useState } from 'react';
 import type { ApplicationFilter } from '@kv/shared/client';
@@ -22,22 +22,24 @@ const HealthPanel = lazy(() => import('./components/HealthPanel').then((m) => ({
 const MyProfilePage = lazy(() => import('./components/MyProfilePage').then((m) => ({ default: m.MyProfilePage })));
 const SettingsPage = lazy(() => import('./components/SettingsPage').then((m) => ({ default: m.SettingsPage })));
 const ApplicationsPage = lazy(() => import('./components/ApplicationsPage').then((m) => ({ default: m.ApplicationsPage })));
+const PainelPage = lazy(() => import('./components/PainelPage'));
 
-type View = 'quadro' | 'candidaturas' | 'perfis' | 'fontes' | 'perfil' | 'config';
+type View = 'quadro' | 'candidaturas' | 'painel' | 'perfis' | 'fontes' | 'perfil' | 'config';
 const VIEWS: { id: View; label: string; icon: typeof Columns3 }[] = [
   { id: 'quadro', label: 'Quadro', icon: Columns3 },
   { id: 'candidaturas', label: 'Candidaturas', icon: Send },
+  { id: 'painel', label: 'Painel', icon: ChartColumn },
   { id: 'perfis', label: 'Perfis de busca', icon: SlidersHorizontal },
   { id: 'fontes', label: 'Saúde das fontes', icon: Activity },
   { id: 'perfil', label: 'Meu perfil', icon: UserRound },
   { id: 'config', label: 'Configurações', icon: Settings },
 ];
 /**
- * Abaixo desta largura as seis seções não cabem com o rótulo inteiro: as não ativas mostram só o ícone. O
+ * Abaixo desta largura as sete seções (e o sino) não cabem com o rótulo inteiro: as não ativas mostram só o ícone. O
  * rótulo continua no botão (escondido só da vista), então o nome acessível não muda, e aparece na dica.
- * O mesmo limite está nas classes `max-[1151px]:` dos botões abaixo.
+ * O mesmo limite está nas classes `max-[1399px]:` dos botões abaixo.
  */
-const COMPACT_NAV = '(max-width: 1151px)';
+const COMPACT_NAV = '(max-width: 1399px)';
 /** De quanto em quanto tempo o aviso do worker é recalculado numa aba parada. */
 const STALE_CHECK_MS = 60_000;
 
@@ -104,7 +106,7 @@ export function App() {
                   aria-current={active ? 'page' : undefined}
                   className={cn(
                     'relative flex h-8 cursor-pointer items-center gap-1.5 rounded-full px-3.5 text-[13px] font-medium transition-colors duration-150 active:scale-[0.97]',
-                    active ? 'text-ink' : 'text-muted hover:text-ink max-[1151px]:px-2.5',
+                    active ? 'text-ink' : 'text-muted hover:text-ink max-[1399px]:px-2.5',
                   )}
                 >
                   {active && (
@@ -114,8 +116,8 @@ export function App() {
                       className="absolute inset-0 rounded-full bg-accent/18 shadow-[inset_0_1px_0_rgb(255_255_255/0.08)] ring-1 ring-inset ring-accent/35"
                     />
                   )}
-                  <v.icon aria-hidden className={cn('relative transition-colors', active ? 'size-3.5 text-accent' : 'size-3.5 text-faint max-[1151px]:size-4')} />
-                  <span className={cn('relative whitespace-nowrap', !active && 'max-[1151px]:sr-only')}>{v.label}</span>
+                  <v.icon aria-hidden className={cn('relative transition-colors', active ? 'size-3.5 text-accent' : 'size-3.5 text-faint max-[1399px]:size-4')} />
+                  <span className={cn('relative whitespace-nowrap', !active && 'max-[1399px]:sr-only')}>{v.label}</span>
                   {v.id === 'candidaturas' && applyWaiting && (
                     <span data-testid="nav-applications-waiting" className="absolute right-1 top-1 flex size-2">
                       <span aria-hidden className="absolute inset-0 animate-pulse-dot rounded-full bg-warn" />
@@ -161,6 +163,7 @@ export function App() {
           {view === 'quadro' && <Board onOpen={setOpenJob} onShowNeedsHuman={showNeedsHuman} />}
           <Suspense fallback={null}>
             {view === 'candidaturas' && <ApplicationsPage initialFilter={applicationsFilter} onOpenJob={setOpenJob} />}
+            {view === 'painel' && <PainelPage />}
             {view === 'perfis' && <ProfilesPage onRunQueued={catchUp} />}
             {view === 'fontes' && <HealthPanel />}
             {view === 'perfil' && <MyProfilePage onOpenSettings={openSettings} />}
