@@ -17,8 +17,10 @@ export interface EngineDeps {
   mode: ApplyMode;
   resumePath: string;
   /**
-   * The answers of a rehearsal that the owner saw and explicitly asked to send ("Enviar de verdade").
-   * Empty everywhere else: a first run, a retry, a run after the owner answered a pending question.
+   * The answers of a rehearsal that the owner saw and explicitly asked to send ("Enviar de verdade"). The worker
+   * passes them on every real run of that application (a retry and a run after a pending question included): once
+   * approved for sending, they stay approved for that application until it is sent. Empty for an application the
+   * owner never approved that way.
    */
   approved: AnswerRecord[];
   /** Resolves the questions of one step. The caller binds `approved`, the bank and the profile. */
@@ -80,8 +82,9 @@ const toRecord = (answer: ResolvedAnswer, question: Question): AnswerRecord => (
  *
  * Ordering guarantees: `report({ status: 'submitting' })` is awaited and must return true before every `submit`
  * click; after any `report` returns false nothing is submitted; a `submit` is called again only after a gate on
- * screen was solved by the owner (the site scripts guarantee `submit` does not click twice when the confirmation
- * is already showing), never blindly after an error. Before the first click, an error the engine does not classify
+ * screen was solved by the owner, never blindly after an error. On that call the site script does not click at once:
+ * it waits for the first submission to land and clicks again only when nothing can still be in flight (see
+ * `submitAndWait`); in doubt it throws, and that ends as `confirm_submission`. Before the first click, an error the engine does not classify
  * discards the form and is rethrown; after it, nothing is rethrown.
  */
 export async function runApplication(target: ApplyTarget, deps: EngineDeps): Promise<EngineResult> {

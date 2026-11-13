@@ -3,7 +3,8 @@ import type { Question, QuestionKind, ResolvedAnswer } from '@kv/shared';
 import { SiteLayoutError, SubmitRejectedError } from '../types';
 import type { ApplyJob, ApplySite, ApplyTarget, HumanGate, StepRead } from '../types';
 import {
-  SITE_TIMEOUTS, buttonOnScreen, fieldErrorOnScreen, humanGateOf, leaveForm, matchOption, sameText, squash, submitAndWait, typeWithSuggestions,
+  SITE_TIMEOUTS, buttonOnScreen, fieldErrorOnScreen, forgetSubmitClick, humanGateOf, leaveForm, matchOption, sameText, squash, submitAndWait,
+  typeWithSuggestions,
 } from './shared';
 
 const EMBED = 'https://job-boards.greenhouse.io/embed/job_app';
@@ -288,6 +289,7 @@ export function createGreenhouseSite(deps: Partial<GreenhouseDeps> = {}): ApplyS
     },
 
     async open(page, target) {
+      forgetSubmitClick(page);
       const api = await fetchJob(target.ref.board, target.ref.jobId);
       if (api === null) return { kind: 'unavailable', reason: 'closed' };
       await page.goto(target.url, { waitUntil: 'domcontentloaded', timeout: SITE_TIMEOUTS.pageMs });

@@ -3,7 +3,8 @@ import type { Question, ResolvedAnswer } from '@kv/shared';
 import { SiteLayoutError } from '../types';
 import type { ApplyJob, ApplySite, ApplyTarget, StepRead } from '../types';
 import {
-  SITE_TIMEOUTS, buttonOnScreen, fieldErrorOnScreen, humanGateOf, leaveForm, matchOption, sleep, squash, submitAndWait, typeWithSuggestions,
+  SITE_TIMEOUTS, buttonOnScreen, fieldErrorOnScreen, forgetSubmitClick, humanGateOf, leaveForm, matchOption, sleep, squash, submitAndWait,
+  typeWithSuggestions,
 } from './shared';
 
 const COMPANY = /^[A-Za-z0-9_-]+$/;
@@ -250,6 +251,7 @@ export function createLeverSite(deps: Partial<LeverDeps> = {}): ApplySite {
     },
 
     async open(page, target) {
+      forgetSubmitClick(page);
       await page.goto(target.url, { waitUntil: 'domcontentloaded', timeout: SITE_TIMEOUTS.pageMs });
       if (await gate(page)) return { kind: 'form' };
       if (await isClosed(page)) return { kind: 'unavailable', reason: 'closed' };

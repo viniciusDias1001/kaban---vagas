@@ -9,7 +9,7 @@ import { SiteLayoutError, SubmitRejectedError } from '../types';
 import { openFixture } from '../testing';
 import { FAKE_SITE_ORIGIN, createFakeSite, fakeFixturePath } from './fake';
 
-const VARIANTS = ['form', 'two-steps', 'closed', 'already-applied', 'captcha', 'rejected', 'broken'];
+const VARIANTS = ['form', 'two-steps', 'closed', 'already-applied', 'captcha', 'rejected', 'broken', 'captcha-sends', 'captcha-idle'];
 const site: ApplySite = createFakeSite();
 let page: Page;
 let close: () => Promise<void>;
@@ -100,5 +100,85 @@ describe('fake site', () => {
   });
   it('blocks the network outside the fixtures', async () => {
     await expect(page.goto('http://example.com/')).rejects.toThrow();
+  });
+});
+
+describe('fake site: a gate after the click (C-1, one application per job)', () => {
+  const quick = createFakeSite({ submitMs: 2_000 });
+  // Página própria: a anterior terminou numa navegação recusada.
+  let page: Page;
+  let closeOwn: () => Promise<void>;
+  beforeAll(async () => {
+    const routes: Record<string, string> = {};
+    for (const v of VARIANTS) routes[FAKE_SITE_ORIGIN + '/jobs/1?variant=' + v] = fakeFixturePath(v);
+    ({ page, close: closeOwn } = await openFixture(routes));
+  });
+  afterAll(async () => { await closeOwn?.(); });
+  const count = async (name: 'clicks' | 'sends') => Number(await page.locator('body').getAttribute(`data-${name}`));
+  /** Abre, preenche e clica: o site mostra a verificação depois do clique. */
+  async function clickIntoGate(variant: 'captcha-sends' | 'captcha-idle') {
+    await quick.open(page, target(variant));
+    await quick.fillStep(page, answers, { resumePath: resume });
+    await expect(quick.submit(page)).rejects.toBeInstanceOf(SubmitRejectedError);
+    expect(await quick.humanGate(page)).toBe('captcha');
+  }
+
+  it('captcha-sends: solving the gate sends by itself; the next submit waits for it and never clicks again', async () => {
+    await clickIntoGate('captcha-sends');
+    await page.click('#solve');
+    expect((await quick.submit(page)).confirmation).toMatch(/Candidatura recebida/);
+    expect(await count('clicks')).toBe(1);
+    expect(await count('sends')).toBe(1);
+  });
+
+  it('captcha-sends: with the captcha answered but no confirmation yet, it does not click again (confirm on the site)', async () => {
+    await clickIntoGate('captcha-sends');
+    await page.evaluate(() => { (window as unknown as { __hold: boolean }).__hold = true; });
+    await page.click('#solve');
+    await expect(quick.submit(page)).rejects.toBeInstanceOf(SiteLayoutError);
+    expect(await count('clicks')).toBe(1);
+    expect(await count('sends')).toBe(0);
+  });
+
+  it('captcha-idle: the form stays idle after the gate, so it clicks again, once, after the wait', async () => {
+    await clickIntoGate('captcha-idle');
+    await page.click('#solve');
+    const started = Date.now();
+    expect((await quick.submit(page)).confirmation).toMatch(/Candidatura recebida/);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(1_900);
+    expect(await count('clicks')).toBe(2);
+    expect(await count('sends')).toBe(1);
+  });
+
+  it('captcha-idle: the owner clicked Enviar himself after solving; the confirmation is taken without another click', async () => {
+    await clickIntoGate('captcha-idle');
+    await page.click('#solve');
+    await page.click('#submit');
+    expect((await quick.submit(page)).confirmation).toMatch(/Candidatura recebida/);
+    expect(await count('clicks')).toBe(2);
+    expect(await count('sends')).toBe(1);
+  });
+
+  it('captcha-idle: a disabled or busy button after the wait means the first submission may be going: no click', async () => {
+    await clickIntoGate('captcha-idle');
+    await page.click('#solve');
+    await page.evaluate(() => { document.getElementById('submit')!.setAttribute('aria-busy', 'true'); });
+    await expect(quick.submit(page)).rejects.toBeInstanceOf(SiteLayoutError);
+    expect(await count('clicks')).toBe(1);
+    await quick.open(page, target('captcha-idle'));
+    await expect(quick.submit(page)).rejects.toBeInstanceOf(SubmitRejectedError);
+    await page.click('#solve');
+    await page.evaluate(() => { (document.getElementById('submit') as HTMLButtonElement).textContent = 'Enviando...'; });
+    await expect(quick.submit(page)).rejects.toBeInstanceOf(SiteLayoutError);
+    expect(await count('clicks')).toBe(1);
+  });
+
+  it('opening the form again forgets the earlier click: the first submit clicks at once', async () => {
+    await clickIntoGate('captcha-idle');
+    await quick.open(page, target('form'));
+    await quick.fillStep(page, answers, { resumePath: resume });
+    const started = Date.now();
+    expect((await quick.submit(page)).confirmation).toMatch(/Candidatura recebida/);
+    expect(Date.now() - started).toBeLessThan(1_500);
   });
 });

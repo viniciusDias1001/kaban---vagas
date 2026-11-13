@@ -1,12 +1,19 @@
 import { fileURLToPath } from 'node:url';
 import type { Page } from 'playwright';
 import type { Question, QuestionKind } from '@kv/shared';
-import { SiteLayoutError, SubmitRejectedError } from '../types';
+import { SiteLayoutError } from '../types';
 import type { ApplyJob, ApplySite, ApplyTarget, HumanGate, StepRead } from '../types';
+import { buttonOnScreen, fieldErrorOnScreen, forgetSubmitClick, squash, submitAndWait } from './shared';
 
 export const FAKE_SITE_ORIGIN = 'http://apply.fake.test';
 
-const VARIANTS = ['form', 'two-steps', 'closed', 'already-applied', 'captcha', 'rejected', 'broken'] as const;
+/**
+ * `captcha-sends`: o primeiro clique em Enviar abre uma verificação; resolvida, o envio continua sozinho um segundo
+ * depois (como o retorno de um captcha invisível), com a resposta do captcha preenchida. `captcha-idle`: a mesma
+ * verificação, mas resolvida o formulário fica parado e só um novo clique envia. As duas contam cliques em Enviar e
+ * candidaturas registradas em `data-clicks` e `data-sends` do `body`.
+ */
+const VARIANTS = ['form', 'two-steps', 'closed', 'already-applied', 'captcha', 'rejected', 'broken', 'captcha-sends', 'captcha-idle'] as const;
 type FakeVariant = (typeof VARIANTS)[number];
 
 export function isFakeVariant(v: string): v is FakeVariant {
@@ -20,13 +27,23 @@ export function fakeFixturePath(variant: string): string {
 }
 
 const STEP_TIMEOUT_MS = 5_000;
+const CONFIRMED = /Candidatura recebida/;
+
+export interface FakeSiteOptions {
+  /** Espera pelo resultado de um clique de envio (e, depois de um portão resolvido, antes de clicar de novo). */
+  submitMs?: number;
+}
 
 /**
  * Atende vagas da fonte `fake`. A variante do formulário vem de `?variant=` na URL da vaga; sem ela, `form`. O alvo é
  * sempre em `FAKE_SITE_ORIGIN` (mesmo caminho e busca da URL da vaga), o único endereço que o navegador do site de
  * teste serve: a fonte falsa publica as vagas em outro host (`https://example.com/jobs/fake-N`).
  */
-export function createFakeSite(): ApplySite {
+export function createFakeSite(options: FakeSiteOptions = {}): ApplySite {
+  const submitMs = options.submitMs ?? STEP_TIMEOUT_MS;
+  const submitButton = (page: Page) => page.locator('#submit');
+  const humanGate = async (page: Page): Promise<HumanGate | null> =>
+    ((await page.locator('#captcha-gate:visible').count()) ? 'captcha' : null);
   return {
     id: 'fake',
     needsLogin: false,
@@ -53,6 +70,7 @@ export function createFakeSite(): ApplySite {
     },
 
     async open(page, target) {
+      forgetSubmitClick(page);
       await page.goto(target.url, { waitUntil: 'domcontentloaded', timeout: 15_000 });
       if (await page.locator('#closed').count()) return { kind: 'unavailable', reason: 'closed' };
       if (await page.locator('#already-applied').count()) return { kind: 'unavailable', reason: 'already_applied' };
@@ -120,24 +138,28 @@ export function createFakeSite(): ApplySite {
     },
 
     async submit(page) {
-      await page.locator('#submit:visible').click({ timeout: STEP_TIMEOUT_MS });
-      const outcome = page.locator('#confirmation, #error').first();
-      try {
-        await outcome.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
-      } catch {
-        throw new SiteLayoutError('o site de teste não respondeu ao envio');
-      }
-      if (await page.locator('#error').count()) throw new SubmitRejectedError('o site de teste recusou o envio');
-      const text = ((await page.locator('#confirmation').textContent()) ?? '').trim();
-      if (!/Candidatura recebida/.test(text)) throw new SiteLayoutError('confirmação não reconhecida');
-      return { confirmation: text };
+      return submitAndWait(page, {
+        site: 'site de teste',
+        submitButton: submitButton(page),
+        formOnScreen: () => buttonOnScreen(submitButton(page)),
+        confirmationText: async () => {
+          const shown = page.locator('#confirmation:visible');
+          if (!(await shown.count())) return null;
+          const text = squash((await shown.first().textContent()) ?? '');
+          return CONFIRMED.test(text) ? text : null;
+        },
+        fieldErrorVisible: () => fieldErrorOnScreen(page),
+        refused: async () => (await page.locator('#error').count()) > 0,
+        gate: () => humanGate(page),
+        stepMs: STEP_TIMEOUT_MS,
+        submitMs,
+      });
     },
 
-    async humanGate(page: Page): Promise<HumanGate | null> {
-      return (await page.locator('#captcha-gate:visible').count()) ? 'captcha' : null;
-    },
+    humanGate,
 
     async discard(page) {
+      forgetSubmitClick(page);
       await page.goto('about:blank');
     },
   };
