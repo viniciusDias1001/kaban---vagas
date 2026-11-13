@@ -73,6 +73,24 @@ describe('formFromSettings / toSettingsPatch', () => {
   });
 });
 
+describe('e-mail settings', () => {
+  it('start from the saved values and send nothing untouched', () => {
+    const form = formFromSettings(dto);
+    expect(form).toMatchObject({ emailEnabled: true, emailMoveMode: 'auto', emailFactsMode: 'auto', emailAiDrafts: true });
+    expect(toSettingsPatch(form, dto)).toEqual({});
+  });
+
+  it('send only the field that changed', () => {
+    const form = { ...formFromSettings(dto), emailFactsMode: 'approve' as const };
+    expect(toSettingsPatch(form, dto)).toEqual({ emailFactsMode: 'approve' });
+    expect(isDirty(form, dto)).toBe(true);
+    const all = { ...formFromSettings(dto), emailEnabled: false, emailMoveMode: 'confirm' as const, emailAiDrafts: false };
+    const patch = toSettingsPatch(all, dto);
+    expect(patch).toEqual({ emailEnabled: false, emailMoveMode: 'confirm', emailAiDrafts: false });
+    expect(SettingsPatchSchema.safeParse(patch).success).toBe(true);
+  });
+});
+
 describe('validateSettings', () => {
   const base = changeProvider(formFromSettings(dto), 'anthropic', dto);
 
