@@ -9,8 +9,9 @@ import {
   ESTIMATED_MODEL_SUFFIX, aiSpentSince, aiTasks, baseProfile, jobAi, jobs, profileFor, recordUsage, resumes, saveProfile,
   tailoredResumes, type AiTaskRow, type CandidateProfileRow, type Db,
 } from '@kv/db';
-import { otherLang, type JobAnalysis } from '@kv/shared';
+import { otherLang } from '@kv/shared';
 import { createBilling } from './billing';
+import { isForeignKeyViolation, keywordsOf } from './job-context';
 import type { UnitRunner } from './queue';
 import { DraftBlockedError, ProfileChangedError, TaskCancelledError } from './task-errors';
 
@@ -35,13 +36,6 @@ type JobRow = typeof jobs.$inferSelect;
 const LANG_NAMES = { 'pt-BR': 'português', en: 'inglês' } as const;
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-/** O INSERT/UPDATE falhou porque a vaga foi apagada no meio da tarefa (chave estrangeira, SQLSTATE 23503)? */
-export function isForeignKeyViolation(error: unknown): boolean {
-  let cause: { code?: unknown; cause?: unknown } | undefined = error as typeof cause;
-  for (let depth = 0; cause && depth < 5; depth++, cause = cause.cause as typeof cause) if (cause.code === '23503') return true;
-  return false;
-}
-
 /** Descrição no teto de MAX_DESCRIPTION_CHARS, sem cortar um par substituto (emoji) ao meio. */
 function clipDescription(text: string): string {
   if (text.length <= MAX_DESCRIPTION_CHARS) return text;
@@ -50,10 +44,6 @@ function clipDescription(text: string): string {
   if (code >= 0xd800 && code <= 0xdbff) end--;
   return text.slice(0, end).trimEnd();
 }
-
-/** Palavras-chave da análise da camada 2 (as que a vaga pede), para o verificador da camada 3. */
-export const keywordsOf = (ai: { tier2State: 'ok' | 'error' | null; analysis: JobAnalysis | null } | undefined): string[] =>
-  ai?.tier2State === 'ok' && ai.analysis ? [...ai.analysis.keywordsMissing, ...ai.analysis.keywordsPresent] : [];
 
 /**
  * Erro que não adianta tentar de novo (falta um dado do usuário): usa o tipo `input`, que a fila não repete. Não é
