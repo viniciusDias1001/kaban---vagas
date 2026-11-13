@@ -57,10 +57,10 @@ export const APPLY_DATA_FOLDERS = ['shots', 'resumes'] as const;
  * Remove `<dataDir>/shots` e `<dataDir>/resumes`. Um arquivo em uso (o worker abrindo uma foto, o Windows segurando um
  * PDF) não derruba o pedido: o que não saiu fica para a limpeza de 90 dias, e o motivo vai para o log.
  */
-export async function removeApplyFiles(dataDir: string): Promise<void> {
+export async function removeApplyFiles(dataDir: string, remove: typeof rm = rm): Promise<void> {
   for (const folder of APPLY_DATA_FOLDERS) {
     try {
-      await rm(join(dataDir, folder), { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      await remove(join(dataDir, folder), { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     } catch (e) {
       const code = (e as { code?: string } | null)?.code;
       if (code !== 'EBUSY' && code !== 'EPERM' && code !== 'ENOTEMPTY' && code !== 'EACCES') throw e;

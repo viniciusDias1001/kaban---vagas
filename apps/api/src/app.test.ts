@@ -271,6 +271,14 @@ describe('runs', () => {
 });
 
 describe('meta', () => {
+  it('says which database it is on (the e2e checks it reached its own server), behind the host guard', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/meta' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ database: expect.any(String) });
+    expect(res.json().database.length).toBeGreaterThan(0);
+    expect((await app.inject({ method: 'GET', url: '/meta', headers: { host: 'evil.example' } })).statusCode).toBe(403);
+  });
+
   it('lists sources', async () => {
     const sources = (await app.inject({ method: 'GET', url: '/sources' })).json();
     expect(sources).toHaveLength(9);

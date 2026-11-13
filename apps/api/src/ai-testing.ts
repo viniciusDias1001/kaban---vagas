@@ -1,3 +1,5 @@
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { jobs, type Db } from '@kv/db';
 import { extractResumeText } from '@kv/resume';
 import type { AiContextOptions } from './ai-context';
@@ -19,8 +21,13 @@ export const testAi = (over: AiContextOptions = {}): AiContextOptions => ({
   env: FAKE_ENV,
   extractResume: extractResumeText,
   now: () => Date.UTC(2026, 10, 11, 15, 0, 0),
+  // Nunca a pasta de dados de verdade do dono: "Apagar todos os dados de IA" remove pastas dentro dela.
+  dataDir: TEST_DATA_DIR,
   ...over,
 });
+
+/** Pasta de dados padrão dos testes da API (na pasta temporária do sistema). */
+export const TEST_DATA_DIR = join(tmpdir(), 'kv-api-test-data');
 
 export async function seedJob(db: Db, over: Partial<typeof jobs.$inferInsert> = {}) {
   const [row] = await db

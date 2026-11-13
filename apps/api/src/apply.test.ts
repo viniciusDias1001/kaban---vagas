@@ -2,7 +2,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { eq } from 'drizzle-orm';
 import { createFakeSite } from '@kv/apply';
 import {
-  applyAnswers, applyCommands, applySites, closeDb, createApplication, transitionApplication, type Db,
+  applicationForJob, applyAnswers, applyCommands, applySites, closeDb, createApplication, jobs, saveApplyWorkerState, transitionApplication,
+  type Db,
 } from '@kv/db';
 import { createTestDb, resetTestDb } from '@kv/db/testing';
 import { buildApp } from './app';
@@ -41,6 +42,109 @@ describe('GET /apply/status', () => {
     expect((await app.inject('/apply/status')).json()).toMatchObject({
       queued: 0, running: 1, waiting: { applicationId: id, jobId: job.id, gate: 'captcha' },
     });
+  });
+});
+
+describe('the worker says when it cannot run', () => {
+  const NO_BROWSER = 'Navegador não encontrado em C:\\Opera GX\\120\\opera.exe; a versão mais nova achada é 121.';
+
+  it('reports what the worker published, and the feature as unavailable with its reason', async () => {
+    expect((await app.inject('/apply/status')).json()).toMatchObject({ available: true, unavailableReason: null, worker: null });
+    await saveApplyWorkerState(db, { available: true, reason: null }, 1000);
+    expect((await app.inject('/apply/status')).json()).toMatchObject({
+      available: true, unavailableReason: null, worker: { available: true, reason: null, seenAt: 1000 },
+    });
+    await saveApplyWorkerState(db, { available: false, reason: NO_BROWSER }, 2000);
+    expect((await app.inject('/apply/status')).json()).toMatchObject({
+      available: false, unavailableReason: NO_BROWSER, worker: { available: false, reason: NO_BROWSER, seenAt: 2000 },
+    });
+    // O host não local vence: é o motivo da API que aparece.
+    vi.stubEnv('HOST', '0.0.0.0');
+    expect((await app.inject('/apply/status')).json()).toMatchObject({ available: false, unavailableReason: expect.stringContaining('local') });
+  });
+
+  it('answers 409 apply_unavailable with the worker reason on every route that queues work', async () => {
+    await app.inject({ method: 'PATCH', url: '/settings', payload: { applyEnabled: true } });
+    const job = await seedJob(db, { source: 'fake', externalId: 'w1', url: 'https://example.com/w1' });
+    const other = await seedJob(db, { source: 'fake', externalId: 'w2', url: 'https://example.com/w2' });
+    const failed = (await createApplication(db, { jobId: other.id, site: 'fake', trigger: 'auto', mode: 'dry_run' }))!;
+    await transitionApplication(db, failed, { status: 'failed' });
+    const third = await seedJob(db, { source: 'fake', externalId: 'w3', url: 'https://example.com/w3' });
+    const rehearsal = (await createApplication(db, { jobId: third.id, site: 'fake', trigger: 'auto', mode: 'dry_run' }))!;
+    await transitionApplication(db, rehearsal, { status: 'dry_run_ready' });
+    await saveApplyWorkerState(db, { available: false, reason: NO_BROWSER });
+    const calls: [string, string, object?][] = [
+      ['POST', `/jobs/${job.id}/application`], ['POST', `/applications/${failed}/retry`], ['POST', `/applications/${rehearsal}/send`],
+      ['POST', '/applications/send-rehearsals', { ids: [rehearsal] }], ['POST', '/apply/sessions/greenhouse/open'],
+      ['POST', '/apply/sessions/greenhouse/check'], ['DELETE', '/apply/sessions/greenhouse'],
+    ];
+    for (const [method, url, payload] of calls) {
+      const res = await app.inject({ method: method as 'POST', url, payload });
+      expect(res.statusCode, url).toBe(409);
+      expect(res.json(), url).toEqual({ error: 'apply_unavailable', message: NO_BROWSER });
+    }
+    expect(await applicationForJob(db, job.id)).toBeNull();
+    expect((await applicationForJob(db, other.id))!.status).toBe('failed');
+    expect((await applicationForJob(db, third.id))!.status).toBe('dry_run_ready');
+    expect(await db.select().from(applyCommands)).toEqual([]);
+    // O worker voltou: tudo anda.
+    await saveApplyWorkerState(db, { available: true, reason: null });
+    expect((await post(`/jobs/${job.id}/application`)).statusCode).toBe(202);
+  });
+});
+
+describe('every state-changing apply route answers 409 off a local host', () => {
+  it('refuses the writes and keeps the reads', async () => {
+    const job = await seedJob(db, { source: 'fake', externalId: 'h1', url: 'https://example.com/h1' });
+    const id = (await createApplication(db, { jobId: job.id, site: 'fake', trigger: 'auto', mode: 'dry_run' }))!;
+    const saved = (await post('/apply/answers', { question: 'Q?', answer: 'a', kind: 'text', scope: 'always', scopeValue: null, country: null })).json();
+    vi.stubEnv('HOST', '0.0.0.0');
+    const writes: [string, string, object?][] = [
+      ['POST', `/jobs/${job.id}/application`], ['POST', `/applications/${id}/retry`], ['POST', `/applications/${id}/send`],
+      ['POST', `/applications/${id}/cancel`], ['POST', '/applications/send-rehearsals', { ids: [id] }],
+      ['PUT', `/applications/${id}/answers`, { answers: [] }], ['POST', '/apply/sites/fake/resume'],
+      ['POST', '/apply/answers', { question: 'Q2?', answer: 'b', kind: 'text', scope: 'always', scopeValue: null, country: null }],
+      ['PUT', `/apply/answers/${saved.id}`, { question: 'Q?', answer: 'c', kind: 'text', scope: 'always', scopeValue: null, country: null }],
+      ['DELETE', `/apply/answers/${saved.id}/aliases/x`], ['DELETE', `/apply/answers/${saved.id}`],
+      ['POST', '/apply/sessions/greenhouse/open'],
+    ];
+    for (const [method, url, payload] of writes) {
+      const res = await app.inject({ method: method as 'POST', url, payload });
+      expect(res.statusCode, `${method} ${url}`).toBe(409);
+      expect(res.json(), `${method} ${url}`).toMatchObject({ error: 'apply_unavailable' });
+    }
+    expect((await applicationForJob(db, job.id))!.status).toBe('queued');
+    expect((await db.select().from(applyAnswers)).map((r) => r.answer)).toEqual(['a']);
+    for (const url of ['/apply/status', '/apply/answers', '/applications', `/jobs/${job.id}/application`]) {
+      expect((await app.inject(url)).statusCode, url).toBe(200);
+    }
+  });
+});
+
+describe('saving an answer in the profile requeues the applications waiting on a question', () => {
+  const input = { question: 'Pretensão salarial?', answer: '20000', kind: 'number', scope: 'always', scopeValue: null, country: null };
+  async function waitingOnQuestion() {
+    const job = await seedJob(db, { source: 'fake', externalId: `q${Math.random()}`, url: `https://example.com/${Math.random()}`, needsHuman: true, needsHumanReason: 'x' });
+    const id = (await createApplication(db, { jobId: job.id, site: 'fake', trigger: 'auto', mode: 'dry_run' }))!;
+    await transitionApplication(db, id, { status: 'needs_human', reason: 'question', set: { pendingQuestions: [] } });
+    return job.id;
+  }
+
+  it('on POST and on a PUT that changes the answer, never on one that changes nothing', async () => {
+    const a = await waitingOnQuestion();
+    const created = (await post('/apply/answers', input)).json();
+    expect(await applicationForJob(db, a)).toMatchObject({ status: 'queued' });
+    expect((await db.select().from(jobs).where(eq(jobs.id, a)))[0]).toMatchObject({ needsHuman: false });
+    const b = await waitingOnQuestion();
+    const put = (payload: object) => app.inject({ method: 'PUT', url: `/apply/answers/${created.id}`, payload });
+    expect((await put(input)).statusCode).toBe(200);
+    expect(await applicationForJob(db, b)).toMatchObject({ status: 'needs_human' });
+    expect((await put({ ...input, answer: '25000' })).statusCode).toBe(200);
+    expect(await applicationForJob(db, b)).toMatchObject({ status: 'queued' });
+    // Uma resposta vazia não responde nada.
+    const c = await waitingOnQuestion();
+    await post('/apply/answers', { ...input, question: 'Outra?', answer: '' });
+    expect(await applicationForJob(db, c)).toMatchObject({ status: 'needs_human' });
   });
 });
 
