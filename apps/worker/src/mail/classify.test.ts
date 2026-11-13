@@ -219,6 +219,24 @@ describe('classifyNext', () => {
     expect(await openAlerts(db)).toEqual([]);
   });
 
+  it('counts a request the provider always rejects (other) toward the three failures, so one mail cannot block the queue', async () => {
+    const id = await incoming();
+    deps.ai = mailAi(failingWith('other', 'pedido recusado pelo provedor (400)'));
+    expect(await classifyNext(deps)).toBe('none');
+    expect(await classifyNext(deps)).toBe('none');
+    expect(await classifyNext(deps)).toBe('done');
+    expect(await mailMessageById(db, id)).toMatchObject({ kind: 'outro', summary: 'Não foi possível classificar.' });
+  });
+
+  for (const kind of ['input', 'draft_blocked'] as const) {
+    it(`still stops the round on a ${kind} error`, async () => {
+      const id = await incoming();
+      deps.ai = mailAi(failingWith(kind, `erro ${kind}`));
+      for (let i = 0; i < 4; i++) expect(await classifyNext(deps)).toBe('off');
+      expect((await mailMessageById(db, id))!.kind).toBeNull();
+    });
+  }
+
   it('a provider failure neither resets nor adds to the count', async () => {
     const id = await incoming();
     deps.ai = mailAi(failingWith('truncated', 'resposta cortada'));
