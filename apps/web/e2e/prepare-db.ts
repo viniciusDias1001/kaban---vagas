@@ -1,11 +1,12 @@
 /**
  * Prepara o banco do e2e: cria se não existir, aplica as migrations e esvazia as tabelas, para cada
- * execução começar limpa.
+ * execução começar limpa. Também esvazia a pasta de dados da candidatura do e2e (`E2E_APPLY_DATA_DIR`).
  *
  * Roda encadeado no comando do `webServer` do Playwright (antes do `pnpm dev`), e não como
  * `globalSetup`: o Playwright sobe o webServer ANTES do globalSetup, e a API não inicia sem as tabelas.
  */
 import { closeDb, createDb, dbErrorMessage, migrate } from '../../../packages/db/src/index';
+import { resetApplyDataDir } from './apply-data';
 import { E2E_DATABASE_URL, e2eDatabaseName } from './database';
 
 const TABLES = [
@@ -40,6 +41,8 @@ try {
     await closeDb(db);
   }
   console.log(`[e2e] banco ${name} migrado e esvaziado`);
+  // A pasta de dados da candidatura (perfil do navegador, currículos, fotos) também começa vazia.
+  resetApplyDataDir();
 } catch (e) {
   console.error(`[e2e] falha ao preparar o banco: ${dbErrorMessage(e)}`);
   process.exit(1);

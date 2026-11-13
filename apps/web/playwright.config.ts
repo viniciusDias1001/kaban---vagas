@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { defineConfig } from '@playwright/test';
+import { E2E_APPLY_DATA_DIR } from './e2e/apply-data';
 import { E2E_DATABASE_URL, e2eDatabaseName } from './e2e/database';
 
 // Falha já ao carregar a config se a URL apontar para um banco que não é de teste.
@@ -29,7 +30,8 @@ export default defineConfig({
     url: 'http://localhost:5173/api/sources',
     reuseExistingServer: false,
     timeout: 120_000,
-    stdout: CI ? 'pipe' : 'ignore',
+    // E2E_SERVER_LOGS=1 mostra a saída da api, do worker e do web também fora da CI (para investigar uma falha).
+    stdout: CI || process.env.E2E_SERVER_LOGS ? 'pipe' : 'ignore',
     stderr: 'pipe',
     env: {
       DATABASE_URL: E2E_DATABASE_URL,
@@ -50,6 +52,15 @@ export default defineConfig({
       AI_MODEL_FAST: '',
       AI_MODEL_STRONG: '',
       AI_DAILY_BUDGET_USD: '',
+      // Candidatura automática: só o site de teste (servido localmente, sem rede) num Chromium do Playwright sem
+      // janela, que o worker usa no lugar do navegador do dono. APPLY_BROWSER vazia para o .env de quem roda não
+      // trocar o navegador; HOST vazia para a função ficar disponível (só existe com HOST local).
+      FAKE_APPLY_SITE: '1',
+      APPLY_BROWSER: '',
+      HOST: '',
+      // Nunca vazia: sem ela, a API e o worker usariam a pasta de dados de verdade do dono (o perfil do navegador
+      // dele). O preparo do banco esvazia esta pasta a cada execução.
+      APPLY_DATA_DIR: E2E_APPLY_DATA_DIR,
     },
   },
 });
