@@ -8,14 +8,14 @@ import {
   sendRehearsal, settlePendingQuestions, toApplicationDto, type ApplicationRow, type Db,
 } from '@kv/db';
 import {
-  APPLICATION_STATUSES, APPLY_SITE_IDS, PendingAnswersBodySchema, applyAvailability, normalizeQuestionText, optionKey,
+  APPLICATION_STATUSES, APPLY_SITE_IDS, PendingAnswersBodySchema, SHOT_KINDS, applyAvailability, bankText, normalizeQuestionText,
+  optionKey,
   type AnswerScope, type AnswerValue, type PendingQuestion, type Question, type ShotKind,
 } from '@kv/shared';
 import { z } from 'zod';
 import type { AiContext } from '../ai-context';
 import { idParam } from './ids';
 
-const SHOT_KINDS: readonly ShotKind[] = ['filled', 'confirmation', 'blocked'];
 const jobNotFound = { error: 'not_found', message: 'vaga não encontrada' };
 const appNotFound = { error: 'not_found', message: 'candidatura não encontrada' };
 
@@ -39,10 +39,11 @@ const isEmpty = (value: AnswerValue): boolean =>
 const BOOLEAN_OPTIONS = { true: ['sim', 'yes'], false: ['nao', 'no'] } as const;
 
 /**
- * Confere o valor contra a pergunta e devolve o texto que vai para o banco (opção com a grafia do formulário).
+ * Confere o valor contra a pergunta e o devolve no tipo dela: opção com a grafia do formulário, lista, booleano de
+ * verdade, número normalizado (ponto decimal). `bankText` o transforma no texto do banco.
  * Lança `AnswerRejected` se não serve: opção fora da lista, número que não é número, texto acima do limite etc.
  */
-function checkedText(q: Question, value: AnswerValue): string {
+function checkedValue(q: Question, value: AnswerValue): AnswerValue {
   const bad = (why: string) => new AnswerRejected(`${q.label}: ${why}`);
   if (q.kind === 'file') throw bad('arquivos não são respondidos por aqui');
   if (isEmpty(value)) throw bad('informe a resposta');
@@ -51,27 +52,32 @@ function checkedText(q: Question, value: AnswerValue): string {
     if (!Array.isArray(value)) throw bad('escolha uma ou mais opções');
     const picked = value.map((v) => optionOf(v));
     if (picked.some((o) => o === undefined)) throw bad('uma das opções não existe na pergunta');
-    return [...new Set(picked as string[])].join(', ');
+    return [...new Set(picked as string[])];
   }
   if (Array.isArray(value)) throw bad('esta pergunta aceita uma resposta só');
   if (typeof value === 'boolean') {
     if (q.kind !== 'boolean') throw bad('resposta de sim ou não numa pergunta que não é de sim ou não');
-    if (q.options.length === 0) return value ? 'Sim' : 'Não';
+    if (q.options.length === 0) return value;
     const wanted = BOOLEAN_OPTIONS[String(value) as 'true' | 'false'];
     const option = q.options.find((o) => (wanted as readonly string[]).includes(optionKey(o)));
     if (!option) throw bad('nenhuma opção corresponde a sim ou não');
     return option;
   }
   if (q.kind === 'boolean' && q.options.length === 0) throw bad('responda sim ou não');
-  const text = value as string;
+  const text = (value as string).trim();
   if (q.options.length > 0) {
     const option = optionOf(text);
     if (!option) throw bad('a resposta não é uma das opções da pergunta');
     return option;
   }
-  if (q.kind === 'number' && !Number.isFinite(Number(text.trim().replace(',', '.')))) throw bad('informe um número');
+  if (q.kind === 'number') {
+    // 20.000 é vinte mil no Brasil e vinte fora dele: não dá para adivinhar, o dono escreve sem separador de milhar.
+    if (/[.,]\d{3}$/.test(text)) throw bad('escreva o número sem separador de milhar (por exemplo 20000)');
+    if (!/^-?\d+([.,]\d{1,2})?$/.test(text)) throw bad('informe um número, com no máximo duas casas decimais');
+    return text.replace(',', '.');
+  }
   if (q.maxLength !== null && text.length > q.maxLength) throw bad(`a resposta passa de ${q.maxLength} caracteres`);
-  return text.trim();
+  return text;
 }
 
 /** Casa cada item do corpo com uma pendência e decide o que gravar (tabela do addendum). Não grava nada. */
@@ -89,17 +95,17 @@ function planAnswers(pending: PendingQuestion[], items: PendingItem[]): { writes
       const proposed = p.proposal.value;
       if (p.kind === 'confirm_match') {
         if (p.proposal.bankAnswerId === null) throw new AnswerRejected(`${q.label}: a proposta não aponta para uma resposta salva`);
-        const value = typeof proposed === 'string' ? proposed : checkedText(q, proposed);
+        const value = bankText(checkedValue(q, proposed));
         writes.push({
           type: 'alias', bankAnswerId: p.proposal.bankAnswerId,
           alias: { normalized: normalizeQuestionText(q.label), options: [...q.options], value },
         });
       } else {
         // O texto escrito pelo modelo é só desta vaga; o fato do perfil vale sempre.
-        writes.push({ type: 'answer', question: q, text: checkedText(q, proposed), scope: p.proposal.source === 'written' ? 'job' : 'always' });
+        writes.push({ type: 'answer', question: q, text: bankText(checkedValue(q, proposed)), scope: p.proposal.source === 'written' ? 'job' : 'always' });
       }
     } else {
-      writes.push({ type: 'answer', question: q, text: checkedText(q, item.value), scope: item.scope });
+      writes.push({ type: 'answer', question: q, text: bankText(checkedValue(q, item.value)), scope: item.scope });
     }
   }
   return { writes, answered };
@@ -114,6 +120,11 @@ export function applicationRoutes(app: FastifyInstance, db: Db, ctx: AiContext) 
   const withApplication = async (req: { params: unknown }) => {
     const id = idParam(req);
     return id === null ? null : applicationById(db, id);
+  };
+  const shotsOf = async (req: { params: unknown }) => {
+    const id = idParam(req);
+    const [row] = id === null ? [] : await db.select({ shots: applications.shots }).from(applications).where(eq(applications.id, id));
+    return row?.shots ?? null;
   };
 
   app.get('/applications', async (req) => {
@@ -262,8 +273,8 @@ export function applicationRoutes(app: FastifyInstance, db: Db, ctx: AiContext) 
 
   app.get('/applications/:id/shots/:kind', async (req, reply) => {
     const kind = (req.params as { kind: string }).kind as ShotKind;
-    const row = SHOT_KINDS.includes(kind) ? await withApplication(req) : null;
-    const rel = row?.shots[kind];
+    const shots = (SHOT_KINDS as readonly string[]).includes(kind) ? await shotsOf(req) : null;
+    const rel = shots?.[kind];
     // `resolveShot` recusa caminho que sai da pasta de dados (o valor gravado nunca é confiado).
     const absolute = rel ? resolveShot(ctx.dataDir, rel) : null;
     const bytes = absolute ? await readFile(absolute).catch(() => null) : null;

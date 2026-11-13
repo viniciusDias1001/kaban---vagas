@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { dayStartMs } from '@kv/ai';
 import { withinWindow } from '@kv/apply';
 import {
-  applicationQueueCounts, applyCountsSince, deleteApplyAnswer, enqueueApplyCommand, ensureSeedAnswers, listApplyAnswers,
+  applyAnswerExists, applicationQueueCounts, applyCountsSince, deleteApplyAnswer, enqueueApplyCommand, ensureSeedAnswers, listApplyAnswers,
   removeAlias, saveApplyAnswer, siteState, toApplyAnswerDto, updateSiteState, waitingApplication, type ApplyCommandKind, type Db,
 } from '@kv/db';
 import {
@@ -82,7 +82,7 @@ export function applyRoutes(app: FastifyInstance, db: Db, ctx: AiContext) {
     if (input.scope !== 'always' && !input.scopeValue?.trim()) {
       return reply.code(400).send({ error: 'validation', message: 'scopeValue: informe a empresa ou a vaga a que a resposta se aplica' });
     }
-    if (id !== undefined && !(await listApplyAnswers(db)).some((a) => a.id === id)) return reply.code(404).send(answerNotFound);
+    if (id !== undefined && !(await applyAnswerExists(db, id))) return reply.code(404).send(answerNotFound);
     const row = await saveApplyAnswer(db, { ...input, id, scopeValue: input.scopeValue?.trim() || null }, ctx.now());
     return toApplyAnswerDto(row);
   };
@@ -100,7 +100,7 @@ export function applyRoutes(app: FastifyInstance, db: Db, ctx: AiContext) {
   });
   app.delete('/apply/answers/:id/aliases/:normalized', async (req, reply) => {
     const id = idParam(req);
-    if (id === null) return reply.code(404).send(answerNotFound);
+    if (id === null || !(await applyAnswerExists(db, id))) return reply.code(404).send(answerNotFound);
     await removeAlias(db, id, (req.params as { normalized: string }).normalized, ctx.now());
     return reply.code(204).send();
   });

@@ -46,7 +46,7 @@ export interface Transition {
   set?: Partial<
     Pick<
       ApplicationRow,
-      | 'mode' | 'gateScore' | 'resumeLang' | 'resumeFileName' | 'resumePdf' | 'answers' | 'pendingQuestions' | 'confirmation'
+      | 'mode' | 'gateScore' | 'finishedAt' | 'resumeLang' | 'resumeFileName' | 'resumePdf' | 'answers' | 'pendingQuestions' | 'confirmation'
       | 'contactEmail' | 'shots' | 'attempts' | 'cancelRequested' | 'waitingGate' | 'runAfter' | 'viewedAt' | 'formOpenedAt'
     >
   >;
@@ -429,7 +429,7 @@ export async function retryApplication(db: Db, id: number, now: number = Date.no
       tx, row,
       {
         status: 'queued', message: 'O dono pediu para tentar de novo.',
-        set: { runAfter: null, attempts: 0, cancelRequested: false, waitingGate: null },
+        set: { runAfter: null, attempts: 0, cancelRequested: false, waitingGate: null, finishedAt: null },
       },
       now,
     );
@@ -487,7 +487,8 @@ export async function requeueQuestionWaits(db: Db, exceptId: number, now: number
     .from(applications)
     .where(and(eq(applications.status, 'needs_human'), eq(applications.reason, 'question'), sql`${applications.id} <> ${exceptId}`))
     .orderBy(asc(applications.id))
-    .for('update');
+    // Uma linha que outro PUT de respostas já travou é recolocada na fila por ele: pular evita o impasse entre os dois.
+    .for('update', { skipLocked: true });
   for (const row of rows) {
     await writeTransition(db, row, { status: 'queued', message: 'Uma resposta nova foi salva: voltou para a fila.', set: { runAfter: null } }, now);
   }

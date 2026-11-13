@@ -1,4 +1,4 @@
-import { normalizeQuestionText, optionKey, sameOptionSet, type Question } from '@kv/shared';
+import { bankBoolean, bankList, normalizeQuestionText, optionKey, sameOptionSet, type Question } from '@kv/shared';
 import type { ApplyAnswerRow } from '@kv/db';
 
 export interface BankContext {
@@ -35,14 +35,30 @@ export function optionFor(saved: string, options: string[]): string | null {
   return hits.length === 1 ? hits[0]! : null;
 }
 
-function valueFor(row: ApplyAnswerRow, question: Question): string | null {
+export type BankValue = string | string[] | boolean;
+
+/** O texto salvo lido como o valor do tipo da pergunta (ver `bankText` em @kv/shared); null se não serve. */
+function readSaved(text: string, question: Question): BankValue | null {
+  if (question.kind === 'multiselect') {
+    const lines = bankList(text);
+    const picked = lines.map((line) => optionFor(line, question.options));
+    if (lines.length === 0 || picked.some((o) => o === null)) return null;
+    return [...new Set(picked as string[])];
+  }
+  if (question.options.length > 0) return optionFor(text, question.options);
+  if (question.kind === 'boolean') return bankBoolean(text);
+  return text;
+}
+
+function valueFor(row: ApplyAnswerRow, question: Question): BankValue | null {
   const normalized = normalizeQuestionText(question.label);
   if (normalized === '') return null;
-  const isList = question.options.length > 0;
-  if (row.normalized === normalized) return isList ? optionFor(row.answer, question.options) : row.answer;
+  if (row.normalized === normalized) return readSaved(row.answer, question);
   const alias = row.aliases.find((x) => x.normalized === normalized && sameOptionSet(x.options, question.options));
   if (!alias) return null;
-  return isList ? optionFor(alias.value, question.options) : row.answer;
+  // A variação guarda o valor no mesmo formato; pergunta de texto livre segue usando a resposta salva.
+  const typedQuestion = question.options.length > 0 || question.kind === 'boolean' || question.kind === 'multiselect';
+  return readSaved(typedQuestion ? alias.value : row.answer, question);
 }
 
 /**
@@ -52,8 +68,8 @@ function valueFor(row: ApplyAnswerRow, question: Question): string | null {
  */
 export function exactBankMatch(
   question: Question, bank: ApplyAnswerRow[], ctx: BankContext,
-): { answer: ApplyAnswerRow; value: string } | null {
-  const hits: { answer: ApplyAnswerRow; value: string }[] = [];
+): { answer: ApplyAnswerRow; value: BankValue } | null {
+  const hits: { answer: ApplyAnswerRow; value: BankValue }[] = [];
   for (const row of bankCandidates(bank, ctx)) {
     const value = valueFor(row, question);
     if (value !== null) hits.push({ answer: row, value });

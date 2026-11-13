@@ -8,7 +8,7 @@ import {
   applicationForJob, applications, applyAnswers, closeDb, createApplication, jobs, listApplyAnswers, transitionApplication, type Db,
 } from '@kv/db';
 import { createTestDb, resetTestDb } from '@kv/db/testing';
-import type { PendingQuestion, Question } from '@kv/shared';
+import type { AnswerValue, PendingQuestion, Question } from '@kv/shared';
 import { buildApp } from './app';
 import { seedJob, testAi } from './ai-testing';
 
@@ -255,6 +255,10 @@ describe('PUT /applications/:id/answers', () => {
     await bad([item('num', 'doze')]);
     await bad([item('bool', 'sim')]);
     await bad([item('short', 'passa do limite')]);
+    await bad([item('num', '20.000')]);
+    await bad([item('num', '1,234')]);
+    await bad([item('num', '1.234,56')]);
+    await bad([item('num', '1.5.5')]);
     await bad([item('short', null)]);
     await bad([item('short', '   ')]);
     await bad([item('short', 'ok', { confirmMatch: true })]); // nada para aceitar numa pergunta sem proposta
@@ -264,10 +268,10 @@ describe('PUT /applications/:id/answers', () => {
     expect((await applicationForJob(db, (await db.select().from(applications))[0].jobId))).toMatchObject({ status: 'needs_human' });
     // Valores certos: opção com a grafia do formulário, lista, número, sim/não.
     const ok = await put(`/applications/${id}/answers`, {
-      answers: [item('sel', ' sim '), item('multi', ['b', 'A']), item('num', '1,5'), item('bool', true), item('short', 'ok')],
+      answers: [item('sel', ' sim '), item('multi', ['b', 'A']), item('num', '1,5'), item('bool', true), item('short', '  ok  ')],
     });
     expect(ok.json()).toMatchObject({ status: 'queued' });
-    expect((await listApplyAnswers(db)).map((r) => r.answer)).toEqual(['Sim', 'B, A', '1,5', 'Sim', 'ok']);
+    expect((await listApplyAnswers(db)).map((r) => r.answer)).toEqual(['Sim', 'B\nA', '1.5', 'Sim', 'ok']);
   });
 
   it('answers 409 not_pending outside needs_human with a question, and 404', async () => {
@@ -277,6 +281,66 @@ describe('PUT /applications/:id/answers', () => {
     expect(res.json()).toMatchObject({ error: 'not_pending' });
     expect((await put('/applications/9999/answers', { answers: [] })).statusCode).toBe(404);
     expect((await put(`/applications/${waiting.id}/answers`, { answers: [], x: 1 })).statusCode).toBe(400);
+  });
+});
+
+describe('answers are read back from the bank in the own type of the question', () => {
+  const ctxOf = (jobId: number) => ({ company: 'Acme Fictícia', jobId, country: 'BR' });
+  const cases: { name: string; q: Question; value: unknown; expected: unknown }[] = [
+    { name: 'text', q: question('t'), value: 'olá', expected: 'olá' },
+    { name: 'longtext', q: question('l', { kind: 'longtext' }), value: 'um texto longo', expected: 'um texto longo' },
+    { name: 'number', q: question('n', { kind: 'number' }), value: '20000,5', expected: '20000.5' },
+    { name: 'boolean true', q: question('bt', { kind: 'boolean' }), value: true, expected: true },
+    { name: 'boolean false', q: question('bf', { kind: 'boolean' }), value: false, expected: false },
+    { name: 'boolean with options', q: question('bo', { kind: 'boolean', options: ['Yes', 'No'] }), value: true, expected: 'Yes' },
+    { name: 'select', q: question('s', { kind: 'select', options: ['Jr', 'Sr'] }), value: 'sr', expected: 'Sr' },
+    {
+      name: 'multiselect', q: question('m', { kind: 'multiselect', options: ['Remoto', 'Híbrido', 'Presencial'] }),
+      value: ['presencial', 'Remoto'], expected: ['Presencial', 'Remoto'],
+    },
+  ];
+  for (const c of cases) {
+    it(`${c.name}`, async () => {
+      const { id, job } = await seedPending([unanswered(c.q)]);
+      expect((await put(`/applications/${id}/answers`, { answers: [item(c.q.id, c.value)] })).statusCode).toBe(200);
+      const hit = exactBankMatch(c.q, await listApplyAnswers(db), ctxOf(job.id));
+      expect(hit?.value).toEqual(c.expected);
+      expect(typeof hit?.value).toBe(Array.isArray(c.expected) ? 'object' : typeof c.expected);
+    });
+  }
+
+  it('a confirmed match on a multiselect and on a boolean without options', async () => {
+    const saved = async (question_: string, answer: string, kind: 'choice' | 'boolean') =>
+      (await db.insert(applyAnswers).values({ question: question_, normalized: question_.toLowerCase().replace(/\W+/g, ' ').trim(), kind, answer, createdAt: 1, updatedAt: 1 }).returning())[0];
+    const models = await saved('Modelos de trabalho', 'Remoto\nHíbrido', 'choice');
+    const auth = await saved('Autorizado a trabalhar', 'Sim', 'boolean');
+    const multi = question('m', { label: 'Work models', kind: 'multiselect', options: ['Remote', 'Hybrid', 'Onsite'] });
+    const bool = question('b', { label: 'Authorized to work', kind: 'boolean' });
+    const pending = (q: Question, row: typeof models, value: AnswerValue): PendingQuestion => ({
+      question: q, category: 'personal', kind: 'confirm_match',
+      proposal: { bankAnswerId: row.id, bankQuestion: row.question, bankAnswer: row.answer, value, source: 'bank', basis: [] },
+    });
+    const { id, job } = await seedPending([pending(multi, models, ['Remote', 'Hybrid']), pending(bool, auth, true)]);
+    const res = await put(`/applications/${id}/answers`, { answers: [item('m', null, { confirmMatch: true }), item('b', null, { confirmMatch: true })] });
+    expect(res.json()).toMatchObject({ status: 'queued' });
+    const bank = await listApplyAnswers(db);
+    expect(exactBankMatch(multi, bank, ctxOf(job.id))?.value).toEqual(['Remote', 'Hybrid']);
+    expect(exactBankMatch(bool, bank, ctxOf(job.id))?.value).toBe(true);
+  });
+
+  it('an accepted proposal whose value is a boolean', async () => {
+    const q = question('p', { label: 'Aceita mudança?', kind: 'boolean' });
+    const { id, job } = await seedPending([{
+      question: q, category: 'profile_fact', kind: 'confirm_proposal',
+      proposal: { bankAnswerId: null, bankQuestion: null, bankAnswer: null, value: false, source: 'profile', basis: [] },
+    }]);
+    await put(`/applications/${id}/answers`, { answers: [item('p', null, { confirmMatch: true })] });
+    expect(exactBankMatch(q, await listApplyAnswers(db), ctxOf(job.id))?.value).toBe(false);
+  });
+
+  it('checks maxLength on the trimmed text', async () => {
+    const { id } = await seedPending([unanswered(question('short', { maxLength: 5 }))]);
+    expect((await put(`/applications/${id}/answers`, { answers: [item('short', '  abcde  ')] })).statusCode).toBe(200);
   });
 });
 
@@ -313,6 +377,13 @@ describe('send, retry and cancel', () => {
     expect((await applicationForJob(db, one.job.id))!.approvedAnswers).toEqual(answers);
     expect(await applicationForJob(db, two.job.id)).toMatchObject({ status: 'queued', mode: 'real' });
     expect(await applicationForJob(db, failed.job.id)).toMatchObject({ status: 'failed', approvedAnswers: [] });
+  });
+
+  it('clears finished_at when a finished application is retried', async () => {
+    const failed = await seedApp('failed');
+    expect((await applicationForJob(db, failed.job.id))!.finishedAt).not.toBeNull();
+    await post(`/applications/${failed.id}/retry`);
+    expect((await applicationForJob(db, failed.job.id))!.finishedAt).toBeNull();
   });
 
   it('retries stopped applications without approving anything, and refuses the others', async () => {
