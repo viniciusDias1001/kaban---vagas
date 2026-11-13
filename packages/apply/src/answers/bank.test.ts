@@ -2,9 +2,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { normalizeQuestionText, type Question } from '@kv/shared';
 import { closeDb, confirmAlias, listApplyAnswers, saveApplyAnswer, type ApplyAnswerRow, type Db } from '@kv/db';
 import { createTestDb } from '@kv/db/testing';
-import { bankCandidates, exactBankMatch, optionFor } from './bank';
+import { bankCandidates, exactBankMatch, optionFor, type BankContext } from './bank';
 
-const ctx = { company: 'Acme', jobId: 1, country: 'BR' };
+const ctx: BankContext = { company: 'Acme', jobId: 1, country: 'BR' };
 let seq = 0;
 const q = (label: string, options: string[] = []): Question => ({
   id: `q${++seq}`, label, help: '', kind: options.length ? 'select' : 'text', options, required: true, maxLength: null,
@@ -35,7 +35,19 @@ describe('answer bank matching', () => {
     expect(exactBankMatch(q('Precisa de visto?'), bank, ctx)?.value).toBe('Não');
     expect(exactBankMatch(q('Precisa de visto?'), [bank[0]!], ctx)?.value).toBe('Sim');
     expect(exactBankMatch(q('Precisa de visto?'), [a('Precisa de visto?', 'Não', { country: 'US' })], ctx)).toBeNull();
-    expect(exactBankMatch(q('Precisa de visto?'), [bank[1]!], { ...ctx, country: null })).toBeNull();
+    expect(exactBankMatch(q('Precisa de visto?'), [bank[1]!], { ...ctx, country: 'INT' })).toBeNull();
+  });
+  it('an answer tied to INT (learned on an international job) is used on another INT job and never on a BR job (K7)', () => {
+    const label = 'Are you legally authorized to work in the country where this job is located?';
+    const visa = a(label, 'No', { country: 'INT' });
+    expect(exactBankMatch(q(label), [visa], { ...ctx, country: 'INT' })?.value).toBe('No');
+    expect(exactBankMatch(q(label), [visa], { ...ctx, country: 'BR' })).toBeNull();
+    expect(bankCandidates([visa], { ...ctx, country: 'BR' })).toEqual([]);
+  });
+  it('an answer with no country (profile facts, seeded questions) is used on BR and INT jobs alike (K7)', () => {
+    const fact = a('Anos de experiência com TypeScript', '5', { country: null });
+    expect(exactBankMatch(q('Anos de experiência com TypeScript'), [fact], { ...ctx, country: 'BR' })?.value).toBe('5');
+    expect(exactBankMatch(q('Anos de experiência com TypeScript'), [fact], { ...ctx, country: 'INT' })?.value).toBe('5');
   });
   it('uses a confirmed variation only with the same options', () => {
     const saved = a('Precisa de visto?', 'Não', { aliases: [{ normalized: 'do you need a visa', options: ['Yes', 'No'], value: 'No' }] });

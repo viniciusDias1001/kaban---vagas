@@ -2,7 +2,9 @@
  * Ensaio MANUAL de um roteiro de site contra a vaga de verdade: abre UMA vaga com janela, preenche como o worker
  * faria, fotografa a página inteira e fecha sem enviar. Este comando NÃO TEM caminho que envie a candidatura.
  *
- *   pnpm apply:smoke -- --site <linkedin|greenhouse|lever> --job <endereço da vaga> [--resume <pdf>]
+ *   pnpm apply:smoke -- --site <linkedin|greenhouse|lever> --job <endereço da vaga> [--resume <pdf>] [--country BR|INT]
+ *
+ * `--country` é o país da vaga (padrão INT): respostas salvas ligadas a um país só valem para vagas desse país.
  *
  * Nunca roda na CI. As respostas do modelo usam a mesma ligação da fila (`ai-calls.ts`: classificar, casar respostas
  * salvas, fatos do perfil e texto aberto, com verificador, orçamento antes de cada chamada e cobrança na camada `apply`),
@@ -75,6 +77,7 @@ async function main(): Promise<number> {
     const choice = detectBrowserChannel();
     console.log(`Site: ${args.site}`);
     console.log(`Vaga: ${args.url}`);
+    console.log(`País da vaga: ${args.country}${args.country === 'INT' ? ' (use --country BR para uma vaga no Brasil)' : ''}`);
     console.log(`Pasta de dados: ${dataDir}`);
     console.log(`Navegador: ${choice === null ? '(nenhum encontrado)' : typeof choice === 'string' ? choice : choice.executablePath}`);
     console.log('Vaga do ensaio: montada só pelo endereço; respostas salvas de uma empresa específica podem não valer num ensaio por endereço.');
@@ -116,7 +119,7 @@ async function main(): Promise<number> {
 
     const ruleContext = {
       profile, job, sourceLabel: APPLY_SITE_LABELS[args.site], resumeFileName: basename(resumePath),
-      company: job.company, jobId: job.id, country: null,
+      company: job.company, jobId: job.id, country: args.country,
     };
     const controller = new AbortController();
     const modelDeps = resolveDepsFor(ai, {

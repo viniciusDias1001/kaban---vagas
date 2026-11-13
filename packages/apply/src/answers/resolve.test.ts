@@ -460,3 +460,23 @@ describe('a confirm_match proposal carries the value in the type of the question
     expect((await proposalOf(q('q1', 'Qual é o seu time do coração?'), a({ question: 'Time favorito', answer: 'Náutico' }), null))?.value).toBe('Náutico');
   });
 });
+
+describe('the country of a saved answer (K7)', () => {
+  const label = 'Are you legally authorized to work in the country where this job is located?';
+  const visa = (country: 'BR' | 'INT') => [a({ id: 61, question: label, answer: 'No', country })];
+  it('a visa answer learned on an INT job is not used on a BR job: it goes to the owner', async () => {
+    const res = await resolveAnswers(input([q('q1', label)], visa('INT')), deps);
+    expect(res.answers).toEqual([]);
+    expect(res.pending).toEqual([expect.objectContaining({ kind: 'unanswered', category: 'personal' })]);
+    expect(deps.proposeMatches).not.toHaveBeenCalled();
+  });
+  it('the same answer is used on another INT job', async () => {
+    const res = await resolveAnswers(input([q('q1', label)], visa('INT'), { ctx: { ...ctx, country: 'INT' } }), deps);
+    expect(res.answers).toEqual([expect.objectContaining({ value: 'No', source: 'bank', bankAnswerId: 61 })]);
+  });
+  it('a profile-fact answer saved with no country is used on a BR job', async () => {
+    modelSays({ q1: 'profile_fact' });
+    const res = await resolveAnswers(input([q('q1', 'Quantos anos de experiência com Rust?')], [a({ id: 62, question: 'Quantos anos de experiência com Rust?', answer: '3' })]), deps);
+    expect(res.answers).toEqual([expect.objectContaining({ value: '3', source: 'bank', bankAnswerId: 62 })]);
+  });
+});

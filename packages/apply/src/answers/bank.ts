@@ -4,8 +4,11 @@ import type { ApplyAnswerRow } from '@kv/db';
 export interface BankContext {
   company: string;
   jobId: number;
-  /** País da vaga em ISO-2, quando se sabe. */
-  country: string | null;
+  /**
+   * O país da vaga, como a vaga o guarda: `BR` ou `INT`. Uma resposta salva com país só vale para vagas desse país
+   * (as respostas `personal` aprendidas numa vaga levam o país dela); sem país, vale para todas.
+   */
+  country: 'BR' | 'INT';
 }
 
 const SCOPE_RANK = { job: 0, company: 1, always: 2 } as const;
@@ -23,7 +26,7 @@ function inScope(row: ApplyAnswerRow, ctx: BankContext): boolean {
 export function bankCandidates(bank: ApplyAnswerRow[], ctx: BankContext): ApplyAnswerRow[] {
   return bank.filter(
     (row) =>
-      row.answer.trim() !== '' && inScope(row, ctx) && (row.country === null || (ctx.country !== null && row.country === ctx.country)),
+      row.answer.trim() !== '' && inScope(row, ctx) && (row.country === null || row.country === ctx.country),
   );
 }
 
