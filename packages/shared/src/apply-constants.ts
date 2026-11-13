@@ -137,8 +137,12 @@ export interface ApplySiteStateDto {
   sessionCheckedAt: number | null; paused: boolean; pauseReason: SitePauseReason | null;
   formsToday: number; formsCap: number; viewsToday: number | null; viewsCap: number | null;
 }
+/** O que o worker publicou da última vez sobre a candidatura automática poder rodar nele (HOST local, navegador). */
+export interface ApplyWorkerState { available: boolean; reason: string | null; seenAt: number }
 export interface ApplyStatusDto {
   available: boolean; unavailableReason: string | null; enabled: boolean; withinWindow: boolean;
+  /** O estado publicado pelo worker; null enquanto nenhum worker publicou. */
+  worker: ApplyWorkerState | null;
   sites: ApplySiteStateDto[]; totalToday: number; totalCap: number; queued: number; needsHuman: number;
   /** Candidaturas em `preparing`, `filling`, `waiting_human` ou `submitting`. */
   running: number;

@@ -5,8 +5,8 @@ import { capsLeft, nextAllowedAt, withinWindow, type ApplySite, type BrowserSess
 import type { DescriptionFetcher } from '@kv/connectors';
 import { and, asc, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import {
-  applicationById, applications, applyCountsSince, nextApplyCommand, nextQueuedApplication, recoverApplications,
-  recoverApplyCommands, siteState, transitionApplication, type ApplicationRow, type Db,
+  applicationById, applications, applyCountsSince, finishApplyCommand, nextApplyCommand, nextQueuedApplication, recoverApplications,
+  recoverApplyCommands, saveApplyWorkerState, siteState, transitionApplication, type ApplicationRow, type Db,
 } from '@kv/db';
 import type { SettingsService } from '@kv/settings';
 import { APPLY_SITE_IDS, APPLY_TIMING, type ApplyConfig, type ApplySiteId } from '@kv/shared';
@@ -24,8 +24,8 @@ export interface ApplyQueueDeps {
   dataDir: string;
   ai: () => Promise<{ provider: AiProvider; config: AiConfig }>;
   fetchDescription: DescriptionFetcher;
-  /** `applyAvailability(process.env)` e navegador encontrado. */
-  availability: { available: boolean; reason: string | null };
+  /** `applyAvailability(process.env)` e navegador encontrado; uma função é lida a cada verificação. */
+  availability: Availability | (() => Availability);
   sweepMs?: number;
   humanPollMs?: number;
   now?: () => number;
@@ -36,6 +36,8 @@ export interface ApplyQueueDeps {
   workTimeoutMs?: number;
   abortGraceMs?: number;
 }
+
+export interface Availability { available: boolean; reason: string | null }
 
 export interface ApplyTickResult { commands: number; swept: number; started: boolean }
 
@@ -55,7 +57,10 @@ const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
  * A fila de candidaturas do worker: uma candidatura por vez, sem que `tick()` espere por ela.
  *
  * A cada verificação, nesta ordem:
- * 1. função indisponível (HOST não local, navegador não encontrado): nada. Disponível: roda os comandos pendentes do app,
+ * 0. publica a disponibilidade (`saveApplyWorkerState`) na primeira verificação e sempre que ela muda, com o motivo no
+ *    log quando indisponível;
+ * 1. função indisponível (HOST não local, navegador não encontrado): cada comando do app termina em erro com o motivo, e
+ *    nada mais. Disponível: roda os comandos pendentes do app,
  *    mesmo com a função desligada, para o dono conectar as contas antes (não com uma candidatura usando o navegador);
  * 2. sem candidatura em andamento, fecha o navegador parado há mais de `browserIdleMs`, menos com uma janela de login
  *    esperando o dono (até a conferência de sessão achar o dono conectado, ou `humanWaitMs` depois do `open_login`);
@@ -244,11 +249,45 @@ export function createApplyQueue(deps: ApplyQueueDeps): ApplyQueue {
     await db.update(applications).set({ shots: kept }).where(eq(applications.id, id));
   }
 
+  /** O último estado publicado (`available` e motivo), para publicar e registrar no log só quando muda. */
+  let published: string | null = null;
+
+  async function publish(current: Availability): Promise<void> {
+    const key = JSON.stringify([current.available, current.reason]);
+    if (key === published) return;
+    await saveApplyWorkerState(db, current, now());
+    if (!current.available) log(`candidaturas indisponíveis: ${current.reason ?? 'motivo desconhecido'}`);
+    else if (published !== null) log('candidaturas disponíveis de novo');
+    published = key;
+  }
+
+  /** Indisponível: cada comando do app termina em erro com o motivo (a tela de contas o mostra), sem tocar o navegador. */
+  async function refuseCommands(reason: string): Promise<number> {
+    let n = 0;
+    for (let command = await nextApplyCommand(db); command; command = await nextApplyCommand(db)) {
+      await finishApplyCommand(db, command.id, { ok: false, message: reason }, now());
+      n += 1;
+    }
+    return n;
+  }
+
   async function tick(): Promise<ApplyTickResult> {
     const result: ApplyTickResult = { commands: 0, swept: 0, started: false };
-    if (!availability.available || ticking) return result;
+    if (ticking) return result;
+    const current = typeof availability === 'function' ? availability() : availability;
+    if (!current.available) {
+      ticking = true;
+      try {
+        await publish(current);
+        result.commands = await refuseCommands(current.reason ?? 'a candidatura automática está indisponível neste worker');
+        return result;
+      } finally {
+        ticking = false;
+      }
+    }
     ticking = true;
     try {
+      await publish(current);
       // O navegador é um só: com uma candidatura nele, os comandos esperam a próxima verificação.
       if (!inFlight) result.commands = await runCommands();
       await endLoginWaits();

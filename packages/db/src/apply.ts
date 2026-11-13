@@ -1,11 +1,11 @@
 import { and, asc, desc, eq, gte, inArray, isNotNull, sql } from 'drizzle-orm';
 import type {
   ApplicationDto, ApplicationEventDto, ApplicationListItemDto, ApplicationReason, ApplicationStatus, ApplyMode, ApplySiteId,
-  ApplyTrigger,
+  ApplyTrigger, ApplyWorkerState,
 } from '@kv/shared';
 import { APPLY_SITE_IDS, isAppliedOrLater } from '@kv/shared';
 import type { Db } from './client';
-import { applicationEvents as eventsTable, applications, applyAnswers, applyCommands, applySites, candidateProfiles, jobAi, jobs } from './schema';
+import { applicationEvents as eventsTable, applications, applyAnswers, applyCommands, applySites, candidateProfiles, jobAi, jobs, settings } from './schema';
 
 export type ApplicationRow = typeof applications.$inferSelect;
 export type ApplyCommandRow = typeof applyCommands.$inferSelect;
@@ -374,6 +374,33 @@ export async function finishApplyCommand(
     .update(applyCommands)
     .set({ status: result.ok ? 'ok' : 'error', result: result.message ?? null, finishedAt: now })
     .where(eq(applyCommands.id, id));
+}
+
+/**
+ * Chave da linha de `settings` onde o worker publica se a candidatura automática pode rodar nele. Não é uma configuração
+ * da tela (o serviço de configurações ignora chaves que não conhece) e sobrevive a "Apagar todos os dados de IA".
+ */
+const WORKER_STATE_KEY = 'applyWorkerState';
+
+/** O worker publica a disponibilidade (no início e quando muda); a API a mostra em `GET /apply/status`. */
+export async function saveApplyWorkerState(
+  db: Db, state: { available: boolean; reason: string | null }, now: number = Date.now(),
+): Promise<void> {
+  const value = { available: state.available, reason: state.reason, seenAt: now };
+  await db
+    .insert(settings)
+    .values({ key: WORKER_STATE_KEY, value, updatedAt: now })
+    .onConflictDoUpdate({ target: settings.key, set: { value, updatedAt: now } });
+}
+
+/** O que o worker publicou da última vez; null se nenhum worker publicou (ou a linha não tem a forma esperada). */
+export async function applyWorkerState(db: Db): Promise<ApplyWorkerState | null> {
+  const [row] = await db.select({ value: settings.value }).from(settings).where(eq(settings.key, WORKER_STATE_KEY));
+  const v = row?.value as Partial<ApplyWorkerState> | undefined;
+  if (!v || typeof v.available !== 'boolean' || typeof v.seenAt !== 'number' || !(v.reason === null || typeof v.reason === 'string')) {
+    return null;
+  }
+  return { available: v.available, reason: v.reason, seenAt: v.seenAt };
 }
 
 /** Lê o estado do site, criando a linha com os padrões na primeira vez. */

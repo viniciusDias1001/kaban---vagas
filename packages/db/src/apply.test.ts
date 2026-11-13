@@ -7,10 +7,10 @@ import {
   waitingApplication, listApplicationEvents, applicationForJob, applyCandidates, applyCountsSince, companyFormsSince, createApplication,
   deleteApplyData, enqueueApplyCommand, finishApplyCommand, listApplications, nextApplyCommand, nextQueuedApplication,
   recoverApplications, recoverApplyCommands, requestCancel, siteState, toApplicationDto, transitionApplication, updateSiteState,
-  settleAppliedByOwner, lockApplicationWithJob,
+  settleAppliedByOwner, lockApplicationWithJob, applyWorkerState, saveApplyWorkerState,
 } from './apply';
 import { deleteAllAiData } from './ai';
-import { applications, applyAnswers, applyCommands, candidateProfiles, jobAi, jobs } from './schema';
+import { applications, applyAnswers, applyCommands, candidateProfiles, jobAi, jobs, settings } from './schema';
 import { createTestDb, resetTestDb } from './testing';
 
 let db: Db;
@@ -317,6 +317,24 @@ describe('commands and site state', () => {
     expect(await siteState(db, 'lever')).toMatchObject({ site: 'lever', session: 'unknown', paused: false, consecutiveFailures: 0 });
     await updateSiteState(db, 'lever', { paused: true, pauseReason: 'brake', consecutiveFailures: 3 });
     expect(await siteState(db, 'lever')).toMatchObject({ paused: true, pauseReason: 'brake', consecutiveFailures: 3 });
+  });
+});
+
+describe('the worker state', () => {
+  it('is null until a worker reports, then reads back the last report', async () => {
+    expect(await applyWorkerState(db)).toBeNull();
+    await saveApplyWorkerState(db, { available: false, reason: 'sem navegador' }, 1000);
+    expect(await applyWorkerState(db)).toEqual({ available: false, reason: 'sem navegador', seenAt: 1000 });
+    await saveApplyWorkerState(db, { available: true, reason: null }, 2000);
+    expect(await applyWorkerState(db)).toEqual({ available: true, reason: null, seenAt: 2000 });
+  });
+
+  it('survives the deletion of the AI data and reads a damaged row as null', async () => {
+    await saveApplyWorkerState(db, { available: true, reason: null }, 1000);
+    await deleteAllAiData(db);
+    expect(await applyWorkerState(db)).not.toBeNull();
+    await db.update(settings).set({ value: { available: 'yes' } });
+    expect(await applyWorkerState(db)).toBeNull();
   });
 });
 

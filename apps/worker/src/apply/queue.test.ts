@@ -6,7 +6,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { desc, eq } from 'drizzle-orm';
 import { createFakeProvider, parseOutput, readBlock, readTask, type AiConfig, type AiProvider } from '@kv/ai';
 import {
-  applications, applicationForJob, applyCommands, applyCountsSince, closeDb, createApplication, enqueueApplyCommand, jobEvents, jobs,
+  applications, applicationForJob, applyCommands, applyCountsSince, applyWorkerState, closeDb, createApplication, enqueueApplyCommand, jobEvents, jobs,
   nextApplyCommand, nextQueuedApplication, recordUsage, requestCancel, retryApplication, saveApplyAnswer, siteState, transitionApplication,
   updateSiteState, usageByLayer,
   type Db,
@@ -130,6 +130,43 @@ describe('the switches', () => {
     expect(await queue({ enabled: false }).tick()).toEqual({ commands: 1, swept: 0, started: false });
     expect(await db.select().from(applications)).toEqual([]);
     expect(site.calls).toEqual(['sessionState']);
+  });
+
+  it('says why it cannot run: publishes the reason, logs it once and ends every command with it', async () => {
+    const logs: string[] = [];
+    await candidate();
+    await enqueueApplyCommand(db, 'open_login', 'fake');
+    await enqueueApplyCommand(db, 'check_session', 'fake');
+    const q = queue({ availability: { available: false, reason: 'Opera GX não encontrado' }, deps: { log: (m) => logs.push(m) } });
+    expect(await q.tick()).toEqual({ commands: 2, swept: 0, started: false });
+    expect(await applyWorkerState(db)).toEqual({ available: false, reason: 'Opera GX não encontrado', seenAt: NOON });
+    expect((await db.select().from(applyCommands)).map((c) => [c.status, c.result])).toEqual([
+      ['error', 'Opera GX não encontrado'], ['error', 'Opera GX não encontrado'],
+    ]);
+    clock.now += MIN;
+    await enqueueApplyCommand(db, 'check_session', 'fake');
+    expect((await q.tick()).commands).toBe(1);
+    expect(logs.filter((l) => l.includes('Opera GX não encontrado'))).toHaveLength(1);
+    expect((await applyWorkerState(db))!.seenAt).toBe(NOON); // nada mudou: nada a publicar
+    expect(await db.select().from(applications)).toEqual([]);
+    expect(site.calls).toEqual([]);
+  });
+
+  it('publishes when it is available, and again whenever that changes', async () => {
+    const logs: string[] = [];
+    let state = { available: true, reason: null as string | null };
+    const q = queue({ enabled: false, availability: () => state, deps: { log: (m) => logs.push(m) } });
+    await q.tick();
+    expect(await applyWorkerState(db)).toEqual({ available: true, reason: null, seenAt: NOON });
+    clock.now += MIN;
+    state = { available: false, reason: 'sem navegador' };
+    await q.tick();
+    expect(await applyWorkerState(db)).toEqual({ available: false, reason: 'sem navegador', seenAt: NOON + MIN });
+    clock.now += MIN;
+    state = { available: true, reason: null };
+    await q.tick();
+    expect(await applyWorkerState(db)).toEqual({ available: true, reason: null, seenAt: NOON + 2 * MIN });
+    expect(logs.filter((l) => l.includes('sem navegador'))).toHaveLength(1);
   });
 
   it('closes a browser left idle', async () => {
