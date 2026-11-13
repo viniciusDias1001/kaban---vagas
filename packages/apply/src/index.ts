@@ -7,3 +7,5 @@ export { FAKE_SITE_ORIGIN, createFakeSite } from './sites/fake';
 export * from './engine';
 export { isBlocked, withinWindow } from './gate';
 export { exactBankMatch } from './answers/bank';
+export { capsLeft, decideGate, nextAllowedAt } from './gate';
+export { resolveAnswers, type ResolveDeps } from './answers/resolve';
