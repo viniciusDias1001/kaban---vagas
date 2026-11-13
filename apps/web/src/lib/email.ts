@@ -14,7 +14,8 @@ export function alertTitle(a: AlertDto): string {
     case 'interview': return `Convite de entrevista: ${who(a)}`;
     case 'offer': return `Oferta: ${who(a)}`;
     case 'missing_fact': return `${who(a)} pediu algo que você não salvou`;
-    case 'draft': return `Rascunho esperando você: ${who(a)}`;
+    // Sem resposta preparada (e-mail que não aceita resposta, IA desligada ou falhou), o título não promete um rascunho.
+    case 'draft': return a.replyId === null ? `${who(a)} pediu uma resposta sua` : `Rascunho esperando você: ${who(a)}`;
     case 'move_confirm': return `Mover ${who(a)} para ${a.payload.moveTo ? COLUMN_LABELS[a.payload.moveTo] : 'outra coluna'}?`;
     case 'unmatched': return `E-mail sem vaga: ${subjectOf(a)}`;
     case 'mailbox_error': return 'A caixa de e-mail parou';
@@ -24,8 +25,20 @@ export function alertTitle(a: AlertDto): string {
   }
 }
 
-/** O texto de apoio do alerta: o resumo do e-mail, ou o assunto; alguns tipos têm texto próprio. */
+/** Os tipos em que o worker pode dizer, em `payload.reason`, por que não há resposta pronta. */
+const REASON_KINDS: ReadonlySet<AlertKind> = new Set(['draft', 'interview', 'missing_fact']);
+
+/**
+ * O texto de apoio do alerta: o resumo do e-mail, ou o assunto; alguns tipos têm texto próprio. Num pedido, convite ou dado
+ * que falta, o motivo de não haver resposta pronta vem numa segunda linha.
+ */
 export function alertBody(a: AlertDto): string {
+  const main = alertMainBody(a);
+  const reason = REASON_KINDS.has(a.kind) ? a.payload.reason?.trim() ?? '' : '';
+  return [main, reason].filter((line) => line !== '').join('\n');
+}
+
+function alertMainBody(a: AlertDto): string {
   switch (a.kind) {
     case 'missing_fact': {
       const labels = (a.payload.missing ?? []).map((f) => KNOWN_FACT_LABELS[f]);

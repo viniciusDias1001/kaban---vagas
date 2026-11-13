@@ -207,8 +207,8 @@ function AlertItem({ alert, onOpenJob, onOpenSettings, onOpenAnswers }: {
   const title = alertTitle(alert);
   const body = alertBody(alert);
   const action = alertAction(alert.kind);
-  // O corpo cai no assunto quando não há resumo: se o título já o diz, não se repete.
-  const showBody = body !== '' && !title.includes(body);
+  // O corpo cai no assunto quando não há resumo: a linha que o título já diz não se repete (o motivo, na linha seguinte, fica).
+  const bodyText = body.split('\n').filter((line) => line !== '' && !title.includes(line)).join('\n');
 
   /** Roda uma ação; o erro aparece uma vez, aqui no alerta (o aviso flutuante não abre). */
   const run: Run = async (key, fn) => {
@@ -250,7 +250,9 @@ function AlertItem({ alert, onOpenJob, onOpenSettings, onOpenAnswers }: {
           {alert.jobTitle && alert.kind !== 'unmatched' && (
             <p className="mt-0.5 break-words text-xs leading-snug text-muted">{alert.jobTitle}</p>
           )}
-          {showBody && <p className="mt-1.5 whitespace-pre-line break-words text-[13px] leading-relaxed text-ink-2">{body}</p>}
+          {bodyText !== '' && (
+            <p data-testid={`alert-body-${alert.id}`} className="mt-1.5 whitespace-pre-line break-words text-[13px] leading-relaxed text-ink-2">{bodyText}</p>
+          )}
         </div>
       </div>
 

@@ -30,7 +30,7 @@ describe('alertTitle / alertBody / alertAction', () => {
     );
     expect(alertTitle(alert({ kind: 'move_confirm', payload: { moveTo: 'aplicada' } }))).toBe('Mover Acme para Aplicada?');
     expect(alertTitle(alert({ kind: 'missing_fact', company: 'Globex' }))).toBe('Globex pediu algo que você não salvou');
-    expect(alertTitle(alert({ kind: 'draft' }))).toBe('Rascunho esperando você: Acme');
+    expect(alertTitle(alert({ kind: 'draft', replyId: 3 }))).toBe('Rascunho esperando você: Acme');
     expect(alertTitle(alert({ kind: 'mailbox_error' }))).toBe('A caixa de e-mail parou');
     expect(alertTitle(alert({ kind: 'backfill_summary' }))).toBe('Primeira leitura da caixa');
   });
@@ -44,6 +44,22 @@ describe('alertTitle / alertBody / alertAction', () => {
     expect(alertBody(alert({ kind: 'backfill_summary' }))).toBe('Li 0 e-mails de vagas.');
     expect(alertBody(alert({ kind: 'mailbox_error' }))).toBe('Abra Configurações > E-mail para reconectar.');
     expect(alertBody(alert({ kind: 'mailbox_error', payload: { reason: 'Senha recusada.' } }))).toBe('Senha recusada.');
+  });
+
+  it('does not promise a draft when there is no reply, and says why on a second line', () => {
+    const noReply = 'Este e-mail não aceita resposta.';
+    expect(alertTitle(alert({ kind: 'draft', replyId: null }))).toBe('Acme pediu uma resposta sua');
+    expect(alertTitle(alert({ kind: 'draft', replyId: 7 }))).toBe('Rascunho esperando você: Acme');
+    expect(alertBody(alert({ kind: 'draft', replyId: null, summary: 'Pede o telefone', payload: { reason: noReply } })))
+      .toBe(`Pede o telefone\n${noReply}`);
+    expect(alertBody(alert({ kind: 'interview', summary: 'Entrevista na terça', payload: { reason: 'Sem rascunho da IA. Responda você mesmo.' } })))
+      .toBe('Entrevista na terça\nSem rascunho da IA. Responda você mesmo.');
+    expect(alertBody(alert({ kind: 'missing_fact', payload: { missing: ['phone'], reason: noReply } }))).toBe(`Falta: Telefone\n${noReply}`);
+    // Sem resumo e sem assunto, só o motivo; motivo em branco não acrescenta linha.
+    expect(alertBody(alert({ kind: 'draft', summary: null, subject: null, payload: { reason: noReply } }))).toBe(noReply);
+    expect(alertBody(alert({ kind: 'draft', summary: 'Pede o telefone', payload: { reason: '  ' } }))).toBe('Pede o telefone');
+    // Os outros tipos não ganham a linha.
+    expect(alertBody(alert({ kind: 'offer', summary: 'Proposta', payload: { reason: noReply } }))).toBe('Proposta');
   });
 
   it('maps each kind to its action', () => {
