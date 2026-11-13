@@ -4,7 +4,7 @@
  * os testes gravariam nas configurações dele e o worker dele abriria sites de verdade. A API diz em que banco está
  * (`GET /meta`); só um banco terminado em `_e2e` ou `_test`, e o mesmo que o e2e preparou, deixa a suíte começar.
  */
-import { E2E_API_PORT, E2E_WEB_URL } from './ports';
+import { E2E_API_PORT, E2E_WEB_PORT, E2E_WEB_URL } from './ports';
 import { E2E_DATABASE_URL, e2eDatabaseName } from './database';
 
 export default async function globalSetup(): Promise<void> {
@@ -20,7 +20,7 @@ export default async function globalSetup(): Promise<void> {
   if (typeof database !== 'string' || !/_(e2e|test)$/.test(database) || database !== expected) {
     throw new Error(
       `[e2e] o servidor em ${url} não é o do e2e (banco: ${String(database)}; esperado: ${expected}). ` +
-        `A API do e2e roda na porta ${E2E_API_PORT}: confira se ela está livre e se nenhum outro app usa a porta 5173. ` +
+        `A API do e2e roda na porta ${E2E_API_PORT}: confira se ela está livre e se nenhum outro app usa a porta ${E2E_WEB_PORT}. ` +
         'Nenhum teste rodou.',
     );
   }

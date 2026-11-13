@@ -10,6 +10,8 @@ O app guarda os dados em um Postgres (o do `docker-compose.yml` incluído ou um 
 
 **Opcional, desligada por padrão, só no seu computador:** candidatura automática. O app abre um navegador, preenche o formulário de candidatura da vaga com o seu currículo e as suas respostas e, se você deixar, envia em seu nome. Começa sempre em modo ensaio, que não envia nada. Leia [Candidatura automática](#candidatura-automática) antes de ligar.
 
+**Opcional, só no seu computador, com um Gmail:** o app lê a sua Caixa de entrada, liga os e-mails de vaga aos cards (reprovação vai para **Perdida**, convite para **Entrevista**), responde sozinho só quando a empresa pede dados que você já salvou e deixa o resto como rascunho esperando o seu OK. Veja [E-mail](#e-mail).
+
 **Planejado (ainda não existe):**
 
 - Glassdoor e mais fontes internacionais;
@@ -34,7 +36,7 @@ Para parar: `Ctrl+C` no `pnpm dev` e `docker compose down` (os dados ficam no vo
 
 Crie um projeto no Supabase, copie a connection string em *Project Settings > Database* e coloque-a em `DATABASE_URL` no `.env`, no lugar da URL do Postgres local. Depois rode `pnpm db:migrate` (o `pnpm dev` também migra).
 
-- A string do pooler funciona, tanto a do *Transaction pooler* (porta 6543) quanto a do *Session pooler* (porta 5432): o app desliga os prepared statements.
+- A string do pooler funciona, tanto a do *Transaction pooler* (porta 6543) quanto a do *Session pooler* (porta 5432): o app desliga os prepared statements. A exceção é o [e-mail](#e-mail): ele precisa de uma conexão direta ou do *Session pooler*, nunca do *Transaction pooler*.
 - A conexão é criptografada (TLS) por padrão sempre que o host do `DATABASE_URL` não é local, como o do Supabase; não é preciso acrescentar `sslmode` à URL. Hosts locais (`localhost`, `127.0.0.1`, `::1`, `host.docker.internal` ou um nome sem ponto, como o de um serviço do Docker) ficam sem TLS. Para um Postgres em rede privada que não fala TLS, acrescente `?sslmode=disable` à URL; para também validar o certificado do servidor, `?sslmode=verify-full`. Um `sslmode` explícito na URL (ou a variável `PGSSLMODE`) sempre prevalece.
 - Todas as tabelas têm RLS habilitado e nenhuma policy. A chave pública (`anon`) da API do Supabase não lê nem escreve nada; o app acessa o banco como dono das tabelas, pelo `DATABASE_URL`, e por isso não é afetado. Não adicione policies.
 - Nunca commite o `.env`. O `.gitignore` já o ignora.
@@ -61,7 +63,7 @@ A API também confere o cabeçalho `Host` de **toda** requisição: só aceita `
 
 **Filtros do perfil.** Uma vaga passa se alguma das stacks aparece no título, nas stacks detectadas ou na descrição; o nível é lido do título (títulos sem nível aparente passam); região e idade máxima também são aplicados. Nas fontes que buscam por palavra-chave (Gupy, Himalayas, LinkedIn e Indeed), só as **três primeiras stacks** do perfil viram termos de busca; sem stacks, a busca usa "developer" ("desenvolvedor" no Gupy). As demais fontes baixam o feed inteiro e o filtro é local.
 
-**Colunas.** Descobertas, Selecionadas, Aplicada, Entrevista, Oferta, Perdida e Arquivada. Todo movimento é manual (arrastar e soltar, ou os botões "Mover para" no painel da vaga, que funcionam pelo teclado) e fica no histórico da vaga. Mover um card para Aplicada conta como "aplicada por você". O card abre um painel lateral com a descrição, o link original, notas editáveis e o histórico. A barra do topo mostra o total de vagas e os contadores de aplicadas (pela IA e por você) e de pendentes ("Precisam de você"); os da IA só saem do zero com a [candidatura automática](#candidatura-automática).
+**Colunas.** Descobertas, Selecionadas, Aplicada, Entrevista, Oferta, Perdida e Arquivada. Os movimentos são seus (arrastar e soltar, ou os botões "Mover para" no painel da vaga, que funcionam pelo teclado), fora os que a [candidatura automática](#candidatura-automática) e o [e-mail](#e-mail) fazem, se você os ligar; todos ficam no histórico da vaga, com o autor. Mover um card para Aplicada conta como "aplicada por você". O card abre um painel lateral com a descrição, o link original, notas editáveis e o histórico. A barra do topo mostra o total de vagas e os contadores de aplicadas (pela IA e por você) e de pendentes ("Precisam de você"); os da IA só saem do zero com a [candidatura automática](#candidatura-automática).
 
 **Saúde das fontes.** Mostra, por fonte, o último run: status (OK, Erro ou Nunca rodou), vagas encontradas, novas, horário e a mensagem de erro. Uma fonte com erro não impede as outras. Se nenhum run termina há mais de 2 horas, a interface avisa que o worker pode estar parado.
 
@@ -143,7 +145,7 @@ Esses casos ficam com o prompt e com a revisão do usuário. **Leia sempre o cur
 
 ### Seus dados: o que fica guardado e como apagar
 
-Tudo fica no **seu** banco de dados (o do `DATABASE_URL`), com uma exceção: a candidatura automática também grava arquivos na pasta de dados do seu computador (últimas quatro linhas da tabela). O app não tem servidor próprio nem telemetria.
+Tudo fica no **seu** banco de dados (o do `DATABASE_URL`), com uma exceção: a candidatura automática também grava arquivos na pasta de dados do seu computador (as quatro linhas que citam `APPLY_DATA_DIR`). O app não tem servidor próprio nem telemetria.
 
 | O que | Onde (tabela) | Como apagar |
 |---|---|---|
@@ -160,11 +162,18 @@ Tudo fica no **seu** banco de dados (o do `DATABASE_URL`), com uma exceção: a 
 | PDF do currículo enquanto uma candidatura está sendo preenchida | arquivos em `resumes/` em `APPLY_DATA_DIR` | apagado ao fim de cada candidatura e quando o worker reinicia; "Apagar todos os dados de IA" apaga a pasta `resumes/` |
 | Fotos de página inteira de formulários reais e os PDFs gerados pelo `pnpm apply:smoke` | arquivos em `smoke/` em `APPLY_DATA_DIR` | nada apaga esta pasta: apague à mão quando não precisar mais |
 | Sessão dos sites (cookies) e o resto do perfil do navegador | pasta `browser/` em `APPLY_DATA_DIR`, nunca no banco | "Desconectar" em Configurações apaga os cookies do site; ou apague a pasta. "Apagar todos os dados de IA" não toca nela |
+| Senha de app da caixa de e-mail e token do bot do Telegram, cifrados (AES-256-GCM com `APP_SECRET`) | `app_secrets` | **Configurações > E-mail**: "Desconectar" apaga a senha; o botão de apagar o token apaga o token |
+| Estado da caixa: endereço, ponto de leitura (`UIDVALIDITY` e último UID), última leitura, erro, pausa | `mail_account` | "Desconectar" |
+| E-mails de vaga (só os que passaram no filtro local) e as mensagens do mesmo fio: remetente, destinatário, assunto, data, texto, tipo, resumo, idioma, vaga ligada e se a classificação foi corrigida | `mail_messages` | "Apagar todos os dados de IA", ou "Desconectar" marcando "Apagar também os e-mails guardados" |
+| Respostas preparadas para esses e-mails (montadas pelo código ou rascunhos da IA), com o texto exato do que saiu | `mail_replies` | os mesmos dois |
+| E-mails ignorados: de empresas do quadro que não pareceram de vaga, só remetente, assunto e data (nunca o texto) | `mail_ignored` | os mesmos dois; somem sozinhos depois de 30 dias |
+| Alertas do sino (convite, oferta, pedido sem resposta salva, rascunho, e-mail sem vaga, erro da caixa...) | `alerts` | os mesmos dois; cada um some quando você o resolve ou dispensa |
 
 - **Apagar um idioma** (`DELETE /api/ai/resumes/:lang`) remove o arquivo, o texto lido, o perfil daquele idioma, os currículos adaptados escritos nele e as leituras/traduções de perfil que estejam na fila. As notas e análises das vagas ficam, marcadas como desatualizadas.
-- **Apagar todos os dados de IA** (`DELETE /api/ai/data`) remove currículos, perfis, currículos adaptados, notas, títulos traduzidos, análises, a fila inteira, o banco de respostas, o conteúdo das candidaturas automáticas e as pastas `shots/` e `resumes/` da pasta de dados (veja a tabela). Ficam as vagas com as suas anotações, o histórico de gasto, as configurações, as chaves, o perfil do navegador (`browser/`) e a pasta `smoke/`. Um arquivo que outro programa esteja usando naquele instante (uma foto aberta num visualizador, por exemplo) pode ficar para trás; apague-o à mão depois.
+- **Apagar todos os dados de IA** (`DELETE /api/ai/data`) remove currículos, perfis, currículos adaptados, notas, títulos traduzidos, análises, a fila inteira, o banco de respostas, o conteúdo das candidaturas automáticas, as pastas `shots/` e `resumes/` da pasta de dados, e tudo o que o [e-mail](#e-mail) guardou: os e-mails de vaga, as respostas preparadas, os ignorados e os alertas (veja a tabela). Ficam as vagas com as suas anotações (inclusive onde os e-mails já moveram os cards), o histórico de gasto, as configurações, as chaves, a caixa conectada (`mail_account` e a senha de app), o perfil do navegador (`browser/`) e a pasta `smoke/`.
+- **Desconectar a caixa** (Configurações > E-mail) apaga a senha de app e o estado da leitura, e pergunta se apaga também os e-mails guardados, as respostas, os ignorados e os alertas. Sem marcar, eles ficam (a conversa continua no painel de cada vaga) até um "Apagar todos os dados de IA". Um arquivo que outro programa esteja usando naquele instante (uma foto aberta num visualizador, por exemplo) pode ficar para trás; apague-o à mão depois.
 - As duas ações pedem confirmação e **não têm volta**. Uma chamada de IA que esteja em andamento termina, mas o resultado dela é descartado.
-- O que já foi enviado ao provedor de IA não é apagado por aqui: vale a política de retenção do provedor. O mesmo vale para o que já foi enviado a uma empresa numa candidatura.
+- O que já foi enviado ao provedor de IA não é apagado por aqui: vale a política de retenção do provedor. O mesmo vale para o que já foi enviado a uma empresa numa candidatura ou numa resposta por e-mail, e para a sua caixa do Gmail, que o app nunca altera.
 - A descrição de uma vaga buscada sob demanda (LinkedIn, Indeed) fica na própria vaga e sai com ela.
 
 **Currículo enviado: limites.** PDF ou DOCX, até 5 MB; o tipo é conferido pelo conteúdo do arquivo, não pela extensão. O PDF precisa ter texto selecionável: um currículo escaneado (só imagem) é recusado na hora, com a sugestão de exportar de novo ou enviar um DOCX. Também são recusados: PDF com mais de 30 páginas, arquivo protegido por senha, arquivo que leva mais de 15 s para ser lido e texto com mais de cerca de 6 páginas (o que o modelo lê de uma vez com folga para devolver o perfil). A recusa aparece no próprio cartão do idioma e o currículo anterior continua valendo.
@@ -364,9 +373,103 @@ A candidatura para em "formulário não reconhecido", com a foto. Grave de novo 
 
 Os testes dos roteiros de site usam páginas gravadas de formulários reais, servidas localmente; nenhum teste automatizado acessa um site real. Essas páginas gravadas **ficam só na sua máquina** (não vão para o repositório, porque podem trazer dados pessoais) e são gravadas de novo com `pnpm apply:fixtures`. Com `FAKE_APPLY_SITE=1` o app usa um site de teste local no lugar dos sites reais (é o que o `pnpm e2e` usa).
 
+## E-mail
+
+Opcional. O app lê a Caixa de entrada de um Gmail, reconhece os e-mails das empresas a que você se candidatou, liga cada um ao card da vaga e age conforme o tipo: move o card, avisa você ou prepara a resposta. Depende da [IA de perfil](#ia-de-perfil) para classificar os e-mails e roda no worker, então o worker precisa estar ligado.
+
+> **Leia antes de conectar.**
+>
+> - **A senha de app dá acesso à caixa inteira.** O app só lê a Caixa de entrada (e, de um e-mail de vaga, as outras mensagens do mesmo fio) e só envia as respostas descritas abaixo, mas quem tiver a senha pode fazer mais. Ela fica cifrada no seu banco (AES-256-GCM com `APP_SECRET`) e nunca volta à tela, a log ou a mensagem de erro.
+> - **O app não tem login.** Por isso a função só existe com o app em endereço local (`HOST` ausente, `127.0.0.1`, `localhost` ou `::1`); API e worker conferem cada um por si. Em outro `HOST`, Configurações mostra o motivo e não deixa conectar.
+> - **Algumas respostas saem sem você ver**, no modo padrão: só as que a empresa pede e que são fatos que você já salvou (veja [O que o app envia sozinho](#o-que-o-app-envia-sozinho)). Troque o modo para "Pedir aprovação" se preferir ver tudo antes.
+
+### Como conectar
+
+1. Configure a IA e envie o seu currículo (veja [IA de perfil](#ia-de-perfil)), e defina `APP_SECRET` no `.env` (sem ele, a seção explica o que falta e não deixa conectar).
+2. Na sua Conta Google, ative a verificação em duas etapas e crie uma **senha de app** (16 caracteres; os espaços não importam).
+3. Em **Configurações > E-mail**, digite o endereço do Gmail e a senha de app e clique **Testar e conectar**. O app faz o login, e só grava a senha se ele funcionar. Se o endereço for diferente do e-mail do seu perfil (o que vai nas candidaturas), a tela avisa: as respostas das empresas chegam no outro endereço.
+4. Preencha em **Meu perfil > Respostas para candidaturas** o que as empresas costumam pedir (pretensão salarial, disponibilidade, visto...): é com isso que o app responde sozinho.
+
+**Desconectar** apaga a senha e o estado da leitura, e pergunta se apaga também os e-mails guardados (veja [Seus dados](#seus-dados-o-que-fica-guardado-e-como-apagar)).
+
+### O que o app lê
+
+- A cada **3 minutos**, as mensagens novas da **Caixa de entrada**, e só dela. Na primeira leitura, as dos **30 dias** antes da conexão.
+- De cada mensagem: remetente, destinatários, assunto, data, os cabeçalhos do fio e o texto (cortado num tamanho máximo). Anexos nunca são baixados, links nunca são abertos, imagens nunca são carregadas.
+- **A caixa nunca muda**: as pastas são abertas só para leitura; nada é marcado como lido, movido ou apagado. A única escrita é o envio das respostas, pelo SMTP do Gmail.
+- **Filtro local, antes de qualquer IA.** Só segue adiante o e-mail que parece de vaga: resposta num fio em que o app já está, remetente de um sistema de recrutamento conhecido, ou o nome de uma empresa com card em Aplicada ou depois no remetente, no domínio ou no assunto **junto** com um sinal de contratação (o título da vaga, palavras como candidatura, vaga, entrevista, application; um remetente como careers, jobs, rh; ou uma mensagem escrita por uma pessoa direto para você). O nome da empresa sozinho não basta: extrato do banco e recibo de compra não são e-mail de vaga.
+- O que não passa no filtro não vai à IA e não tem o texto guardado. As mensagens de empresas do quadro que não passaram aparecem 30 dias em **Configurações > E-mail > E-mails ignorados**, só com remetente, assunto e data, com o botão **É de vaga**, que manda a mensagem pelo caminho normal.
+- Cada e-mail de vaga vai à IA uma vez, para dizer o tipo (recebimento, reprovação, entrevista, oferta, pedido ou outro), a vaga entre as candidatas que o código escolheu, o que a empresa pede, o idioma e um resumo de uma linha. A IA não devolve endereços nem escolhe destinatário. O código só aceita a vaga escolhida se a empresa dela aparece no e-mail; senão o e-mail fica **sem vaga** e o sino pede para você ligá-lo a um card.
+- **Primeira leitura.** Os e-mails dos 30 dias para trás movem os cards (é o estado verdadeiro de cada processo), mas não geram resposta, rascunho nem um alerta por e-mail: só um alerta de resumo ("li 14 e-mails de vagas: 5 reprovações, 2 convites...").
+
+### O que cada tipo faz
+
+| Tipo | Card | Alerta no sino | Resposta |
+|---|---|---|---|
+| Recebimento | fica | não | nenhuma |
+| Reprovação | vai para **Perdida** | não (fica no histórico e no Painel) | nenhuma |
+| Entrevista | vai para **Entrevista** | sim | rascunho da IA, esperando o seu OK |
+| Oferta | vai para **Oferta** | sim | nenhuma (você responde) |
+| Pedido só de fatos que você salvou | fica | só no modo "Pedir aprovação" | montada pelo código, com texto fixo; sai conforme o modo |
+| Pedido com algo que não é fato salvo | fica | sim | rascunho da IA, esperando o seu OK |
+| Outro | fica | não | nenhuma |
+
+**A coluna Perdida** fica entre Oferta e Arquivada. Para a candidatura automática ela conta como "já aplicada".
+
+**Movimentos.** Só reprovação, entrevista e oferta movem card, e vale o e-mail mais recente. Um e-mail mais antigo que o último que moveu o card, ou que o último movimento feito por você, só é registrado; a sua mão vale mais que qualquer e-mail, e um card em Arquivada nunca é movido por e-mail. Todo movimento por e-mail entra no histórico do card com o autor "E-mail", o tipo e o assunto ("E-mail — Reprovação: Sua candidatura na Acme"), e o painel da vaga tem **Desfazer movimento**: o card volta para onde estava e o e-mail fica marcado "classificação corrigida", para o Painel não contar errado. Em Configurações, **Mover cards pelos e-mails**: "Automático" (padrão) ou "Pedir confirmação" (cada movimento vira um alerta com Mover e Não mover).
+
+### O que o app envia sozinho
+
+Só uma coisa: a resposta a um **pedido em que tudo o que a empresa pediu é fato que você salvou** (telefone, e-mail, cidade, LinkedIn, GitHub e portfólio do perfil; pretensão salarial, disponibilidade, visto, modelo de trabalho e as outras respostas salvas, com a mesma regra de país das candidaturas; o currículo em PDF). O código escreve o texto, fixo por item, no idioma do e-mail, com saudação e o seu nome; nenhuma palavra vem da IA. Faltando o valor de um item, nada sai: o sino avisa o que a empresa pediu, e a resposta que você salvar vale da próxima vez.
+
+Mesmo assim, a resposta só sai sem aprovação quando:
+
+- vai para um **endereço confiável**: o do remetente, um do domínio da empresa do card, um de sistema de recrutamento conhecido ou um que já apareceu antes no fio. Um `Reply-To` para qualquer outro endereço (um e-mail que se passa pela empresa) vira rascunho, e o sino mostra para quem iria;
+- o endereço aceita resposta: "no-reply", lista de e-mails ou mensagem automática (`Auto-Submitted`) nunca recebem resposta, e o sino diz "Este e-mail não aceita resposta";
+- você ainda não respondeu: antes de enviar, o app olha o fio e, se você já respondeu do celular ou do Gmail, não envia nada.
+
+Cada pedido recebe **uma** resposta, no fio do e-mail recebido. O estado "enviando" é gravado antes do envio e nunca é refeito às cegas: se o worker cair no meio, na volta ele procura a resposta na pasta Enviados pelo `Message-ID` dela; achou, marca como enviada; não achou, a resposta volta a esperar você. O texto exato do que saiu fica no painel da vaga.
+
+**Os três modos** de **Respostas com fatos salvos** (Configurações > E-mail): **Automático** (padrão, como acima), **Pedir aprovação** (a resposta fica pronta e só sai quando você aprovar) e **Desligado** (o app não monta respostas com os seus dados). **Rascunhos escritos pela IA** (ligado por padrão) prepara o rascunho do convite e dos pedidos que não são só fatos salvos; rascunho **nunca** sai sozinho, em modo nenhum. **Ler a caixa** desligado desliga tudo.
+
+**Rascunhos.** No sino e no painel da vaga, o rascunho aparece numa caixa de texto que cresce, com **Salvar edição**, **Aprovar e enviar** e **Descartar**. Trechos entre colchetes duplos (`[[seus horários]]`) são lacunas para você preencher. **Aprovar e enviar** só liga quando o texto da caixa é o texto salvo e não tem lacuna: o que você vê é o que sai.
+
+### O sino
+
+O sino do cabeçalho conta o que espera você e lista, do mais novo ao mais antigo: convite de entrevista, oferta, pedido sem resposta salva, rascunho esperando aprovação, movimento esperando confirmação, e-mail sem vaga, caixa com erro, o resumo da primeira leitura e os e-mails esperando o limite diário de IA. Cada alerta tem a sua ação (abrir a vaga, aprovar o rascunho, ligar o e-mail a uma vaga, abrir Respostas para candidaturas...) e some quando você o resolve ou dispensa. Convite e oferta também disparam o aviso do navegador, se você o permitiu na aba Candidaturas.
+
+### Aviso no celular
+
+Opcional, desligado por padrão: convite de entrevista e oferta também chegam como mensagem de um bot do **Telegram** que você mesmo cria.
+
+1. No Telegram, fale com o BotFather e crie um bot.
+2. Em **Configurações > E-mail > Aviso no celular**, escolha "Telegram", cole o token do bot (fica cifrado no cofre, como a senha) e salve as configurações.
+3. Mande qualquer mensagem para o seu bot e aperte **Achar meu chat**. **Enviar teste** confere.
+
+Só sai da máquina o tipo do aviso e o nome da empresa ("Convite de entrevista: Acme"): nada do texto, do remetente ou do assunto do e-mail. O seu número de telefone não é usado nem guardado. A primeira leitura não manda aviso; uma falha no envio tenta de novo até 3 vezes e nunca apaga o alerta do app.
+
+### Custo
+
+Cada e-mail que passa no filtro custa uma chamada do modelo rápido (classificação); cada rascunho, uma ou duas do modelo forte. O gasto entra na camada **E-mail**, dentro do mesmo limite diário. Atingido o limite, a leitura continua e a classificação espera o dia seguinte; para um convite não ficar parado em silêncio, o sino mostra quantos e-mails esperam, com **Classificar mesmo assim**.
+
+### Requisitos e limites
+
+- **Conexão direta com o Postgres.** Só um worker por banco cuida do e-mail, e quem garante isso é um lock de sessão do Postgres. Ele precisa de uma conexão direta (o Postgres do Docker, a conexão direta do Supabase ou o *Session pooler*); com o *Transaction pooler* (porta 6543 do Supabase) o lock não vale e o e-mail não deve ser ligado.
+- **Um worker só.** Deixe ligado um processo de worker por banco (o do `pnpm dev` ou o instalado com `pnpm worker:install`, nunca os dois). Um segundo worker não mexe no e-mail enquanto o primeiro estiver no ar, mas também não ajuda em nada.
+- Só Gmail (IMAP e SMTP com senha de app). Outros provedores ficam para depois.
+
+### Conferência manual
+
+Os testes automáticos usam uma caixa falsa (`FAKE_MAIL=1`) e nunca abrem um servidor de e-mail; estas conferências só você pode fazer, com a sua caixa:
+
+1. **Depois de conectar, rode `pnpm mail:smoke` uma vez.** Ele abre a caixa conectada só para leitura, busca os últimos 30 dias da Caixa de entrada, passa cada mensagem no mesmo filtro local do app e imprime só contagens e, por mensagem que passa, remetente, assunto e a regra que a deixou passar. Com `pnpm mail:smoke -- --classify 5`, também classifica até 5 delas e imprime o tipo e a vaga (isso **gasta IA**, avisa antes e não entra no histórico de gasto). Não grava nada no banco, não envia nada e recusa rodar com `CI` definida. Confira se os e-mails de vaga que você conhece passam e se nada estranho passa.
+2. **Depois da primeira resposta automática, abra a pasta Enviados do Gmail** e confira que a resposta está lá. A recuperação depois de uma queda do worker no meio de um envio depende de o Gmail guardar, na cópia enviada, o `Message-ID` que o app pôs na resposta.
+3. Confira que só **um** worker está rodando (veja acima).
+4. Confira que o `DATABASE_URL` é uma **conexão direta** com o Postgres, não o *Transaction pooler*.
+
 ## A aba Configurações
 
-**O que tem.** IA: provedor, modelo rápido e modelo forte, chave de API por provedor, limite diário, liga/desliga da triagem automática (camada 1) e da análise automática (camada 2), "Testar conexão" e o gasto. Fontes: as empresas consultadas no Greenhouse e no Lever. Candidatura automática: interruptor, nota mínima, modo de cada site (Ensaio ou Enviar), limites, horário, currículo, respostas propostas pela IA, lista de bloqueio e contas dos sites (veja [Candidatura automática](#candidatura-automática)). Geral: estado do worker e horário da próxima busca. Com a triagem automática desligada, a nota só é calculada quando você abre a vaga; com a análise automática desligada, a análise só roda pelo botão "Analisar esta vaga".
+**O que tem.** IA: provedor, modelo rápido e modelo forte, chave de API por provedor, limite diário, liga/desliga da triagem automática (camada 1) e da análise automática (camada 2), "Testar conexão" e o gasto. Fontes: as empresas consultadas no Greenhouse e no Lever. Candidatura automática: interruptor, nota mínima, modo de cada site (Ensaio ou Enviar), limites, horário, currículo, respostas propostas pela IA, lista de bloqueio e contas dos sites (veja [Candidatura automática](#candidatura-automática)). E-mail: conexão da caixa, leitura ligada, modos de mover cards e de responder com fatos salvos, rascunhos da IA, aviso no celular e e-mails ignorados (veja [E-mail](#e-mail)). Geral: estado do worker e horário da próxima busca. Com a triagem automática desligada, a nota só é calculada quando você abre a vaga; com a análise automática desligada, a análise só roda pelo botão "Analisar esta vaga".
 
 **Precedência.** Para cada configuração vale, nesta ordem: o que foi gravado pela tela, depois a variável de ambiente, depois o padrão do código. A tela mostra de onde vem cada valor ("definido aqui", "do ambiente", "padrão"). API e worker releem o banco com um cache de 5 segundos: uma mudança vale em instantes, nos dois processos, sem reiniciar.
 
@@ -459,9 +562,13 @@ As marcadas com (*) são só o **valor inicial**: podem ser trocadas na aba Conf
 | `APPLY_DATA_DIR` | `%LOCALAPPDATA%\kanban-vagas` (Windows), `~/Library/Application Support/kanban-vagas` (macOS), `${XDG_DATA_HOME:-~/.local/share}/kanban-vagas` (demais) | Pasta de dados da candidatura automática: perfil do navegador (`browser/`, com as sessões dos sites) e fotos dos formulários (`shots/`). Fica fora do repositório. Só por variável de ambiente |
 | `APPLY_BROWSER` | procura Chrome e depois Edge | Navegador da candidatura automática: `chrome`, `msedge`, `opera-gx` (a versão mais nova do Opera GX instalada) ou o caminho completo do executável de um navegador baseado em Chromium. Só por variável de ambiente |
 | `FAKE_APPLY_SITE` | desligado | `1` troca os sites de candidatura por um site de teste local e o navegador pelo Chromium do Playwright, sem janela (testes e e2e, sem rede) |
+| `FAKE_MAIL` | desligado | `1` troca o Gmail por uma caixa falsa (um arquivo em `<APPLY_DATA_DIR>/fake-mail`) e o Telegram por um aviso falso, e a leitura passa a rodar a cada 3 s (testes e e2e, sem rede). Não use no dia a dia |
+| `WEB_PORT` | `5173` | Porta do web no `pnpm dev` (o Vite não troca de porta sozinho se ela estiver ocupada). Só o `pnpm e2e` precisa mudá-la |
 | `E2E_DATABASE_URL` | `postgres://postgres:postgres@localhost:5433/kanban_e2e` | Só no `pnpm e2e`. O nome do banco precisa terminar em `_e2e` ou `_test` |
+| `E2E_WEB_PORT` | `5173` | Só no `pnpm e2e`: porta do web do servidor de teste |
+| `E2E_API_PORT` | `3399` | Só no `pnpm e2e`: porta da API do servidor de teste (nunca a 3333 do seu `pnpm dev`) |
 | `E2E_SCREENSHOT_DIR` | desligado | Só no `pnpm e2e`: pasta onde o teste grava screenshots |
-| `CI` | desligado | No `pnpm e2e`: com `CI` definida, o Playwright gera relatório HTML e proíbe `test.only`. No `pnpm ai:smoke`: com `CI` definida, ele se recusa a rodar |
+| `CI` | desligado | No `pnpm e2e`: com `CI` definida, o Playwright gera relatório HTML e proíbe `test.only`. No `pnpm ai:smoke`, no `pnpm apply:smoke` e no `pnpm mail:smoke`: com `CI` definida, eles se recusam a rodar |
 
 A triagem automática e a análise automática (os dois interruptores da aba Configurações) não têm variável de ambiente e só mudam pela tela: a triagem começa ligada (custa quase nada por vaga) e a análise automática começa desligada (usa o modelo forte).
 
@@ -477,12 +584,14 @@ pnpm start:prod     # migra e sobe api + worker como em produção (veja "Deploy
 pnpm ai:smoke -- --yes [provedor]   # ATENÇÃO: chamadas reais aos provedores de IA, gasta dinheiro
 pnpm resume:preview   # gera o PDF do seu perfil em uma pasta fora do repositório
 pnpm apply:smoke -- --site <id> --job <url>   # ATENÇÃO: abre um formulário real, em ensaio; nunca envia
+pnpm mail:smoke [-- --classify N]   # ATENÇÃO: abre a sua caixa de e-mail de verdade, só para leitura
 ```
 
 - Os testes unitários não usam rede nem Docker: o banco é um Postgres em memória (PGlite) e as fontes são testadas contra fixtures gravadas.
 - **Nenhum teste automatizado chama um provedor de IA de verdade nem usa chave real:** os adaptadores dos três provedores são testados com uma camada HTTP falsa e respostas escritas à mão, e todo o resto (inclusive o e2e) usa o provedor falso, que não usa rede.
+- **Nenhum teste automatizado abre o Gmail nem outro servidor de e-mail:** os testes do e-mail usam a caixa falsa (`FAKE_MAIL=1`). O `pnpm mail:smoke` é o único comando que abre a caixa de verdade; é manual, só de leitura, e nunca roda na CI nem em teste (veja [Conferência manual](#conferência-manual)).
 - O `pnpm ai:smoke` é o único comando que fala com os provedores reais. Ele gasta dinheiro de verdade, nunca roda na CI nem em teste, e só roda com `--yes` (veja [IA de perfil](#ia-de-perfil)).
-- O `pnpm e2e` precisa do Postgres do compose no ar (`docker compose up -d`) e do Chromium do Playwright (`pnpm --filter @kv/web exec playwright install chromium`, uma vez). Ele cria o banco `kanban_e2e` se não existir, esvazia as tabelas a cada execução e sobe seu próprio `pnpm dev` com `FAKE_CONNECTORS=1`, `AI_ALLOW_FAKE=1`, `FAKE_APPLY_SITE=1` e um `APP_SECRET` sorteado na hora, então as portas 5173 e 3333 precisam estar livres (pare o seu `pnpm dev`). São três testes, em sequência: o do quadro; o da IA de perfil, que configura o provedor falso pela aba Configurações, grava uma chave fictícia, envia um currículo fictício e baixa o PDF adaptado; e o da candidatura automática, que liga a função, responde as perguntas de uma candidatura parada, confere os ensaios e os envia de verdade ao site de teste local (num Chromium do Playwright sem janela e sem rede). O banco `kanban` de desenvolvimento não é tocado, as chaves do seu `.env` são ignoradas, e a pasta de dados da candidatura do e2e é uma pasta própria na pasta temporária do sistema, esvaziada a cada execução (nunca a sua `APPLY_DATA_DIR`). `E2E_SERVER_LOGS=1` mostra a saída da api, do worker e do web durante o teste.
+- O `pnpm e2e` precisa do Postgres do compose no ar (`docker compose up -d`) e do Chromium do Playwright (`pnpm --filter @kv/web exec playwright install chromium`, uma vez). Ele cria o banco `kanban_e2e` se não existir, esvazia as tabelas a cada execução e sobe seu próprio `pnpm dev` com `FAKE_CONNECTORS=1`, `AI_ALLOW_FAKE=1`, `FAKE_APPLY_SITE=1`, `FAKE_MAIL=1` e um `APP_SECRET` sorteado na hora. Ele usa as portas 5173 (web) e 3399 (API), que precisam estar livres; com o seu `pnpm dev` no ar (5173 e 3333), troque as duas: `E2E_WEB_PORT=5174 E2E_API_PORT=3334 pnpm e2e` (no PowerShell, defina `$env:E2E_WEB_PORT` e `$env:E2E_API_PORT` antes). São quatro testes, em sequência: o do quadro; o da IA de perfil, que configura o provedor falso pela aba Configurações, grava uma chave fictícia, envia um currículo fictício e baixa o PDF adaptado; o da candidatura automática, que liga a função, responde as perguntas de uma candidatura parada, confere os ensaios e os envia de verdade ao site de teste local (num Chromium do Playwright sem janela e sem rede); e o do e-mail, que conecta a caixa falsa, entrega uma reprovação (o card vai para Perdida e o Desfazer o devolve), um pedido de pretensão salarial (respondido sozinho com o valor salvo), um convite (o rascunho só sai depois de a lacuna ser preenchida, salva e aprovada) e uma fatura (fica em E-mails ignorados). O banco `kanban` de desenvolvimento não é tocado, as chaves do seu `.env` são ignoradas, e a pasta de dados da candidatura do e2e (com a caixa falsa dentro) é uma pasta própria na pasta temporária do sistema, esvaziada a cada execução (nunca a sua `APPLY_DATA_DIR`). `E2E_SERVER_LOGS=1` mostra a saída da api, do worker e do web durante o teste.
 - Mudou o schema? Edite `packages/db/src/schema.ts`, rode `pnpm db:generate`, revise o SQL gerado em `packages/db/migrations` e aplique com `pnpm db:migrate`. Tabelas novas usam `.enableRLS()` para manter o RLS habilitado.
 
 Estrutura:
@@ -497,7 +606,7 @@ packages/shared       tipos e schemas Zod
 packages/ai           provedores de IA (Claude, OpenAI, Gemini e o falso), prompts, verificador de não invenção
 packages/resume       extração de texto de PDF/DOCX e geração do PDF do currículo adaptado
 packages/settings     configurações gravadas pela tela e cifra das chaves de API
-scripts/              start de produção, instalação do worker, gravação de fixtures, ai:smoke, prévia do currículo (resume:preview)
+scripts/              start de produção, instalação do worker, gravação de fixtures, ai:smoke, apply:smoke, mail:smoke, prévia do currículo (resume:preview)
 .railway/             configuração do Railway (nunca aplicada, veja "Deploy")
 docs/superpowers/     spec e plano de implementação
 ```
@@ -513,7 +622,7 @@ docs/superpowers/     spec e plano de implementação
 
 O workflow `.github/workflows/ci.yml` roda em push para a `main` e em pull requests de qualquer branch. Um job no Ubuntu, com Node 24 e um Postgres 17 como serviço, executa em ordem: `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm test`, o build do web com a conferência de que o Zod não entrou no bundle do navegador, instalação do Chromium do Playwright e `pnpm e2e` (banco `kanban_e2e`). Se algo falhar, o relatório do Playwright é guardado como artefato por 7 dias. Uma execução nova no mesmo branch cancela a anterior.
 
-A CI não precisa de nenhum segredo do repositório: nenhuma chave de API e nenhum `APP_SECRET`. Os testes da IA usam o provedor falso, e o `APP_SECRET` do e2e é sorteado pelo `playwright.config.ts` a cada execução. O `pnpm ai:smoke` não faz parte do workflow e se recusa a rodar quando `CI` está definida.
+A CI não precisa de nenhum segredo do repositório: nenhuma chave de API e nenhum `APP_SECRET`. Os testes da IA usam o provedor falso, e o `APP_SECRET` do e2e é sorteado pelo `playwright.config.ts` a cada execução. O `pnpm ai:smoke` e o `pnpm mail:smoke` não fazem parte do workflow e se recusam a rodar quando `CI` está definida; o e2e usa a caixa de e-mail falsa e não precisa de conta nenhuma.
 
 ## Deploy no Railway
 

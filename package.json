@@ -16,6 +16,7 @@
     "ai:smoke": "tsx scripts/ai-smoke.ts",
     "resume:preview": "tsx scripts/resume-preview.ts",
     "apply:smoke": "tsx scripts/apply-smoke.ts",
+    "mail:smoke": "tsx scripts/mail-smoke.ts",
     "start:prod": "node scripts/start-prod.mjs",
     "worker:install": "node scripts/install-worker.mjs"
   },
