@@ -16,6 +16,7 @@ import { settingsRoutes } from './routes/settings';
 import { tailoredRoutes } from './routes/tailored';
 import { jobRoutes } from './routes/jobs';
 import { metaRoutes } from './routes/meta';
+import { dashboardRoutes } from './routes/dashboard';
 import { profileRoutes } from './routes/profiles';
 import { runRoutes } from './routes/runs';
 
@@ -175,6 +176,7 @@ export function buildApp(db: Db, opts: AppOptions = {}) {
     jobRoutes(scope, db, ctx);
     runRoutes(scope, db);
     metaRoutes(scope, db);
+    dashboardRoutes(scope, db, ctx);
     aiRoutes(scope, db, ctx);
     jobAiRoutes(scope, db, ctx);
     tailoredRoutes(scope, db, ctx);
