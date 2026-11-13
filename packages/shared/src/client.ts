@@ -11,3 +11,4 @@ export * from './settings-constants';
 export type { CandidateProfile, JobAnalysis, ProfileWire, TailoredDraft, Tier1Result, Tier2Output } from './ai';
 export * from './apply-constants';
 export * from './email-constants';
+export * from './dashboard-constants';
