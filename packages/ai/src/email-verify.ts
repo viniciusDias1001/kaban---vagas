@@ -19,7 +19,9 @@ const URL = /(?:https?:\/\/|www\.)[^\s<>"'()[\]{}]+/giu;
 const BARE_HOST =
   /(?<![\p{L}\p{N}_.@/-])((?:[\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?\.)+(\p{L}{2,}))(?![\p{L}\p{N}_-])(?:\/[^\s<>"'()[\]{}]*)?/gu;
 /** Finais que não são domínio de verdade e só aparecem em nome de tecnologia ("Node.js", "Vue.js", "app.ts"). */
-const TECH_ENDINGS = new Set(['js', 'ts', 'py', 'rb']);
+const TECH_ENDINGS = new Set(['js', 'ts', 'rb']);
+/** Caractere de controle ou de formatação (invisíveis, inversão de direção), fora quebra de linha e tabulação. */
+const CONTROL_OR_FORMAT = /(?![\t\n\r])[\p{Cc}\p{Cf}]/u;
 /** Nomes de tecnologia com final que também é domínio: a lista é curta de propósito. */
 const TECH_NAMES = new Set(['asp.net', 'ado.net', 'vb.net', 'socket.io']);
 /** Nada que tenha caminho escapa: "socket.io/x" é link. */
@@ -72,6 +74,7 @@ const sameLine = (text: string) => foldText(text).replace(/\s+/g, ' ').trim();
 /**
  * Violações do rascunho, em pt-BR; lista vazia = aceito.
  * - texto vazio (e então nada mais é conferido);
+ * - caractere de controle ou de formatação (fora quebra de linha e tabulação);
  * - número com 3 dígitos ou mais que não está no perfil, nos valores salvos nem no e-mail recebido (assunto, texto e
  *   nome do remetente); números dentro de endereços e links ficam para a regra deles;
  * - endereço de e-mail ou link que não está no perfil nem num valor salvo (o e-mail recebido NÃO abona endereço: é
@@ -88,6 +91,8 @@ export function verifyEmailDraft(input: Pick<EmailDraftInput, 'profile' | 'reque
   const report = (message: string) => {
     if (!violations.includes(message)) violations.push(message);
   };
+  // Um caractere invisível pode esconder do dono o que o texto diz (ou inverter a ordem em que ele o lê).
+  if (CONTROL_OR_FORMAT.test(text)) report('o rascunho tem caracteres de controle ou invisíveis');
 
   const ownFound = own.flatMap(findContacts);
   const emails = new Set(ownFound.filter((f) => f.kind === 'email').map((f) => f.raw.toLowerCase()));
