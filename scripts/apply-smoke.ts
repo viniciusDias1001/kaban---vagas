@@ -20,7 +20,7 @@ import { ApplyBudgetError, createApplyAi, resolveDepsFor } from '../apps/worker/
 import { baseResume, resumeFileName } from '../apps/worker/src/apply/resume';
 import { AiError, createProvider } from '../packages/ai/src/index';
 import { applyDataDir, browserProfileDir } from '../packages/apply/src/data-dir';
-import { createBrowserSession, detectBrowserChannel, realLaunch } from '../packages/apply/src/browser';
+import { browserUnavailableReason, createBrowserSession, detectBrowserChannel, realLaunch } from '../packages/apply/src/browser';
 import { resolveAnswers } from '../packages/apply/src/answers/resolve';
 import { assertOutsideRepo, parseSmokeArgs, runSmoke, smokeAiMode, smokeJobFor, smokeShotPath, smokeSiteFor, type SmokeArgs } from '../packages/apply/src/smoke';
 import type { ApplySite } from '../packages/apply/src/types';
@@ -82,7 +82,7 @@ async function main(): Promise<number> {
     console.log(`Navegador: ${choice === null ? '(nenhum encontrado)' : typeof choice === 'string' ? choice : choice.executablePath}`);
     console.log('Vaga do ensaio: montada só pelo endereço; respostas salvas de uma empresa específica podem não valer num ensaio por endereço.');
     console.log('ENSAIO: este comando nunca envia a candidatura.');
-    if (choice === null) return fail('Nenhum navegador encontrado. Instale o Chrome ou o Edge, ou defina APPLY_BROWSER (chrome, msedge ou o caminho do executável).');
+    if (choice === null) return fail(browserUnavailableReason() ?? 'Nenhum navegador encontrado.');
 
     const shotPath = smokeShotPath(dataDir, args.site, new Date());
     try {
