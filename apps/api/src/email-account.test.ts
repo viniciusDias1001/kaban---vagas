@@ -3,8 +3,8 @@ import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SAMPLE_PROFILE } from '@kv/ai/testing';
 import {
-  closeDb, getMailAccount, insertMailMessage, mailMessages, openAlerts, raiseAlert, saveMailAccount, saveProfile, updateMailAccount,
-  type Db,
+  closeDb, createReply, getMailAccount, insertMailMessage, mailMessages, openAlerts, raiseAlert, replyById, saveMailAccount, saveProfile,
+  updateMailAccount, type Db,
 } from '@kv/db';
 import { createTestDb, resetTestDb } from '@kv/db/testing';
 import {
@@ -256,6 +256,36 @@ describe('DELETE /email/account', () => {
     expect((await del('/email/account?messages=tudo')).statusCode).toBe(400);
     expect(await getMailAccount(db)).not.toBeNull();
     expect((await del('/email/account')).statusCode).toBe(204);
+    expect(await getMailAccount(db)).toBeNull();
+    expect(await db.select().from(mailMessages)).toHaveLength(1);
+  });
+
+  it('keeping the messages closes the mailbox alerts and sends queued replies back to draft', async () => {
+    await saveMailAccount(db, 'maria@example.com', NOW);
+    const messageId = (await seedMessage())!;
+    const replyId = (await createReply(db, {
+      messageId, origin: 'facts', items: ['salary'], toAddress: 'rh@acme.example', subject: 'Re: x', body: 'Olá', attachResume: false,
+      state: 'aprovada', approvedBy: 'auto',
+    }, NOW))!;
+    await raiseAlert(db, { kind: 'mailbox_error', payload: { reason: 'O Gmail recusou o login.' } }, NOW);
+    await raiseAlert(db, { kind: 'budget_waiting', payload: { waiting: 2 } }, NOW);
+    await raiseAlert(db, { kind: 'backfill_summary', payload: { total: 1, counts: { recebimento: 1 } } }, NOW);
+
+    expect((await del('/email/account?messages=keep')).statusCode).toBe(204);
+    const note = 'A caixa foi desconectada antes do envio.';
+    expect(await replyById(db, replyId)).toMatchObject({ state: 'rascunho', note, approvedBy: null });
+    expect(await openAlerts(db)).toEqual([expect.objectContaining({ kind: 'draft', replyId, payload: { reason: note } })]);
+  });
+
+  it('off a local host, disconnects but refuses to delete the messages', async () => {
+    await saveMailAccount(db, 'maria@example.com', NOW);
+    await seedMessage();
+    vi.stubEnv('HOST', '0.0.0.0');
+    const refused = await del('/email/account?messages=delete');
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json()).toMatchObject({ error: 'email_unavailable' });
+    expect(await getMailAccount(db)).not.toBeNull();
+    expect((await del('/email/account?messages=keep')).statusCode).toBe(204);
     expect(await getMailAccount(db)).toBeNull();
     expect(await db.select().from(mailMessages)).toHaveLength(1);
   });
