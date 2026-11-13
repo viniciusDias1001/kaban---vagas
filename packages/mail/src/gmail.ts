@@ -3,7 +3,7 @@ import { ImapFlow, type FetchMessageObject, type FetchQueryObject, type ImapFlow
 import { createTransport } from 'nodemailer';
 import { MAIL_LIMITS } from '@kv/shared';
 import { clipBody, htmlToText, pickTextPart, syntheticMessageId, threadKeyFromHeaders } from './text';
-import { MailAuthError, MailTransientError, type Mailbox, type OutgoingMail, type RawMail } from './types';
+import { MailAuthError, MailFolderError, MailTransientError, type Mailbox, type OutgoingMail, type RawMail } from './types';
 
 export const GMAIL = { imapHost: 'imap.gmail.com', imapPort: 993, smtpHost: 'smtp.gmail.com', smtpPort: 465 } as const;
 
@@ -14,6 +14,7 @@ export const BODY_MAX_BYTES = 4 * MAIL_LIMITS.bodyChars;
 
 export const AUTH_FAILED_TEXT = 'O Gmail recusou o login. Confira o endereço e a senha de app.';
 export const TRANSIENT_TEXT = 'Não foi possível falar com o Gmail agora.';
+export const FOLDERS_HIDDEN_TEXT = "Ative 'Mostrar em IMAP' para 'Todos os e-mails' e 'Enviados' nas configurações do Gmail (Marcadores).";
 
 /**
  * O que se pede de cada mensagem: envelope, estrutura MIME, id do fio e só estes cabeçalhos.
@@ -118,6 +119,16 @@ export function findSpecialUse(
     (e) => [...e.flags].some((f) => f.toLowerCase() === mark) || (e.specialUse === use && e.specialUseSource === 'extension'),
   );
   return found ? found.path : null;
+}
+
+/** A pasta de uso especial; sem ela (escondida do IMAP nas configurações do Gmail), `MailFolderError` dizendo como mostrá-la. */
+export function requireSpecialUse(
+  list: Pick<ListResponse, 'path' | 'flags' | 'specialUse' | 'specialUseSource'>[],
+  use: '\\All' | '\\Sent',
+): string {
+  const path = findSpecialUse(list, use);
+  if (!path) throw new MailFolderError(FOLDERS_HIDDEN_TEXT);
+  return path;
 }
 
 /** Id de fio do Gmail (X-GM-THRID, só dígitos); outra chave é um Message-ID, procurado nos cabeçalhos. */
@@ -265,9 +276,7 @@ class GmailMailbox implements Mailbox {
   }
 
   private async specialFolder(use: '\\All' | '\\Sent'): Promise<string> {
-    const path = findSpecialUse(await (await this.client()).list(), use);
-    if (!path) throw new MailTransientError(TRANSIENT_TEXT);
-    return path;
+    return requireSpecialUse(await (await this.client()).list(), use);
   }
 
   private async search(client: ImapFlow, query: SearchObject): Promise<number[]> {
@@ -296,9 +305,12 @@ class GmailMailbox implements Mailbox {
     return mails;
   }
 
+  /** Login e as duas pastas de que a leitura precisa ("Todos os e-mails" para o fio, "Enviados" para conferir um envio). */
   check(): Promise<void> {
     return this.run(async () => {
-      await this.client();
+      const list = await (await this.client()).list();
+      requireSpecialUse(list, '\\All');
+      requireSpecialUse(list, '\\Sent');
     });
   }
 

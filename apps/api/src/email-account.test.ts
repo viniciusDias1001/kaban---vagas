@@ -6,7 +6,9 @@ import {
   closeDb, getMailAccount, insertMailMessage, mailMessages, openAlerts, raiseAlert, saveMailAccount, saveProfile, type Db,
 } from '@kv/db';
 import { createTestDb, resetTestDb } from '@kv/db/testing';
-import { FAKE_TELEGRAM_CHAT_ID, MailTransientError, PhoneAlertError, fakeMailDir, type Mailbox } from '@kv/mail';
+import {
+  FAKE_TELEGRAM_CHAT_ID, FOLDERS_HIDDEN_TEXT, MailFolderError, MailTransientError, PhoneAlertError, fakeMailDir, type Mailbox,
+} from '@kv/mail';
 import { createSettingsService } from '@kv/settings';
 import { TEST_DATA_DIR, TEST_SECRET, testAi } from './ai-testing';
 import { buildApp } from './app';
@@ -113,6 +115,20 @@ describe('PUT /email/account', () => {
     expect(res.json()).toEqual({ error: 'mail_unreachable', message: 'Não foi possível falar com o Gmail agora.' });
     expect(res.body).not.toContain(STORED);
     expect(closed).toEqual([1]);
+    expect(await getMailAccount(db)).toBeNull();
+    expect(await settings().hasSecret('mail_password')).toBe(false);
+  });
+
+  it('says how to show the folders when All mail or Sent is hidden from IMAP, and stores nothing', async () => {
+    const hidden = (): Mailbox =>
+      ({
+        async check() { throw new MailFolderError(FOLDERS_HIDDEN_TEXT); },
+        async close() {},
+      }) as unknown as Mailbox;
+    build({ env: { APP_SECRET: TEST_SECRET }, mailbox: hidden });
+    const res = await put('/email/account', { address: 'maria@example.com', password: PASSWORD });
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toEqual({ error: 'mail_unreachable', message: FOLDERS_HIDDEN_TEXT });
     expect(await getMailAccount(db)).toBeNull();
     expect(await settings().hasSecret('mail_password')).toBe(false);
   });

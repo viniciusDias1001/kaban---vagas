@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { baseProfile, deleteMailAccount, deleteMailData, getMailAccount, resolveAlerts, saveMailAccount, type Db } from '@kv/db';
-import { MailAuthError, PhoneAlertError, type Mailbox } from '@kv/mail';
+import { FOLDERS_HIDDEN_TEXT, MailAuthError, MailFolderError, PhoneAlertError, type Mailbox } from '@kv/mail';
 import { SecretMissingError } from '@kv/settings';
 import { DisconnectQuerySchema, MailAccountInputSchema, PhoneTokenInputSchema, emailAvailability, type MailAccountDto } from '@kv/shared';
 import type { AiContext } from '../ai-context';
@@ -195,6 +195,8 @@ async function checkLogin(mailbox: Mailbox): Promise<LoginFailure | null> {
     return null;
   } catch (e) {
     if (e instanceof MailAuthError) return { status: 422, body: { error: 'mail_auth', message: e.message } };
+    // Pasta escondida do IMAP: a frase fixa do `MailFolderError` diz o que ativar no Gmail.
+    if (e instanceof MailFolderError) return { status: 502, body: { error: 'mail_unreachable', message: FOLDERS_HIDDEN_TEXT } };
     return { status: 502, body: { error: 'mail_unreachable', message: UNREACHABLE } };
   } finally {
     // Fechar uma sessão que nem abriu também pode falhar: isso não muda o resultado do teste.

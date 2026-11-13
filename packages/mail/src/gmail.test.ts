@@ -3,9 +3,9 @@ import { describe, expect, it } from 'vitest';
 import { MAIL_LIMITS } from '@kv/shared';
 import {
   BODY_MAX_BYTES, GMAIL, HEAD_QUERY, TIMEOUT_MS, findSpecialUse, imapOptions, inboxSearch, parseHeaderBlock, pickNewUids,
-  readCapped, sendOptions, smtpOptions, threadSearch, toMailError, toRawMail,
+  readCapped, requireSpecialUse, sendOptions, smtpOptions, threadSearch, toMailError, toRawMail, FOLDERS_HIDDEN_TEXT,
 } from './gmail';
-import { MailAuthError, MailTransientError } from './types';
+import { MailAuthError, MailFolderError, MailTransientError } from './types';
 
 const creds = { address: 'maria@example.com', password: 'abcdefghijklmnop' };
 
@@ -80,6 +80,22 @@ describe('search and selection', () => {
     expect(findSpecialUse(list, '\\All')).toBe('[Gmail]/Todos os e-mails');
     expect(findSpecialUse(list, '\\Sent')).toBe('[Gmail]/Enviados');
     expect(findSpecialUse([list[3]!], '\\Sent')).toBeNull();
+  });
+  it('says how to show a folder hidden from IMAP when All mail or Sent is missing', () => {
+    const inbox = { path: 'INBOX', flags: new Set<string>(), specialUse: '\\Inbox', specialUseSource: 'extension' as const };
+    const sent = { path: '[Gmail]/Enviados', flags: new Set(['\\Sent']), specialUse: '\\Sent', specialUseSource: 'extension' as const };
+    const all = { path: '[Gmail]/Todos os e-mails', flags: new Set(['\\All']), specialUse: '\\All', specialUseSource: 'extension' as const };
+    expect(requireSpecialUse([inbox, sent, all], '\\All')).toBe('[Gmail]/Todos os e-mails');
+    expect(requireSpecialUse([inbox, sent, all], '\\Sent')).toBe('[Gmail]/Enviados');
+    for (const [list, use] of [[[inbox, sent], '\\All'], [[inbox, all], '\\Sent']] as const) {
+      let thrown: unknown = null;
+      try { requireSpecialUse([...list], use); } catch (e) { thrown = e; }
+      expect(thrown).toBeInstanceOf(MailFolderError);
+      expect(thrown).toBeInstanceOf(MailTransientError); // a fila trata como as outras falhas da caixa
+      expect((thrown as Error).message).toBe(FOLDERS_HIDDEN_TEXT);
+    }
+    expect(FOLDERS_HIDDEN_TEXT).toBe("Ative 'Mostrar em IMAP' para 'Todos os e-mails' e 'Enviados' nas configurações do Gmail (Marcadores).");
+    expect(toMailError(new MailFolderError(FOLDERS_HIDDEN_TEXT))).toBeInstanceOf(MailFolderError);
   });
   it('searches a thread by the Gmail thread id, or by the headers for other keys', () => {
     expect(threadSearch('1789123456789012345')).toEqual({ threadId: '1789123456789012345' });

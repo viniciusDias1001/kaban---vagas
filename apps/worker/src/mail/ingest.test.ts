@@ -4,7 +4,7 @@ import {
   getMailAccount, insertMailMessage, mailIgnored, mailMessages, openAlerts, requestPromote, saveMailAccount, type Db,
 } from '@kv/db';
 import {
-  MailAuthError, MailTransientError, createFakeMailbox, readFakeMailbox, writeFakeMailbox, type Mailbox, type RawMail,
+  FOLDERS_HIDDEN_TEXT, MailAuthError, MailFolderError, MailTransientError, createFakeMailbox, readFakeMailbox, writeFakeMailbox, type Mailbox, type RawMail,
 } from '@kv/mail';
 import { ingestInbox, promoteNext, type IngestDeps } from './ingest';
 import { DAY, HOUR, MAIL_NOW, MINUTE, OWNER_ADDRESS, mailTestBed } from './test-helpers';
@@ -149,6 +149,13 @@ describe('ingestInbox', () => {
     expect(await openAlerts(db)).toEqual([]);
     expect(await ingestInbox(deps)).toEqual({ stored: 1, ignored: 0, more: false });
     expect(await getMailAccount(db)).toMatchObject({ error: null });
+  });
+
+  it('records how to show the folders when All mail is hidden from IMAP', async () => {
+    deliver(acmeJobMail({ from: { address: 'no-reply@greenhouse.io', name: 'Acme' } }));
+    const hidden: Mailbox = { ...bed.mailbox, fetchThread: async () => { throw new MailFolderError(FOLDERS_HIDDEN_TEXT); } };
+    await expect(ingestInbox({ ...deps, mailbox: hidden })).rejects.toBeInstanceOf(MailFolderError);
+    expect(await getMailAccount(db)).toMatchObject({ paused: false, error: FOLDERS_HIDDEN_TEXT, lastUid: null });
   });
 
   it('deletes ignored lines older than 30 days', async () => {

@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { classifyEmail, createProvider } from '../packages/ai/src/index';
 import { closeDb, createDb, getMailAccount, mailMatchPool, threadJobs } from '../packages/db/src/index';
 import { acceptMatch, createGmailMailbox, pickCandidates, type Mailbox } from '../packages/mail/src/index';
-import { SMOKE_DAYS, formatSmokeSummary, parseMailSmokeArgs, readRecentInbox, summarizeSmoke } from '../packages/mail/src/smoke';
+import { SMOKE_DAYS, checkSmokeFolders, formatSmokeSummary, parseMailSmokeArgs, readRecentInbox, summarizeSmoke } from '../packages/mail/src/smoke';
 import { createSettingsService } from '../packages/settings/src/index';
 import { EMAIL_KIND_LABELS } from '../packages/shared/src/index';
 
@@ -74,6 +74,12 @@ async function main(): Promise<number> {
     );
     console.log('');
     for (const line of formatSmokeSummary(summary, SMOKE_DAYS)) console.log(line);
+    // A leitura do app busca o fio de cada mensagem que passa ("Todos os e-mails") e confere envios em Enviados.
+    const first = summary.passed[0];
+    if (first) {
+      console.log('');
+      for (const line of await checkSmokeFolders(mailbox, first.mail.threadKey)) console.log(line);
+    }
 
     if (provider && summary.passed.length > 0) {
       console.log('', `Classificação (até ${classify}):`);
