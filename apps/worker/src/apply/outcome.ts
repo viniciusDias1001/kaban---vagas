@@ -43,7 +43,10 @@ export async function settle(
   });
 }
 
-/** De volta à fila para a próxima meia-noite do fuso, sem gastar tentativa. Só antes do clique de envio. */
+/**
+ * De volta à fila para a próxima meia-noite do fuso, sem gastar tentativa. Só antes do clique de envio. Para o limite de
+ * IA, o fuso é o do orçamento (`budgetTimeZone`), onde o dia do gasto é contado.
+ */
 export function requeueTomorrow(db: Db, id: number, detail: string, now: number, timeZone: string): Promise<ApplicationStatus | null> {
   return settle(db, id, { status: 'queued', detail, message: detail, from: BEFORE_CLICK, set: { runAfter: nextMidnight(now, timeZone) } }, now);
 }
