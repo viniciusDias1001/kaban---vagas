@@ -93,5 +93,6 @@ CREATE INDEX "application_events_application_idx" ON "application_events" USING 
 CREATE UNIQUE INDEX "applications_job_idx" ON "applications" USING btree ("job_id");--> statement-breakpoint
 CREATE INDEX "applications_status_idx" ON "applications" USING btree ("status");--> statement-breakpoint
 CREATE INDEX "apply_answers_normalized_idx" ON "apply_answers" USING btree ("normalized");--> statement-breakpoint
-CREATE UNIQUE INDEX "apply_answers_key_idx" ON "apply_answers" USING btree ("key","country");--> statement-breakpoint
+CREATE UNIQUE INDEX "apply_answers_key_idx" ON "apply_answers" USING btree ("key") WHERE "apply_answers"."key" is not null and "apply_answers"."country" is null;--> statement-breakpoint
+CREATE UNIQUE INDEX "apply_answers_key_country_idx" ON "apply_answers" USING btree ("key","country") WHERE "apply_answers"."key" is not null and "apply_answers"."country" is not null;--> statement-breakpoint
 CREATE UNIQUE INDEX "apply_commands_pending_idx" ON "apply_commands" USING btree ("kind","site") WHERE "apply_commands"."status" IN ('queued', 'running');

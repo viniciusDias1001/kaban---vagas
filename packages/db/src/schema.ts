@@ -334,8 +334,11 @@ export const applyAnswers = pgTable(
   },
   (t) => [
     index('apply_answers_normalized_idx').on(t.normalized),
-    /** `key` nulo não conflita (nulos são distintos); preenchido, é único por país. */
-    uniqueIndex('apply_answers_key_idx').on(t.key, t.country),
+    /** `key` nulo não conflita (linhas aprendidas do dono se repetem). Com `key`, é único por país; sem país, é único só pela chave. */
+    uniqueIndex('apply_answers_key_idx').on(t.key).where(sql`${t.key} is not null and ${t.country} is null`),
+    uniqueIndex('apply_answers_key_country_idx')
+      .on(t.key, t.country)
+      .where(sql`${t.key} is not null and ${t.country} is not null`),
   ],
 ).enableRLS();
 

@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { eq, sql } from 'drizzle-orm';
 import { closeDb, type Db } from './index';
-import { applicationEvents, applications, applyCommands, jobs } from './schema';
+import { applicationEvents, applications, applyAnswers, applyCommands, jobs } from './schema';
 import { createTestDb, resetTestDb } from './testing';
 
 let db: Db;
@@ -57,6 +57,17 @@ describe('apply tables', () => {
     await expect(db.insert(applyCommands).values({ ...cmd, status: 'queued' })).rejects.toThrow();
     await db.update(applyCommands).set({ status: 'ok' }).where(eq(applyCommands.id, first.id));
     await db.insert(applyCommands).values({ ...cmd, status: 'queued' });
+  });
+
+  it('keeps answer keys unique per country, and lets keyless rows repeat', async () => {
+    const base = { question: 'q', normalized: 'q', answer: '', kind: 'text' as const, createdAt: 1, updatedAt: 1 };
+    await db.insert(applyAnswers).values({ ...base, key: 'x', country: null });
+    await expect(db.insert(applyAnswers).values({ ...base, key: 'x', country: null })).rejects.toThrow();
+    await db.insert(applyAnswers).values({ ...base, key: null, country: null });
+    await db.insert(applyAnswers).values({ ...base, key: null, country: null });
+    await db.insert(applyAnswers).values({ ...base, key: 'x', country: 'BR' });
+    await db.insert(applyAnswers).values({ ...base, key: 'x', country: 'US' });
+    await expect(db.insert(applyAnswers).values({ ...base, key: 'x', country: 'BR' })).rejects.toThrow();
   });
 
   it('has row level security on the five tables', async () => {

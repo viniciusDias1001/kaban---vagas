@@ -1,5 +1,5 @@
 {
-  "id": "d3e3f0b4-14db-46c1-9be3-3fe1892cf315",
+  "id": "e7b708c2-f401-47dc-9da1-d7808aa6d5fb",
   "prevId": "b33ec571-cbd9-4836-83cf-b6f9836f3918",
   "version": "7",
   "dialect": "postgresql",
@@ -747,6 +747,22 @@
               "isExpression": false,
               "asc": true,
               "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"apply_answers\".\"key\" is not null and \"apply_answers\".\"country\" is null",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "apply_answers_key_country_idx": {
+          "name": "apply_answers_key_country_idx",
+          "columns": [
+            {
+              "expression": "key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
             },
             {
               "expression": "country",
@@ -756,6 +772,7 @@
             }
           ],
           "isUnique": true,
+          "where": "\"apply_answers\".\"key\" is not null and \"apply_answers\".\"country\" is not null",
           "concurrently": false,
           "method": "btree",
           "with": {}
