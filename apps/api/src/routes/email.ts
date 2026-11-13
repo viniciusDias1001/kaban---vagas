@@ -6,7 +6,8 @@ import {
   toMailReplyDto, undoEmailMove, unlinkThread, type AlertRow, type Db,
 } from '@kv/db';
 import {
-  AlertMoveSchema, DRAFT_PLACEHOLDER, LinkMessageSchema, MailMessagesQuerySchema, ReplyEditSchema, emailAvailability, type AlertKind,
+  AlertMoveSchema, DRAFT_PLACEHOLDER, LinkMessageSchema, MailMessagesQuerySchema, ReplyApproveSchema, ReplyEditSchema, emailAvailability,
+  type AlertKind,
 } from '@kv/shared';
 import type { AiContext } from '../ai-context';
 import { idParam } from './ids';
@@ -18,7 +19,8 @@ const replyNotFound = { error: 'not_found', message: 'resposta não encontrada' 
 const alertNotFound = { error: 'not_found', message: 'alerta não encontrado' };
 
 const wrongState = { error: 'wrong_state', message: 'Esta resposta não pode mais ser aprovada ou descartada.' };
-const alertClosed = { error: 'alert_closed', message: 'Este alerta já foi resolvido ou dispensado.' };
+const replyChanged = { error: 'reply_changed', message: 'O texto desta resposta mudou. Confira o texto atual antes de enviar.' };
+const alertClosed ={ error: 'alert_closed', message: 'Este alerta já foi resolvido ou dispensado.' };
 
 /**
  * Mensagens, respostas e alertas do e-mail. Nada aqui chama a IA nem envia: aprovar só põe a resposta na fila do worker.
@@ -105,10 +107,12 @@ export function emailRoutes(app: FastifyInstance, db: Db, ctx: AiContext) {
 
   /**
    * "Aprovar e enviar": a resposta passa a `aprovada` e o worker a envia. Um rascunho que ainda tem lacuna (`[[...]]`)
-   * nunca sai do rascunho: 422 até o dono preencher.
+   * nunca sai do rascunho: 422 até o dono preencher. O pedido traz o texto que o dono vê; se o guardado for outro
+   * (mudado em outra aba), 409 `reply_changed` e nada é aprovado.
    */
   app.post('/email/replies/:id/approve', async (req, reply) => {
     if (await refuseOffLocalHost(reply)) return reply;
+    const { body } = ReplyApproveSchema.parse(req.body);
     const id = idParam(req);
     if (id === null) return reply.code(404).send(replyNotFound);
     // A conferência da lacuna e a aprovação na mesma transação, com a linha travada: uma edição que chegue no meio
@@ -116,10 +120,12 @@ export function emailRoutes(app: FastifyInstance, db: Db, ctx: AiContext) {
     const outcome = await db.transaction(async (tx) => {
       const [row] = await tx.select().from(mailReplies).where(eq(mailReplies.id, id)).for('update');
       if (!row) return 'not_found' as const;
+      if (row.body !== body) return 'changed' as const;
       if (DRAFT_PLACEHOLDER.test(row.body)) return 'gaps' as const;
       return (await approveReply(tx, id, 'owner', ctx.now())) ? ('approved' as const) : ('wrong_state' as const);
     });
     if (outcome === 'not_found') return reply.code(404).send(replyNotFound);
+    if (outcome === 'changed') return reply.code(409).send(replyChanged);
     if (outcome === 'gaps') {
       return reply.code(422).send({ error: 'draft_has_gaps', message: 'Preencha as partes entre [[ ]] antes de aprovar.' });
     }

@@ -261,8 +261,22 @@ describe('actOnNext: replies', () => {
     const reply = await replyForMessage(db, messageId);
     expect(reply).toMatchObject({ origin: 'facts', state: 'rascunho', approvedBy: null });
     expect(await openAlerts(db)).toEqual([
-      expect.objectContaining({ kind: 'draft', jobId: acme, replyId: reply!.id, payload: { recipient: 'joana@acme.com' } }),
+      expect.objectContaining({ kind: 'draft', jobId: acme, replyId: reply!.id, payload: {} }),
     ]);
+  });
+
+  it('names the recipient on the draft alert only when it is not the sender', async () => {
+    await deps.settings.update({ emailFactsMode: 'approve' });
+    const toSender = await classified('pedido', { replyTo: ' JOANA@acme.com ' }, { requests: [req('salary')] });
+    expect(await actOnNext(deps)).toBe(true);
+    const own = (await openAlerts(db)).find((a) => a.messageId === toSender);
+    expect(own).toMatchObject({ kind: 'draft' });
+    expect(own!.payload.recipient).toBeUndefined();
+    const toOther = await classified('pedido', { replyTo: 'dados@fora.example' }, { requests: [req('salary')] });
+    expect(await actOnNext(deps)).toBe(true);
+    expect((await openAlerts(db)).find((a) => a.messageId === toOther)).toMatchObject({
+      kind: 'draft', payload: { recipient: 'dados@fora.example' },
+    });
   });
 
   it('writes nothing in off mode', async () => {
@@ -315,7 +329,7 @@ describe('actOnNext: replies', () => {
     const reply = await replyForMessage(db, messageId);
     expect(reply).toMatchObject({ origin: 'ai', state: 'rascunho', items: ['salary'], toAddress: 'joana@acme.com', approvedBy: null });
     expect(await openAlerts(db)).toEqual([
-      expect.objectContaining({ kind: 'draft', jobId: acme, replyId: reply!.id, payload: { recipient: 'joana@acme.com' } }),
+      expect.objectContaining({ kind: 'draft', jobId: acme, replyId: reply!.id, payload: {} }),
     ]);
     expect(calls).toEqual(['strong']);
   });

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { alerts, openAlerts, raiseAlert, type Db } from '@kv/db';
 import { resetTestDb } from '@kv/db/testing';
 import { PhoneAlertError, type PhoneAlert, type PhoneNotifier } from '@kv/mail';
@@ -70,6 +70,21 @@ describe('notifyNext', () => {
     expect(calls).toBe(3);
     expect((await openAlerts(db)).map((a) => a.kind)).toContain('interview');
     expect(logs.filter((l) => l.includes('Não foi possível falar com o Telegram agora.'))).toHaveLength(3);
+  });
+
+  it('sends at most three times when the send works but recording it fails', async () => {
+    await db.execute(sql.raw(`create or replace function kv_test_fail() returns trigger language plpgsql as $$
+      begin if new.phone_sent_at is not null then raise exception 'falha simulada ao gravar o envio'; end if; return new; end $$`));
+    await db.execute(sql.raw('create trigger kv_test_fail before update on alerts for each row execute function kv_test_fail()'));
+    try {
+      for (let round = 0; round < 3; round++) await expect(notifyNext(deps)).rejects.toThrow();
+      for (let round = 0; round < 3; round++) expect(await notifyNext(deps)).toBe(false);
+    } finally {
+      await db.execute(sql.raw('drop trigger kv_test_fail on alerts'));
+    }
+    expect(sent).toEqual([1, 2, 3].map(() => ({ kind: 'interview', company: 'Acme' })));
+    const [row] = await db.select().from(alerts).where(eq(alerts.kind, 'interview'));
+    expect(row).toMatchObject({ phoneSentAt: null, phoneAttempts: 3 });
   });
 
   it('never logs the text of an unexpected error', async () => {

@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { sql } from 'drizzle-orm';
 import { closeDb, type Db } from './index';
 import {
-  alertById, dismissAlert, mailMarksForJobs, markPhoneAttempt, nextPhoneAlert, openAlerts, raiseAlert, resolveAlerts,
+  alertById, dismissAlert, mailMarksForJobs, markPhoneAttempt, markPhoneSent, nextPhoneAlert, openAlerts, raiseAlert, resolveAlerts,
 } from './mail-alerts';
 import { alerts, jobs, mailMessages, mailReplies } from './schema';
 import { createTestDb, resetTestDb } from './testing';
@@ -181,14 +182,40 @@ describe('alerts', () => {
     const second = (await raiseAlert(db, { kind: 'offer', jobId, mailMessageId: m2 }, 2000))!;
 
     expect((await nextPhoneAlert(db))!).toMatchObject({ id: first, kind: 'interview', company: 'Acme' });
-    for (let i = 0; i < 3; i++) await markPhoneAttempt(db, first, false, 3000 + i);
+    for (let i = 0; i < 3; i++) expect(await markPhoneAttempt(db, first)).toBe(true);
+    expect(await markPhoneAttempt(db, first)).toBe(false);
     expect((await alertById(db, first))!).toMatchObject({ phoneAttempts: 3, phoneSentAt: null });
     expect((await nextPhoneAlert(db))!.id).toBe(second);
-    await markPhoneAttempt(db, second, true, 4000);
+    expect(await markPhoneAttempt(db, second)).toBe(true);
+    await markPhoneSent(db, second, 4000);
     expect((await alertById(db, second))!).toMatchObject({ phoneAttempts: 1, phoneSentAt: 4000 });
+    expect(await markPhoneAttempt(db, second)).toBe(false);
     expect(await nextPhoneAlert(db)).toBeNull();
     // A falha no celular nunca apaga o alerta do app.
     expect((await openAlerts(db)).map((a) => a.id).sort()).toEqual([draft, first, second].sort());
+  });
+
+  it('counts the attempt before the send, so a send whose success cannot be recorded happens at most three times', async () => {
+    const jobId = await seedJob('a', 'Acme', 'Dev');
+    const m1 = await seedMessage('<m1@acme.example>', jobId, 'entrevista');
+    const id = (await raiseAlert(db, { kind: 'interview', jobId, mailMessageId: m1 }, 1000))!;
+    await db.execute(sql.raw(`create or replace function kv_test_fail() returns trigger language plpgsql as $$
+      begin if new.phone_sent_at is not null then raise exception 'falha simulada ao gravar o envio'; end if; return new; end $$`));
+    await db.execute(sql.raw('create trigger kv_test_fail before update on alerts for each row execute function kv_test_fail()'));
+    let sends = 0;
+    try {
+      for (let round = 0; round < 6; round++) {
+        const next = await nextPhoneAlert(db);
+        if (!next || !(await markPhoneAttempt(db, next.id))) continue;
+        sends++; // o envio deu certo...
+        await expect(markPhoneSent(db, next.id, 2000 + round)).rejects.toThrow(); // ...e gravar o sucesso falhou
+      }
+    } finally {
+      await db.execute(sql.raw('drop trigger kv_test_fail on alerts'));
+    }
+    expect(sends).toBe(3);
+    expect((await alertById(db, id))!).toMatchObject({ phoneAttempts: 3, phoneSentAt: null });
+    expect(await nextPhoneAlert(db)).toBeNull();
   });
 
   it('skips a dismissed alert for the phone', async () => {

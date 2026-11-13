@@ -13,6 +13,7 @@ export interface MailMessageFilter { kind?: EmailKind; unmatched?: boolean; sinc
 const MESSAGE_CODES = new Set([
   'email_unavailable', 'no_app_secret', 'mail_auth', 'mail_unreachable', 'rate_limited', 'draft_has_gaps', 'not_a_draft',
   'wrong_state', 'wrong_kind', 'alert_closed', 'cannot_undo', 'no_phone_token', 'no_phone_chat', 'no_chat', 'phone_failed',
+  'reply_changed',
 ]);
 
 /** O texto de um erro das rotas de e-mail: a mensagem da API nos códigos conhecidos (qualquer status), o padrão nos demais. */
@@ -83,7 +84,9 @@ export const listIgnored = () => request<MailIgnoredDto[]>('/email/ignored');
 export const promoteIgnored = (id: number) => request<{ ok: true }>(`/email/ignored/${id}/promote`, post());
 
 export const editReply = (id: number, body: string) => request<MailReplyDto>(`/email/replies/${id}`, json('PATCH', { body }));
-export const approveReply = (id: number) => request<MailReplyDto>(`/email/replies/${id}/approve`, post());
+/** Leva o texto que o dono vê: se o guardado for outro, a API recusa com `reply_changed` e nada sai. */
+export const approveReply = (id: number, body: string) =>
+  request<MailReplyDto>(`/email/replies/${id}/approve`, json('POST', { body }));
 export const discardReply = (id: number) => request<MailReplyDto>(`/email/replies/${id}/discard`, post());
 
 export const listAlerts = () => request<{ alerts: AlertDto[] }>('/alerts');

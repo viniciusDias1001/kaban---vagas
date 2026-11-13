@@ -261,6 +261,15 @@ describe('phone alert routes', () => {
     expect(await settings().hasSecret('telegram_bot_token')).toBe(false);
   });
 
+  it('does not delete the bot token off a local host', async () => {
+    await settings().saveSecret('telegram_bot_token', TOKEN);
+    vi.stubEnv('HOST', '0.0.0.0');
+    const res = await del('/email/phone-token');
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: 'email_unavailable', message: expect.stringContaining('HOST') });
+    expect(await settings().hasSecret('telegram_bot_token')).toBe(true);
+  });
+
   it('finds the chat, stores it and answers it; with nobody writing to the bot, says what to do', async () => {
     expect((await post('/email/phone-chat')).json()).toMatchObject({ error: 'no_phone_token', message: 'Grave o token do bot antes.' });
     await settings().saveSecret('telegram_bot_token', TOKEN);
