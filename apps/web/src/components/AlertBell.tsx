@@ -1,24 +1,19 @@
-import { useQuery } from '@tanstack/react-query';
 import {
-  ArrowRightLeft, ArrowUpRight, Bell, BellOff, CalendarClock, Check, FileQuestionMark, Hourglass, Inbox, Link2, LoaderCircle,
-  MailQuestionMark, MailWarning, PenLine, RotateCw, Search, Settings, Trophy, X, type LucideIcon,
+  ArrowRightLeft, ArrowUpRight, Bell, BellOff, CalendarClock, Check, FileQuestionMark, Hourglass, Inbox, Link2, List, LoaderCircle,
+  MailQuestionMark, MailWarning, PenLine, RotateCw, Settings, Trophy, X, type LucideIcon,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import {
-  COLUMN_LABELS, isAppliedOrLater, type AlertDto, type AlertKind, type JobListItemDto,
-} from '@kv/shared/client';
-import { api } from '../api';
-import { alertAction, alertBody, alertTitle, alertsToNotify } from '../lib/email';
+import type { AlertDto, AlertKind } from '@kv/shared/client';
+import { alertAction, alertBody, alertCanLink, alertTitle, alertsToNotify } from '../lib/email';
 import { spring, springSnap } from '../lib/motion';
 import { cn } from '../lib/utils';
 import { useAlertActions, useAlerts, useJobEmails, useMessageActions } from '../useEmail';
-import { JOBS_KEY } from '../useMoveJob';
 import { Button } from './ui/button';
-import { Input } from './ui/input';
 import { Notice } from './ui/notice';
 import { Sheet, SheetClose, SheetContent, SheetTitle } from './ui/sheet';
 import { Skeleton } from './ui/skeleton';
+import { LinkToJob } from './LinkToJob';
 import { ReplyDraftEditor } from './ReplyDraftEditor';
 
 /** O ícone e a cor de cada tipo de alerta: a cor nunca é a única pista (o título diz o tipo). */
@@ -33,10 +28,6 @@ const KIND_LOOK: Record<AlertKind, { Icon: LucideIcon; tone: string }> = {
   backfill_summary: { Icon: Inbox, tone: 'bg-surface-3 text-ink-2 ring-white/8' },
   budget_waiting: { Icon: Hourglass, tone: 'bg-warn/14 text-warn ring-warn/25' },
 };
-
-/** Quantas vagas a busca de "Ligar a esta vaga" mostra de uma vez: a lista não ganha barra própria. */
-const LINK_MATCHES = 6;
-const NO_JOBS: JobListItemDto[] = [];
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -83,10 +74,12 @@ export interface AlertBellProps {
   onOpenJob: (jobId: number) => void;
   onOpenSettings: () => void;
   onOpenAnswers: () => void;
+  /** Abre o Painel, onde fica a lista dos e-mails de vaga (o alerta de resumo da primeira leitura). */
+  onOpenPainel: () => void;
 }
 
 /** O sino do cabeçalho: a contagem do que espera o dono e, ao clicar, o painel com cada alerta e a ação dele. */
-export function AlertBell({ onOpenJob, onOpenSettings, onOpenAnswers }: AlertBellProps) {
+export function AlertBell({ onOpenJob, onOpenSettings, onOpenAnswers, onOpenPainel }: AlertBellProps) {
   const [open, setOpen] = useState(false);
   const query = useAlerts();
   const alerts = useMemo(() => [...(query.data ?? [])].sort((a, b) => b.createdAt - a.createdAt), [query.data]);
@@ -176,6 +169,7 @@ export function AlertBell({ onOpenJob, onOpenSettings, onOpenAnswers }: AlertBel
                           onOpenJob={(id) => go(() => onOpenJob(id))()}
                           onOpenSettings={go(onOpenSettings)}
                           onOpenAnswers={go(onOpenAnswers)}
+                          onOpenPainel={go(onOpenPainel)}
                         />
                       </motion.li>
                     ))}
@@ -192,11 +186,12 @@ export function AlertBell({ onOpenJob, onOpenSettings, onOpenAnswers }: AlertBel
 
 type Run = (key: string, fn: () => Promise<unknown>) => Promise<boolean>;
 
-function AlertItem({ alert, onOpenJob, onOpenSettings, onOpenAnswers }: {
+function AlertItem({ alert, onOpenJob, onOpenSettings, onOpenAnswers, onOpenPainel }: {
   alert: AlertDto;
   onOpenJob: (jobId: number) => void;
   onOpenSettings: () => void;
   onOpenAnswers: () => void;
+  onOpenPainel: () => void;
 }) {
   const actions = useAlertActions();
   const messages = useMessageActions();
@@ -227,7 +222,8 @@ function AlertItem({ alert, onOpenJob, onOpenSettings, onOpenAnswers }: {
 
   const draftLike = action === 'review_draft' && alert.replyId !== null && alert.jobId !== null;
   const canOpenJob = alert.jobId !== null;
-  const linkable = action === 'link' && alert.messageId !== null;
+  // Sem vaga, convite ou oferta sem card: o e-mail pode ser ligado a uma vaga daqui.
+  const linkable = alertCanLink(alert);
   /** A vaga escolhida em "De qual vaga é este e-mail?". */
   const [linkJob, setLinkJob] = useState<number | null>(null);
 
@@ -261,7 +257,12 @@ function AlertItem({ alert, onOpenJob, onOpenSettings, onOpenAnswers }: {
         {draftLike && (
           <AlertDraft alert={alert} jobId={alert.jobId!} replyId={alert.replyId!} disabled={busy !== null} />
         )}
-        {linkable && <LinkToJob alertId={alert.id} picked={linkJob} onPick={setLinkJob} />}
+        {linkable && (
+          <LinkToJob
+            picked={linkJob} onPick={setLinkJob}
+            searchTestId={`alert-link-search-${alert.id}`} jobTestId={(jobId) => `alert-link-job-${alert.id}-${jobId}`}
+          />
+        )}
 
         <div className="mt-3.5 flex flex-wrap items-center gap-2">
           {linkable && (
@@ -304,6 +305,11 @@ function AlertItem({ alert, onOpenJob, onOpenSettings, onOpenAnswers }: {
           {action === 'open_settings' && (
             <Button type="button" size="sm" variant="primary" onClick={onOpenSettings}>
               <Settings aria-hidden /> Abrir Configurações
+            </Button>
+          )}
+          {action === 'open_list' && (
+            <Button type="button" size="sm" variant="primary" data-testid={`alert-open-list-${alert.id}`} onClick={onOpenPainel}>
+              <List aria-hidden /> Abrir a lista
             </Button>
           )}
           {action === 'classify_anyway' && (
@@ -364,71 +370,6 @@ function AlertDraft({ alert, jobId, replyId, disabled }: { alert: AlertDto; jobI
           recipient: `alert-recipient-${alert.id}`,
         }}
       />
-    </div>
-  );
-}
-
-/** Busca uma vaga em Aplicada ou depois e liga o e-mail (e o fio dele) a ela. */
-function LinkToJob({ alertId, picked, onPick }: { alertId: number; picked: number | null; onPick: (jobId: number | null) => void }) {
-  // A mesma consulta do quadro (mesma chave): em geral já está em cache.
-  const { data, isPending } = useQuery({ queryKey: JOBS_KEY, queryFn: api.jobs });
-  const [search, setSearch] = useState('');
-  const fieldId = useId();
-
-  const applied = useMemo(() => (data ?? NO_JOBS).filter((j) => isAppliedOrLater(j.column)), [data]);
-  const term = search.trim().toLocaleLowerCase('pt-BR');
-  const matches = term === ''
-    ? applied
-    : applied.filter((j) => `${j.title} ${j.company}`.toLocaleLowerCase('pt-BR').includes(term));
-  const pickedJob = applied.find((j) => j.id === picked) ?? null;
-  // A vaga escolhida continua à vista mesmo quando a busca muda.
-  const firstMatches = matches.slice(0, LINK_MATCHES);
-  const shown = pickedJob && !firstMatches.includes(pickedJob) ? [pickedJob, ...firstMatches.slice(0, LINK_MATCHES - 1)] : firstMatches;
-  const hidden = matches.filter((j) => !shown.includes(j)).length;
-
-  return (
-    <div className="mt-3.5 space-y-2.5">
-      <label htmlFor={fieldId} className="block text-xs font-medium text-ink-2">De qual vaga é este e-mail?</label>
-      <div className="relative">
-        <Search aria-hidden className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-faint" />
-        <Input
-          id={fieldId} data-testid={`alert-link-search-${alertId}`} value={search} placeholder="Empresa ou título"
-          autoComplete="off" className="h-9 pl-9" onChange={(e) => setSearch(e.target.value)}
-        />
-      </div>
-      {isPending ? (
-        <Skeleton className="h-16 w-full rounded-xl" />
-      ) : applied.length === 0 ? (
-        <p className="text-xs text-muted">Nenhuma vaga em Aplicada ou depois.</p>
-      ) : shown.length === 0 ? (
-        <p className="text-xs text-muted">Nenhuma vaga com “{search.trim()}”.</p>
-      ) : (
-        <ul aria-label="Vagas em Aplicada ou depois" className="space-y-1">
-          {shown.map((j) => {
-            const on = j.id === picked;
-            return (
-              <li key={j.id}>
-                <button
-                  type="button" aria-pressed={on} data-testid={`alert-link-job-${alertId}-${j.id}`} onClick={() => onPick(on ? null : j.id)}
-                  className={cn(
-                    'flex w-full cursor-pointer items-center gap-3 rounded-xl border px-3 py-2 text-left transition-colors duration-150',
-                    'focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-accent/40',
-                    on ? 'border-accent/45 bg-accent/10' : 'border-line bg-bg/40 hover:border-line-strong hover:bg-surface-3',
-                  )}
-                >
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[13px] font-medium text-ink">{j.title}</span>
-                    <span className="block truncate text-xs text-muted">{j.company}</span>
-                  </span>
-                  <span className="shrink-0 text-[11px] text-faint">{COLUMN_LABELS[j.column]}</span>
-                  {on && <Check aria-hidden className="size-4 shrink-0 text-accent" />}
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-      {hidden > 0 && <p className="text-xs text-faint">Mais {hidden} {hidden === 1 ? 'vaga' : 'vagas'}: refine a busca.</p>}
     </div>
   );
 }

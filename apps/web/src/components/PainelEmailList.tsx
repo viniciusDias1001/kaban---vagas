@@ -12,6 +12,7 @@ import { cn } from '../lib/utils';
 import { useJobEmails, useMailMessages } from '../useEmail';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
+import { LinkMailToJob } from './LinkToJob';
 import { CheckChip } from './ui/check-chip';
 import { Notice } from './ui/notice';
 import { Segmented } from './ui/segmented';
@@ -219,7 +220,13 @@ function MailSheet({ mail, open, onClose, onOpenJob }: {
                   <div className="mt-1.5"><Actions m={mail} only={sheetActions(mail)} /></div>
                 </div>
               )}
-              {mail.jobId === null ? <div className="space-y-3"><Bubble m={mail} /></div> : <JobThread mail={mail} jobId={mail.jobId} />}
+              {mail.jobId === null ? (
+                <div className="space-y-3">
+                  <Bubble m={mail} />
+                  {/* Sem card: liga o e-mail (e o fio dele) a uma vaga daqui, como no alerta do sino. */}
+                  {mail.direction === 'in' && <LinkMailToJob key={mail.id} messageId={mail.id} testIdPrefix="painel-mail-link" />}
+                </div>
+              ) : <JobThread mail={mail} jobId={mail.jobId} />}
             </div>
             {mail.jobId !== null && (
               <footer className="border-t border-line p-4">

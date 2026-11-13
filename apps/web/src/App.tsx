@@ -46,6 +46,8 @@ const COMPACT_NAV = '(width < 1240px)';
 const STALE_CHECK_MS = 60_000;
 /** O bloco "Respostas para candidaturas" de Meu perfil, aberto por um alerta de dado que falta. */
 const ANSWERS_SECTION = '[data-testid="apply-answers-section"]';
+/** A lista "Mensagens do período" do Painel, aberta pelo alerta de resumo da primeira leitura. */
+const MAIL_LIST_SECTION = '[data-testid="painel-mail-list"]';
 /** Por quanto tempo esperar o bloco aparecer (a página é baixada à parte) antes de desistir de rolar até ele. */
 const ANSWERS_WAIT_MS = 3_000;
 
@@ -57,29 +59,34 @@ export function App() {
   const compactNav = useMediaQuery(COMPACT_NAV);
   const openSettings = useCallback(() => setView('config'), []);
   // "Abrir Respostas para candidaturas" (alerta de dado que falta): vai a Meu perfil e rola até o bloco quando ele aparece.
-  const [answersPending, setAnswersPending] = useState(false);
+  // "Abrir a lista" (alerta de resumo da primeira leitura): vai ao Painel e rola até a lista de e-mails, do mesmo jeito.
+  const [scrollTarget, setScrollTarget] = useState<{ view: View; selector: string } | null>(null);
   const openAnswers = useCallback(() => {
-    setAnswersPending(true);
+    setScrollTarget({ view: 'perfil', selector: ANSWERS_SECTION });
     setView('perfil');
   }, []);
+  const openPainel = useCallback(() => {
+    setScrollTarget({ view: 'painel', selector: MAIL_LIST_SECTION });
+    setView('painel');
+  }, []);
   useEffect(() => {
-    if (!answersPending || view !== 'perfil') return;
+    if (!scrollTarget || view !== scrollTarget.view) return;
     const until = Date.now() + ANSWERS_WAIT_MS;
     let frame = 0;
     const look = () => {
-      const el = document.querySelector<HTMLElement>(ANSWERS_SECTION);
+      const el = document.querySelector<HTMLElement>(scrollTarget.selector);
       if (el) {
         el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        setAnswersPending(false);
+        setScrollTarget(null);
       } else if (Date.now() < until) {
         frame = requestAnimationFrame(look);
       } else {
-        setAnswersPending(false);
+        setScrollTarget(null);
       }
     };
     frame = requestAnimationFrame(look);
     return () => cancelAnimationFrame(frame);
-  }, [answersPending, view]);
+  }, [scrollTarget, view]);
   // A aba Candidaturas abre no filtro pedido (o contador do quadro pede "Precisam de você"); pela navegação, no padrão dela.
   const [applicationsFilter, setApplicationsFilter] = useState<ApplicationFilter | undefined>(undefined);
   const showNeedsHuman = useCallback(() => {
@@ -161,7 +168,7 @@ export function App() {
             })}
           </nav>
           <div className="ml-auto flex shrink-0 items-center">
-            <AlertBell onOpenJob={setOpenJob} onOpenSettings={openSettings} onOpenAnswers={openAnswers} />
+            <AlertBell onOpenJob={setOpenJob} onOpenSettings={openSettings} onOpenAnswers={openAnswers} onOpenPainel={openPainel} />
           </div>
         </div>
       </header>

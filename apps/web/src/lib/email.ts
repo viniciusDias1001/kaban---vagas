@@ -68,6 +68,9 @@ const ALERT_ACTIONS: Record<AlertKind, AlertAction> = {
 /** O que o botão principal do alerta faz. */
 export const alertAction = (kind: AlertKind): AlertAction => ALERT_ACTIONS[kind];
 
+/** O alerta é sobre um e-mail que não tem card (sem vaga, ou convite e oferta que o worker não ligou): dá para ligá-lo a uma vaga. */
+export const alertCanLink = (a: AlertDto): boolean => a.messageId !== null && a.jobId === null;
+
 /** Alertas `interview` e `offer` que ainda não viraram aviso do navegador, pela chave `alert-<id>`. */
 export function alertsToNotify(alerts: AlertDto[], seen: ReadonlySet<string>): AlertDto[] {
   return alerts.filter((a) => (a.kind === 'interview' || a.kind === 'offer') && !seen.has(`alert-${a.id}`));

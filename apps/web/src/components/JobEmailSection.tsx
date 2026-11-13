@@ -219,7 +219,7 @@ function MessageActions({ m }: { m: MailMessageDto }) {
         open={confirming} onOpenChange={setConfirming} title="Tirar este e-mail da vaga?" confirmLabel="Não é desta vaga"
         onConfirm={unlink} busy={actions.unlink.isPending} testId={`job-email-unlink-dialog-${m.id}`}
       >
-        <p>A conversa inteira sai deste card e passa a aparecer como e-mail sem vaga no Painel, onde dá para ligá-la à vaga certa.</p>
+        <p>A conversa inteira sai deste card. Ela aparece como e-mail sem vaga no sino e no Painel, e dá para ligá-la à vaga certa por lá.</p>
       </ConfirmDialog>
     </div>
   );

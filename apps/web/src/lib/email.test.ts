@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ALERT_KINDS, type AlertDto, type MailMessageDto } from '@kv/shared/client';
 import {
-  alertAction, alertBody, alertTitle, alertsToNotify, draftGate, mailActions, mailBadgeLabel, mailPasswordProblem, replyStateLabel, summaryLine,
+  alertAction, alertBody, alertCanLink, alertTitle, alertsToNotify, draftGate, mailActions, mailBadgeLabel, mailPasswordProblem, replyStateLabel, summaryLine,
 } from './email';
 
 const alert = (over: Partial<AlertDto> = {}): AlertDto => ({
@@ -60,6 +60,15 @@ describe('alertTitle / alertBody / alertAction', () => {
     expect(alertBody(alert({ kind: 'draft', summary: 'Pede o telefone', payload: { reason: '  ' } }))).toBe('Pede o telefone');
     // Os outros tipos não ganham a linha.
     expect(alertBody(alert({ kind: 'offer', summary: 'Proposta', payload: { reason: noReply } }))).toBe('Proposta');
+  });
+
+  it('offers to link any alert about a mail that has no card', () => {
+    expect(alertCanLink(alert({ kind: 'unmatched', jobId: null, messageId: 9 }))).toBe(true);
+    // Convite ou oferta de um e-mail sem card: o sino deixa ligá-lo a uma vaga.
+    expect(alertCanLink(alert({ kind: 'interview', jobId: null, messageId: 9 }))).toBe(true);
+    expect(alertCanLink(alert({ kind: 'offer', jobId: null, messageId: 9 }))).toBe(true);
+    expect(alertCanLink(alert({ kind: 'interview', jobId: 5, messageId: 9 }))).toBe(false);
+    expect(alertCanLink(alert({ kind: 'backfill_summary', jobId: null, messageId: null }))).toBe(false);
   });
 
   it('maps each kind to its action', () => {
