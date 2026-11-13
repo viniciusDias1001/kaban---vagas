@@ -1,6 +1,6 @@
 import { optionKey, type AnswerValue, type CandidateProfile, type Question, type Violation } from '@kv/shared';
 import {
-  STOPWORDS, allowedNumbers, buildTermIndex, foldText, foldedWords, hasControlChars, isKnownTerm, isListedName, novelTerms, numberIds, stem,
+  STOPWORDS, allowedNumbers, buildTermIndex, foldText, hasControlChars, isKnownTerm, isListedName, novelTerms, numberIds,
 } from './text';
 import { numericTexts, profileTexts } from './verify';
 
@@ -68,25 +68,6 @@ export function yearsCovered(profile: CandidateProfile, experienceIds: string[],
   return Math.floor(months / 12);
 }
 
-/** Os textos de um item do perfil de onde um número ou uma palavra de resposta pode vir, ou null se o id não existe. */
-function itemTexts(profile: CandidateProfile, id: string): string[] | null {
-  for (const e of profile.experiences) {
-    if (e.id === id) return [e.company, e.title, e.start, e.end, ...e.achievements.map((a) => a.text)];
-    const a = e.achievements.find((x) => x.id === id);
-    if (a) return [a.text];
-  }
-  const education = profile.education.find((e) => e.id === id);
-  if (education) return [education.institution, education.degree, education.start, education.end];
-  const skill = profile.skills.find((k) => k.id === id);
-  if (skill) return [skill.name];
-  const language = profile.languages.find((l) => l.id === id);
-  if (language) return [language.name, language.level];
-  const certification = profile.certifications.find((c) => c.id === id);
-  if (certification) return [certification.name, certification.issuer, certification.date];
-  const link = profile.links.find((l) => l.id === id);
-  return link ? [link.label] : null;
-}
-
 /** Quantidades de anos que um texto afirma ("5+ anos", "cinco years", "3-5 anos"): todo número do texto, se ele fala de anos. */
 function yearClaims(text: string): number[] {
   if (!/\b(anos?|years?|yrs?)\b/i.test(text)) return [];
@@ -98,45 +79,167 @@ const YEARS_OF_EXPERIENCE = new RegExp(
   '\\b(anos?|years?|yrs?|tempo|time)\\b[^.?!\\n]{0,40}\\b(experiencia|experience|trabalh\\w*|work\\w*|atuacao|carreira)\\b|' +
     '\\b(experiencia|experience)\\b[^.?!\\n]{0,40}\\b(anos?|years?|yrs?)\\b',
 );
-const NEGATION = /\b(nao|not|never|nunca|nenhum|nenhuma|none|without|sem)\b/;
-/** Opção que é exatamente zero ou um "não" simples: afirma nada, não precisa de item citado. */
-const NEGATIVE_OPTION = /^(0|nao|no|nenhum|nenhuma|none|never|nunca)$/;
-const YES_OPTION = /^(sim|yes)$/;
-const COMPLETION = /\b(complet[oa]s?|concluid[oa]s?|completed?|finished|graduated)\b/;
+
+// ---------------------------------------------------------------------------------------------
+// Vocabulário de `verifyProfileFact`. Listas fixas deste arquivo; o STOPWORDS de text.ts NÃO entra aqui, porque nele há
+// palavras que numa pergunta de formulário carregam conteúdo (remoto, presencial, equipe, júnior...).
+// ---------------------------------------------------------------------------------------------
 
 /**
- * Palavras de moldura de pergunta, que não dizem sobre o que ela é (as de STOPWORDS também ficam de fora). Nenhuma
- * palavra de conteúdo entra aqui, e nenhuma lista diz que um termo "vale" por outro: o item citado precisa conter a palavra.
+ * Palavras funcionais (pt/en, sem acento): artigos, preposições, conjunções, pronomes, verbos auxiliares e de ligação e
+ * palavras interrogativas. Ficam DE FORA, de propósito, as que mudam o sentido de uma afirmação: negações (não, sem, nem,
+ * not, no em inglês é "no" do português e fica), comparativos (mais, menos, até, acima, more, less, than, over, under).
  */
-const SCAFFOLD = new Set(
+const FUNCTION_WORDS = new Set(
   (
-    'possui possuir tem ter voce vc you qual quais sua seu suas seus nivel level do does did have has having are is be ' +
-    'how many quantos quantas ha which what experiencia experience anos ano years year'
+    'a o as os um uma uns umas de da do das dos em no na nos nas num numa nuns numas por pela pelo pelas pelos para pra pro ' +
+    'com sob sobre entre apos desde contra durante perante ao aos ' +
+    'e ou mas porem que se como porque pois quando onde ' +
+    'eu tu ele ela eles elas vos me te lhe lhes meu minha meus minhas teu tua teus tuas seu sua seus suas nosso nossa nossos ' +
+    'nossas dele dela deles delas este esta estes estas esse essa esses essas aquele aquela aqueles aquelas isto isso aquilo ' +
+    'sou es somos sao era eram foi foram fui sera seria estar estou estao estava estavam ser ha havia haver faz fez ' +
+    'qual quais quanto quanta quantos quantas quem cujo cuja ' +
+    'an the of in on at to for with from by as into onto about and or but that which what who whom whose when where why how ' +
+    'many much is are was were be been being am do does did have has had having will would shall should can could may might ' +
+    'must i he she it we they him her us them my his its our their this these those there here if then so'
   ).split(' '),
 );
-/** Radicais de conteúdo de um texto: sem stopwords, sem moldura de pergunta, sem número puro. Palavra curta ("go", "c#") conta. */
-const contentWords = (text: string): string[] =>
-  foldedWords(text).filter((w) => !STOPWORDS.has(w) && !SCAFFOLD.has(w) && !/^\d+$/.test(w)).map(stem);
-const allWords = (text: string): Set<string> => new Set(foldedWords(text).map(stem));
+
+/** Moldura de pergunta: palavras com que o formulário pergunta e que não afirmam nada. */
+const SCAFFOLD_WORDS = new Set(
+  (
+    'possui possuir possuo possua tem ter tenho tens tinha teve tido voce voces vc vcs you your ' +
+    'experiencia experiencias experience experiences anos ano years year yrs yr nivel niveis level levels tempo time ' +
+    'trabalha trabalham trabalhou trabalho trabalhar trabalhando trabalhado trabalhei work works worked working ' +
+    'conhecimento conhecimentos knowledge conhece conhecer'
+  ).split(' '),
+);
+
+/** Palavras de formação: um "não" a uma pergunta com uma delas é recusado enquanto o perfil tiver algum item de formação. */
+const EDUCATION_WORDS = new Set(
+  (
+    'graduacao superior ensino bacharel bacharelado licenciatura tecnologo faculdade universidade formacao formado formada ' +
+    'diploma especializacao mestrado doutorado mba degree bachelor college university graduate graduated graduation master ' +
+    'masters phd'
+  ).split(' ').map((w) => foldWord(w)),
+);
+
+const NEGATION = /\b(nao|not|never|nunca|nenhum|nenhuma|none|without|sem|nem|nor|neither|jamais|nada|nothing)\b|n't\b/;
+/** Opção que é exatamente um "não" simples ou zero: é uma negação. */
+const NEGATIVE_OPTION = /^(0|nao|no|nenhum|nenhuma|none|never|nunca)$/;
+const YES_OPTION = /^(sim|yes)$/;
+const COMPLETION = /\b(complet[oa]s?|concluid[oa]s?|formad[oa]s?|complete|completed|concluded|finished|graduated)\b/;
+const YEAR_WORD = /\b(anos?|years?|yrs?)\b/;
+const NUMBER_WORD = /\b(um|uma|dois|duas|tres|quatro|cinco|seis|sete|oito|nove|dez|one|two|three|four|five|six|seven|eight|nine|ten)\b/;
+/** Token de número, faixa ou "+": "3", "2+", "3-5". */
+const NUMBER_TOKEN = /^\d+(?:-\d+)*\+?$|^\+$/;
+
+/** Plural e gênero dobrados: "remotos"/"remota" → "remot", "inglês"/"inglesa" → "ingl". Token com dígito, + ou # fica como está. */
+function foldWord(word: string): string {
+  if (/[^a-z]/.test(word)) return word;
+  let current = word;
+  let previous = '';
+  while (current !== previous) {
+    previous = current;
+    if (current.length > 4 && /oes$|aes$/.test(current)) current = `${current.slice(0, -3)}ao`;
+    else if (current.length > 4 && /ais$/.test(current)) current = `${current.slice(0, -3)}al`;
+    else if (current.length > 4 && /eis$/.test(current)) current = `${current.slice(0, -3)}el`;
+    else if (current.length > 4 && /[rzls]es$/.test(current)) current = current.slice(0, -2);
+    else if (current.length > 3 && /[^su]s$/.test(current)) current = current.slice(0, -1);
+    else if (current.length > 3 && /[ao]$/.test(current)) current = current.slice(0, -1);
+  }
+  return current;
+}
+
+/** Um token: suas partes já dobradas. Composto com hífen ou barra ("pós-graduação", "ci/cd") é UM token de várias partes. */
+type Token = { raw: string; parts: string[] };
+
+function tokenize(text: string): Token[] {
+  const folded = foldText(text.replace(/[‐-―−]/g, '-')); // travessões e menos viram hífen: "3–5" = "3-5"
+  return (folded.match(/[a-z0-9+#]+(?:[-/][a-z0-9+#]+)*/g) ?? []).map((raw) => ({ raw, parts: raw.split(/[-/]/).map(foldWord) }));
+}
+
+/** Radicais de conteúdo: tokens sem palavras funcionais e (salvo `keepScaffold`) sem palavras de moldura. */
+function contentTokens(text: string, keepScaffold = false): Token[] {
+  return tokenize(text).filter((t) => !FUNCTION_WORDS.has(t.raw) && (keepScaffold || !SCAFFOLD_WORDS.has(t.raw)));
+}
+
+/** Um item do perfil: o texto que ele afirma (campos separados) e, para formação e experiência, o fim. */
+type Item = { id: string; kind: 'experience' | 'achievement' | 'education' | 'other'; texts: string[]; fields: Token[][]; end: string | null };
+
+function profileItems(profile: CandidateProfile): Item[] {
+  const item = (id: string, kind: Item['kind'], texts: string[], end: string | null = null): Item =>
+    ({ id, kind, texts, fields: texts.map(tokenize), end });
+  return [
+    ...profile.experiences.flatMap((e) => [
+      item(e.id, 'experience', [e.title, e.company, ...e.achievements.map((a) => a.text)], e.end),
+      ...e.achievements.map((a) => item(a.id, 'achievement', [a.text])),
+    ]),
+    ...profile.education.map((e) => item(e.id, 'education', [e.degree, e.institution], e.end)),
+    ...profile.skills.map((s) => item(s.id, 'other', [s.name])),
+    ...profile.languages.map((l) => item(l.id, 'other', [l.name, l.level])),
+    ...profile.certifications.map((c) => item(c.id, 'other', [c.name, c.issuer])),
+    // Um link existe no perfil, mas não afirma nada: citá-lo não sustenta resposta.
+    ...profile.links.map((l) => item(l.id, 'other', [])),
+  ];
+}
+
+/** Todo o texto do perfil que um "não" poderia contradizer: os itens e mais local, resumo e rótulos de link. */
+function denialFields(profile: CandidateProfile, items: Item[]): Token[][] {
+  return [
+    ...items.flatMap((i) => i.fields),
+    ...[profile.summary, profile.contact.location, ...profile.experiences.map((e) => e.location), ...profile.links.map((l) => l.label)]
+      .map(tokenize),
+  ];
+}
+
+const sameParts = (a: string[], b: string[]) => a.length === b.length && a.every((p, i) => p === b[i]);
+
+/**
+ * O campo afirma o token, palavra inteira: token simples casa com token simples igual; composto casa com o mesmo composto
+ * ou com as mesmas palavras em sequência ("pós graduação" no item sustenta "pós-graduação"). Uma parte de composto não
+ * sustenta palavra solta ("pós-venda" não sustenta "pós").
+ */
+function fieldHas(field: Token[], token: Token): boolean {
+  const n = token.parts.length;
+  return field.some((t, i) => sameParts(t.parts, token.parts) ||
+    (n > 1 && i + n <= field.length && token.parts.every((p, k) => sameParts(field[i + k].parts, [p]))));
+}
+
+/** O campo menciona o token em qualquer forma, inclusive como parte de composto ("React/Redux" menciona "Redux"). */
+function fieldMentions(field: Token[], token: Token): boolean {
+  const parts = field.flatMap((t) => t.parts);
+  const n = token.parts.length;
+  for (let i = 0; i + n <= parts.length; i++) if (token.parts.every((p, k) => parts[i + k] === p)) return true;
+  return false;
+}
+
+const itemHasAll = (item: Item, tokens: Token[]) => tokens.every((t) => item.fields.some((f) => fieldHas(f, t)));
 
 type Checked = { ok: true; value: AnswerValue } | { ok: false; why: string };
 const fail = (why: string): Checked => ({ ok: false, why });
 
 /**
- * Confere uma resposta factual do modelo contra o perfil. Regras:
- * - todo id de `basis` existe no perfil;
- * - `number`: inteiro simples. Se a pergunta fala de anos, entre 0 e `yearsCovered` (para baixo) das experiências citadas,
- *   com ao menos uma citada; se não, o número tem de aparecer no texto de um item citado;
- * - `boolean`: só `true` ou `false`; `true` exige `basis` e que algum item citado trate do assunto da pergunta;
- * - `select`: a resposta é uma das opções (devolvida como o formulário a escreve). Só uma opção claramente negativa
- *   ("não", "nenhum", "0") passa sem `basis`; "sim" exige item citado sobre o assunto, e qualquer outra opção só passa se
- *   suas palavras estiverem nos itens citados (ou, para faixa de anos, se as experiências cobrirem os anos);
- * - `text`/`longtext`: todo número da resposta aparece em algum item citado, as palavras existem no perfil e o tamanho
- *   cabe em `maxLength`;
- * - afirmar algo sobre um nome que o perfil não traz é recusado, e "N anos" na pergunta ou na opção escolhida exige
- *   experiências citadas que cubram N anos;
- * - pergunta com negação ("não", "not", "never"...) não é respondida: sim e não ficam ambíguos.
- * Outros tipos (data, várias opções, arquivo) são recusados.
+ * Confere uma resposta factual do modelo, que será enviada sem o dono ver, contra o perfil. Tudo o que estas regras
+ * não aceitam é recusado (a pergunta volta ao dono uma vez; o banco de respostas guarda a resposta dele).
+ *
+ * Vocabulário: radicais de conteúdo = tokens sem palavras funcionais e de moldura (listas deste arquivo), em minúsculas,
+ * sem acento, com plural e gênero dobrados; composto com hífen ou barra é um token. Texto de um item: experiência =
+ * título, empresa e conquistas; conquista citada = seu texto; formação = curso e instituição; habilidade = nome;
+ * idioma = nome e nível; certificação = nome e emissor; link = nada.
+ *
+ * - Sempre recusa: id de `basis` fora do perfil; pergunta com negação; `multiselect`, `date`, `file`.
+ * - Afirmação (`true`; opção que não é um "não" simples): `basis` não vazio; a pergunta tem radicais e não afirma anos;
+ *   UM item citado contém todos os radicais da pergunta e da opção (sem números, faixas, "+" e palavras de ano). Opção com
+ *   anos: o limite de baixo não passa dos anos da regra de números. "Completo/concluído/formado" só com item de formação
+ *   ou experiência terminado (fim legível e passado).
+ * - Negação (`false`; opção "0", "não", "nenhum"...): a pergunta tem radicais e não afirma anos; NENHUM texto do perfil
+ *   (itens, resumo, locais, rótulos de link) menciona algum radical da pergunta, nem como parte de composto; e, se a
+ *   pergunta fala de formação, o perfil não tem formação. Um "não" errado diminui o dono.
+ * - Número: só pergunta de anos de experiência; inteiro n entre 0 e `yearsCovered` das experiências citadas que contêm
+ *   todos os radicais da pergunta (sem radicais, todas as citadas); n = 0 só sob a regra da negação.
+ * - Texto: `basis` não vazio; UM item citado contém todas as palavras da resposta (só as funcionais saem) e todos os seus
+ *   números; cabe em `maxLength`.
  */
 export function verifyProfileFact(
   profile: CandidateProfile,
@@ -146,103 +249,117 @@ export function verifyProfileFact(
 ): Checked {
   const basis = [...new Set(fact.basis)];
   if (basis.length > MAX_BASIS) return fail('itens demais citados');
-  const cited: string[][] = [];
+  const items = profileItems(profile);
+  const cited: Item[] = [];
   for (const id of basis) {
-    const texts = itemTexts(profile, id);
-    if (!texts) return fail(`o item "${id}" não existe no perfil`);
-    cited.push(texts);
+    const item = items.find((i) => i.id === id);
+    if (!item) return fail(`o item "${id}" não existe no perfil`);
+    cited.push(item);
   }
-  const experienceIds = basis.filter((id) => profile.experiences.some((e) => e.id === id));
-  const index = buildTermIndex(profileTexts(profile));
-  const answer = fact.answer.trim();
   const questionText = `${question.label}\n${question.help}`;
+  const foldedQuestion = foldText(questionText);
+  if (NEGATION.test(foldedQuestion)) return fail('pergunta com negação: sim e não ficam ambíguos');
+  const subject = contentTokens(questionText);
+  const answer = fact.answer.trim();
+  /** A pergunta afirma uma quantidade de anos ("5 anos", "cinco years"): nem um sim nem um não a ela é conferido. */
+  const statesYears = YEAR_WORD.test(foldedQuestion) && (/\d/.test(foldedQuestion) || NUMBER_WORD.test(foldedQuestion));
 
-  /** Nome que a pergunta cita e o perfil não traz (palavras comuns de rótulo, como "Development", não contam). */
-  const unknownSubjectWhy = () => {
-    const subject = novelTerms(questionText, index, { mode: 'full' }).find((t) => !STOPWORDS.has(foldText(t)));
-    return subject === undefined ? null : fail(`a pergunta cita "${subject}", que não está no perfil`);
-  };
-  /** "N anos" nos textos além do que as experiências citadas cobrem, ou número da pergunta que o perfil não traz. */
-  const unsupportedClaim = (texts: string[]): string | null => {
-    const covered = yearsCovered(profile, experienceIds, now);
-    const claims = texts.flatMap(yearClaims);
-    if (claims.length > 0 && Math.max(...claims) > covered) {
-      return `a pergunta pede ${Math.max(...claims)} anos e as experiências citadas cobrem ${covered}`;
+  /** Um "não" só passa se nada no perfil menciona o assunto da pergunta. */
+  const deny = <T extends AnswerValue>(value: T): Checked => {
+    if (subject.length === 0) return fail('a pergunta não diz sobre o que é: um "não" não pode ser conferido');
+    if (statesYears) return fail('a pergunta afirma uma quantidade de anos: um "não" não pode ser conferido');
+    const fields = denialFields(profile, items);
+    const mentioned = subject.find((t) => fields.some((f) => fieldMentions(f, t)));
+    if (mentioned) return fail(`o perfil menciona "${mentioned.raw}": um "não" diminuiria o dono`);
+    if (profile.education.length > 0 && subject.some((t) => t.parts.some((p) => EDUCATION_WORDS.has(p)))) {
+      return fail('a pergunta é sobre formação e o perfil tem formação: um "não" diminuiria o dono');
     }
-    const years = new Set(claims.map(String));
-    const known = allowedNumbers(numericTexts(profile));
-    const stray = texts.flatMap(numberIds).find((id) => !years.has(id) && !known.has(id));
-    return stray === undefined ? null : `o número "${stray}" da pergunta não está no perfil`;
+    return { ok: true, value };
   };
-  /** Todo radical de conteúdo de `texts` está nos textos dos itens citados? Sem nenhum radical não há o que conferir: recusa. */
-  const covered = (...texts: string[]): boolean => {
-    const have = allWords(cited.flat().join(' '));
-    const need = texts.flatMap(contentWords);
-    return need.length > 0 && need.every((w) => have.has(w));
+
+  /** Anos da regra de números: experiências citadas cujo próprio texto contém todos os radicais da pergunta. */
+  const subjectYears = (): number => {
+    const counting = cited.filter((i) => i.kind === 'experience' && itemHasAll(i, subject));
+    return yearsCovered(profile, counting.map((i) => i.id), now);
   };
-  /** Item de formação ou experiência sem fim, com fim no futuro ou ilegível: não sustenta "completo". */
-  const ongoing = (id: string): boolean => {
-    const item = profile.education.find((e) => e.id === id) ?? profile.experiences.find((e) => e.id === id);
-    if (!item) return false;
+
+  /** Terminado: formação ou experiência com fim legível e não futuro. */
+  const finished = (item: Item): boolean => {
+    if ((item.kind !== 'education' && item.kind !== 'experience') || item.end === null || item.end.trim() === '') return false;
     const end = monthIndex(item.end, 'end');
-    return item.end.trim() === '' || end === null || end > nowIndex(now);
+    return end !== null && end <= nowIndex(now);
   };
-  const negated = NEGATION.test(foldText(questionText));
+
+  /** Afirmação: UM item citado contém todos os radicais da pergunta e de `extra`. */
+  const affirm = (extra: Token[], completion: boolean): string | null => {
+    if (basis.length === 0) return 'afirmar exige citar itens do perfil';
+    if (subject.length === 0) return 'a pergunta não diz sobre o que é';
+    if (statesYears) return 'a pergunta afirma uma quantidade de anos';
+    const need = [...subject, ...extra];
+    const support = cited.filter((i) => itemHasAll(i, need) && (!completion || finished(i)));
+    if (support.length === 0) {
+      return completion
+        ? 'nenhum item citado e terminado contém tudo o que a pergunta e a resposta afirmam'
+        : 'nenhum item citado contém sozinho tudo o que a pergunta e a resposta afirmam';
+    }
+    return null;
+  };
 
   switch (question.kind) {
     case 'number': {
       if (!/^\d{1,3}$/.test(answer)) return fail('a resposta não é um número inteiro simples');
+      if (!YEARS_OF_EXPERIENCE.test(foldedQuestion)) return fail('só pergunta de anos de experiência recebe número');
       const value = Number(answer);
-      if (!YEARS_OF_EXPERIENCE.test(foldText(questionText))) return fail('só pergunta de anos de experiência recebe número');
-      if (experienceIds.length === 0) return fail('nenhuma experiência foi citada');
-      const years = yearsCovered(profile, experienceIds, now);
-      if (value > years) return fail(`${value} anos é mais que os ${years} que as experiências citadas cobrem`);
-      const subject = value > 0 ? unknownSubjectWhy() : null;
-      return subject ?? { ok: true, value: String(value) };
+      if (value === 0) return deny('0');
+      const years = subjectYears();
+      return value <= years
+        ? { ok: true, value: String(value) }
+        : fail(`${value} anos é mais que os ${years} das experiências citadas que tratam do assunto`);
     }
     case 'boolean': {
-      if (negated) return fail('pergunta com negação: sim e não ficam ambíguos');
       const flag = answer.toLowerCase();
-      if (flag === 'false') return { ok: true, value: false };
+      if (flag === 'false') return deny(false);
       if (flag !== 'true') return fail('a resposta não é true nem false');
-      if (basis.length === 0) return fail('afirmar exige citar itens do perfil');
-      const subject = unknownSubjectWhy();
-      if (subject) return subject;
-      const claim = unsupportedClaim([questionText]);
-      if (claim !== null) return fail(claim);
-      if (COMPLETION.test(foldText(questionText)) && basis.some(ongoing)) return fail('um item em andamento não sustenta "completo"');
-      return covered(questionText) ? { ok: true, value: true } : fail('os itens citados não cobrem tudo o que a pergunta afirma');
+      const why = affirm([], COMPLETION.test(foldedQuestion));
+      return why === null ? { ok: true, value: true } : fail(why);
     }
     case 'select': {
       const matches = question.options.filter((o) => optionKey(o) === optionKey(answer));
       if (matches.length !== 1) return fail('a resposta não é uma das opções, ou a opção é ambígua');
-      if (negated) return fail('pergunta com negação: sim e não ficam ambíguos');
       const option = matches[0];
-      const key = optionKey(option);
-      if (NEGATIVE_OPTION.test(key)) return { ok: true, value: option };
-      if (basis.length === 0) return fail('escolher esta opção exige citar itens do perfil');
-      const subject = unknownSubjectWhy();
-      if (subject) return subject;
-      const claim = unsupportedClaim([questionText, option]);
-      if (claim !== null) return fail(claim);
-      if (COMPLETION.test(foldText(`${questionText} ${option}`)) && basis.some(ongoing)) return fail('um item em andamento não sustenta "completo"');
-      // "Sim" e faixa de anos (os anos já foram conferidos acima) não trazem palavra própria: só a pergunta é conferida.
-      const needsOptionWords = !YES_OPTION.test(key) && !/\d/.test(option);
-      return covered(questionText) && (!needsOptionWords || covered(option))
-        ? { ok: true, value: option }
-        : fail('os itens citados não cobrem tudo o que a pergunta e a opção afirmam');
+      const key = foldText(option).replace(/\s+/g, ' ').trim();
+      if (NEGATIVE_OPTION.test(key)) return deny(option);
+      const optionTokens = YES_OPTION.test(key) ? [] : contentTokens(option);
+      const numbers = optionTokens.filter((t) => NUMBER_TOKEN.test(t.raw));
+      const words = optionTokens.filter((t) => !NUMBER_TOKEN.test(t.raw));
+      const why = affirm(words, COMPLETION.test(`${foldedQuestion} ${foldText(option)}`));
+      if (why !== null) return fail(why);
+      if (numbers.length > 0) {
+        // Os números da opção são anos se ela diz "anos", ou se é só número/faixa numa pergunta que diz "anos".
+        const optionYears = YEAR_WORD.test(foldText(option)) || (words.length === 0 && YEAR_WORD.test(foldedQuestion));
+        if (!optionYears) return fail('a opção traz um número que não é de anos');
+        const lower = Math.min(...numbers.flatMap((t) => t.raw.match(/\d+/g) ?? []).map(Number));
+        const years = subjectYears();
+        if (lower > years) return fail(`a opção pede ${lower} anos e as experiências citadas que tratam do assunto cobrem ${years}`);
+      }
+      return { ok: true, value: option };
     }
     case 'text':
     case 'longtext': {
       if (answer === '') return fail('resposta vazia');
       if (answer.length > (question.maxLength ?? DEFAULT_MAX_CHARS)) return fail('a resposta passa do tamanho permitido');
       if (hasControlChars(answer)) return fail('a resposta tem caractere de controle');
-      const allowed = allowedNumbers(cited.flat());
-      const stray = numberIds(answer).find((id) => !allowed.has(id));
-      if (stray !== undefined) return fail(`o número "${stray}" não está nos itens citados`);
-      const term = novelTerms(answer, index, { mode: 'full' })[0];
-      if (term !== undefined) return fail(`a resposta cita "${term}", que não está no perfil`);
-      return { ok: true, value: answer };
+      if (basis.length === 0) return fail('a resposta exige citar itens do perfil');
+      // Só as palavras funcionais saem: "anos", "experiência" e "trabalhei" também precisam estar no item.
+      const need = contentTokens(answer, true);
+      if (need.length === 0) return fail('a resposta não tem conteúdo que possa ser conferido');
+      const numbers = numberIds(answer);
+      const support = cited.find((i) => {
+        if (!itemHasAll(i, need)) return false;
+        const allowed = allowedNumbers(i.texts);
+        return numbers.every((id) => allowed.has(id));
+      });
+      return support ? { ok: true, value: answer } : fail('nenhum item citado contém sozinho tudo o que a resposta diz');
     }
     default:
       return fail(`pergunta do tipo ${question.kind} não é respondida pelo modelo`);
