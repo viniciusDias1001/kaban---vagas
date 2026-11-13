@@ -50,17 +50,19 @@ function sameValue(a: AnswerValue, b: AnswerValue): boolean {
   return items(a) === items(b);
 }
 
+/** A resposta aprovada é desta pergunta: mesmo texto e ajuda normalizados, mesmo tipo, mesmo conjunto de opções. */
+export function matchesApproved(record: AnswerRecord, question: Question): boolean {
+  return normalizeQuestionText(record.label) === normalizeQuestionText(question.label) &&
+    normalizeQuestionText(record.help ?? '') === normalizeQuestionText(question.help) && record.kind === question.kind &&
+    sameOptionSet(record.options, question.options);
+}
+
 /**
  * A resposta aprovada para a mesma pergunta, ajustada às opções de agora; null se a pergunta mudou ou se a resposta
  * salva de que ela veio foi apagada ou editada (aí a pergunta é resolvida de novo pelo banco atual).
  */
 function approvedAnswer(q: Question, approved: AnswerRecord[], bank: ApplyAnswerRow[], ctx: BankContext): ResolvedAnswer | null {
-  const label = normalizeQuestionText(q.label);
-  const help = normalizeQuestionText(q.help);
-  const prev = approved.find(
-    (p) => normalizeQuestionText(p.label) === label && normalizeQuestionText(p.help ?? '') === help && p.kind === q.kind &&
-      sameOptionSet(p.options, q.options),
-  );
+  const prev = approved.find((p) => matchesApproved(p, q));
   if (!prev) return null;
   if (prev.source === 'blank' && q.required) return null;
   let value = prev.value;
