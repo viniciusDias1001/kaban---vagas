@@ -16,7 +16,7 @@ import {
 import type {
   AlertKind, AlertPayload, CandidateProfile, DecisiveKind, EmailConfig, EmailKind, EmailLang, KnownFact,
 } from '@kv/shared';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, gte, sql } from 'drizzle-orm';
 import type { MailWorkDeps } from './classify';
 
 export const NO_REPLY_REASON = 'Este e-mail não aceita resposta.';
@@ -241,10 +241,13 @@ export async function finishBackfill(deps: MailWorkDeps): Promise<boolean> {
   const account = await getMailAccount(db);
   // Antes da primeira leitura não há o que resumir: "nenhuma pendente" ainda não quer dizer "terminou".
   if (!account || account.backfillDone || account.lastReadAt === null) return false;
+  // Só a primeira leitura desta conexão: as guardadas desde `connectedAt` (as de uma caixa anterior ficam de fora).
   const rows = await db
     .select({ kind: mailMessages.kind, processedAt: mailMessages.processedAt })
     .from(mailMessages)
-    .where(and(eq(mailMessages.direction, 'in'), eq(mailMessages.backfill, true)));
+    .where(and(
+      eq(mailMessages.direction, 'in'), eq(mailMessages.backfill, true), gte(mailMessages.createdAt, account.connectedAt),
+    ));
   if (rows.some((r) => r.processedAt === null)) return false;
   const counts: Partial<Record<EmailKind, number>> = {};
   let total = 0;

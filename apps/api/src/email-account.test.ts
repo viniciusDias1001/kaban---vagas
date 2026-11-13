@@ -3,7 +3,8 @@ import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SAMPLE_PROFILE } from '@kv/ai/testing';
 import {
-  closeDb, getMailAccount, insertMailMessage, mailMessages, openAlerts, raiseAlert, saveMailAccount, saveProfile, type Db,
+  closeDb, getMailAccount, insertMailMessage, mailMessages, openAlerts, raiseAlert, saveMailAccount, saveProfile, updateMailAccount,
+  type Db,
 } from '@kv/db';
 import { createTestDb, resetTestDb } from '@kv/db/testing';
 import {
@@ -184,6 +185,28 @@ describe('PUT /email/account', () => {
     expect((await openAlerts(db)).map((a) => a.kind)).toEqual(['mailbox_error']);
     expect((await put('/email/account', { address: 'maria@example.com', password: PASSWORD })).statusCode).toBe(200);
     expect(await openAlerts(db)).toEqual([]);
+  });
+
+  it('reconnecting the same address keeps the reading point and the first read, and clears only the pause and the error', async () => {
+    await saveMailAccount(db, 'maria@example.com', NOW - 2 * 86_400_000);
+    await updateMailAccount(db, {
+      uidValidity: 7, lastUid: 42, lastReadAt: NOW - 86_400_000, backfillDone: true, paused: true, error: 'O Gmail recusou o login.',
+    });
+    expect((await put('/email/account', { address: 'Maria@Example.com', password: PASSWORD })).statusCode).toBe(200);
+    expect(await getMailAccount(db)).toMatchObject({
+      address: 'maria@example.com', connectedAt: NOW - 2 * 86_400_000, uidValidity: 7, lastUid: 42, lastReadAt: NOW - 86_400_000,
+      backfillDone: true, paused: false, error: null,
+    });
+    expect(await settings().readSecret('mail_password')).toEqual({ value: STORED });
+  });
+
+  it('connecting a different address starts over', async () => {
+    await saveMailAccount(db, 'outra@example.com', NOW - 2 * 86_400_000);
+    await updateMailAccount(db, { uidValidity: 7, lastUid: 42, backfillDone: true, paused: true, error: 'x' });
+    expect((await put('/email/account', { address: 'maria@example.com', password: PASSWORD })).statusCode).toBe(200);
+    expect(await getMailAccount(db)).toMatchObject({
+      address: 'maria@example.com', connectedAt: NOW, uidValidity: null, lastUid: null, backfillDone: false, paused: false, error: null,
+    });
   });
 
   it('never prints the password, on a refused or a successful login', async () => {

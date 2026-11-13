@@ -429,5 +429,23 @@ describe('first read', () => {
     await updateMailAccount(db, { lastReadAt: MAIL_NOW });
     expect(await finishBackfill(deps)).toBe(false);
   });
+
+  it('sums up only the first read of the current connection', async () => {
+    // De uma conexão anterior (outra caixa): já tratada, ou ainda esperando tipo. Nenhuma das duas entra no resumo.
+    const old = await classified('reprovacao', { backfill: true, sentAt: CONNECTED_AT - 40 * DAY });
+    await insertMailMessage(db, {
+      messageId: 'parado@acme.com', threadKey: 'p', direction: 'in', uid: 99, fromAddress: 'joana@acme.com', fromName: 'Joana',
+      toAddress: OWNER_ADDRESS, replyTo: null, subject: 'Sua candidatura na Acme', sentAt: CONNECTED_AT - 40 * DAY, body: 'x',
+      inReplyTo: null, refs: [], autoSubmitted: false, listId: false, backfill: true,
+    }, CONNECTED_AT - 30 * DAY);
+    await db.update(mailMessages).set({ createdAt: CONNECTED_AT - 30 * DAY, processedAt: CONNECTED_AT - 30 * DAY }).where(eq(mailMessages.id, old));
+    await classified('entrevista', { backfill: true, sentAt: CONNECTED_AT - 2 * DAY });
+    await updateMailAccount(db, { lastReadAt: MAIL_NOW });
+    expect(await actOnNext(deps)).toBe(true);
+    expect(await finishBackfill(deps)).toBe(true);
+    expect(await openAlerts(db)).toEqual([
+      expect.objectContaining({ kind: 'backfill_summary', payload: { total: 1, counts: { entrevista: 1 } } }),
+    ]);
+  });
 });
 

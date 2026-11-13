@@ -1,5 +1,7 @@
 import type { FastifyInstance } from 'fastify';
-import { baseProfile, deleteMailAccount, deleteMailData, getMailAccount, resolveAlerts, saveMailAccount, type Db } from '@kv/db';
+import {
+  baseProfile, deleteMailAccount, deleteMailData, getMailAccount, resolveAlerts, saveMailAccount, updateMailAccount, type Db,
+} from '@kv/db';
 import { FOLDERS_HIDDEN_TEXT, MailAuthError, MailFolderError, PhoneAlertError, type Mailbox } from '@kv/mail';
 import { SecretMissingError } from '@kv/settings';
 import { DisconnectQuerySchema, MailAccountInputSchema, PhoneTokenInputSchema, emailAvailability, type MailAccountDto } from '@kv/shared';
@@ -72,7 +74,14 @@ export function emailAccountRoutes(app: FastifyInstance, db: Db, ctx: AiContext)
       if (e instanceof SecretMissingError) return reply.code(409).send({ error: 'no_app_secret', message: e.message });
       throw e;
     }
-    await saveMailAccount(db, address, ctx.now());
+    // A mesma caixa (nova senha depois de uma pausa): só a pausa e o erro saem. A conexão, o ponto de leitura e a primeira
+    // leitura ficam, para o que chegou na pausa ser tratado como e-mail novo (com alerta e resposta). Outra caixa: começa do zero.
+    const current = await getMailAccount(db);
+    if (current && current.address.trim().toLowerCase() === address.trim().toLowerCase()) {
+      await updateMailAccount(db, { paused: false, error: null });
+    } else {
+      await saveMailAccount(db, address, ctx.now());
+    }
     // Login aceito: o aviso de "caixa com erro" (senha revogada, por exemplo) deixa de valer.
     await resolveAlerts(db, { kind: 'mailbox_error' }, ctx.now());
     return dto();
