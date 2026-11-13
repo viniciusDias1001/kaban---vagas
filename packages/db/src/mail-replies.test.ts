@@ -124,7 +124,13 @@ describe('mail replies', () => {
     const id = (await createReply(db, reply({ messageId, state: 'rascunho', note: 'Falta conferir', attachResume: true }), 1000))!;
     expect(toMailReplyDto((await replyById(db, id))!)).toEqual({
       id, messageId, origin: 'facts', items: ['phone'], toAddress: 'rh@acme.example', subject: 'Re: Seus dados', body: 'Olá, meu telefone é ...',
-      attachResume: true, state: 'rascunho', note: 'Falta conferir', createdAt: 1000, sentAt: null,
+      attachResume: true, state: 'rascunho', note: 'Falta conferir', createdAt: 1000, sentAt: null, outMessageId: null,
     });
+  });
+
+  it('carries the Message-ID the reply goes out with', async () => {
+    const id = (await createReply(db, reply({ messageId, state: 'aprovada', approvedBy: 'auto' }), 1000))!;
+    await markReplySending(db, id, '<out-1@kanban-vagas.local>', 1100);
+    expect(toMailReplyDto((await replyById(db, id))!)).toMatchObject({ state: 'enviando', outMessageId: '<out-1@kanban-vagas.local>' });
   });
 });

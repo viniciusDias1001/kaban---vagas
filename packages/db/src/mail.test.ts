@@ -256,7 +256,9 @@ describe('job mail lists', () => {
     }, 300))!;
     const emails = await jobEmails(db, job.id);
     expect(emails.messages.map((m) => m.id)).toEqual([asked, answer]);
-    expect(emails.replies).toEqual([expect.objectContaining({ id: replyId, messageId: asked, state: 'rascunho' })]);
+    // O Message-ID de cada e-mail vai junto: é por ele que a tela liga a resposta enviada à cópia guardada.
+    expect(emails.messages.map((m) => m.messageId)).toEqual(['a@x', 'b@x']);
+    expect(emails.replies).toEqual([expect.objectContaining({ id: replyId, messageId: asked, state: 'rascunho', outMessageId: null })]);
     expect(await jobEmails(db, 9999)).toEqual({ messages: [], replies: [] });
   });
 });

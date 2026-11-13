@@ -5,7 +5,7 @@ import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import {
   COLUMN_LABELS, DRAFT_PLACEHOLDER, EMAIL_KIND_LABELS, MAIL_LIMITS, type JobDto, type MailMessageDto, type MailReplyDto, type ReplyState,
 } from '@kv/shared/client';
-import { replyStateLabel } from '../lib/email';
+import { emailConversation, replyStateLabel, type ConversationItem } from '../lib/email';
 import { spring } from '../lib/motion';
 import { EYEBROW } from '../lib/styles';
 import { cn } from '../lib/utils';
@@ -40,12 +40,6 @@ function useFailure() {
 }
 
 const sameAddress = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
-
-/** Uma resposta enviada pelo app volta como e-mail de saída com o mesmo texto: os dois são uma coisa só na conversa. */
-function sentCopyOf(m: MailMessageDto, replies: MailReplyDto[]): MailReplyDto | undefined {
-  if (m.direction !== 'out') return undefined;
-  return replies.find((r) => r.state === 'enviada' && r.body.trim() === m.body.trim() && sameAddress(r.toAddress, m.toAddress));
-}
 
 function InlineError({ error, testId }: { error: string | null; testId: string }) {
   if (!error) return null;
@@ -293,6 +287,7 @@ function MessageActions({ m }: { m: MailMessageDto }) {
       await actions.unlink.mutateAsync(m.id);
     } catch (e) {
       setError(fail(e));
+    } finally {
       setConfirming(false);
     }
   };
@@ -300,7 +295,9 @@ function MessageActions({ m }: { m: MailMessageDto }) {
     <div className="mt-3">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         {m.movedTo && (
-          <p className="text-xs text-muted">Moveu o card para <span className="text-ink-2">{COLUMN_LABELS[m.movedTo]}</span>.</p>
+          <p className="text-xs text-muted">
+            Moveu o card para <span className="text-ink-2">{COLUMN_LABELS[m.movedTo]}</span>{m.corrected ? ' (desfeito)' : ''}.
+          </p>
         )}
         <div className="ml-auto flex flex-wrap items-center gap-1.5">
           {m.canUndoMove && m.movedTo && (
@@ -327,9 +324,8 @@ function MessageActions({ m }: { m: MailMessageDto }) {
   );
 }
 
-function MessageItem({ m, reply, sentCopy, origin }: {
-  m: MailMessageDto; reply: MailReplyDto | undefined; sentCopy: MailReplyDto | undefined; origin: MailMessageDto | undefined;
-}) {
+function MessageItem({ item }: { item: ConversationItem }) {
+  const { message: m, reply, sentReply: sentCopy, origin } = item;
   const incoming = m.direction === 'in';
   return (
     <motion.li
@@ -366,19 +362,9 @@ export function JobEmailSection({ job, index }: { job: JobDto; index: number }) 
   const { data } = useJobEmails(job.id);
   if (!data || data.messages.length === 0) return null;
 
-  const { messages, replies } = data;
-  const byId = new Map(messages.map((m) => [m.id, m]));
+  const { messages } = data;
   // Uma resposta enviada que já voltou como e-mail de saída aparece uma vez só, no lugar do e-mail de saída.
-  const copies = new Map<number, MailReplyDto>();
-  const shownAsCopy = new Set<number>();
-  for (const m of messages) {
-    const r = sentCopyOf(m, replies.filter((x) => !shownAsCopy.has(x.id)));
-    if (r) {
-      copies.set(m.id, r);
-      shownAsCopy.add(r.id);
-    }
-  }
-  const replyOf = new Map(replies.filter((r) => !shownAsCopy.has(r.id)).map((r) => [r.messageId, r]));
+  const items = emailConversation(data);
 
   return (
     <motion.section
@@ -391,14 +377,7 @@ export function JobEmailSection({ job, index }: { job: JobDto; index: number }) 
       </div>
       <ol className="space-y-2.5">
         <AnimatePresence initial={false}>
-          {messages.map((m) => {
-            const copy = copies.get(m.id);
-            return (
-              <MessageItem
-                key={m.id} m={m} reply={replyOf.get(m.id)} sentCopy={copy} origin={copy ? byId.get(copy.messageId) : undefined}
-              />
-            );
-          })}
+          {items.map((item) => <MessageItem key={item.message.id} item={item} />)}
         </AnimatePresence>
       </ol>
     </motion.section>

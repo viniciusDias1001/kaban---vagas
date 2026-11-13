@@ -124,4 +124,5 @@ export function repliesInSending(db: Db): Promise<MailReplyRow[]> {
 export const toMailReplyDto = (r: MailReplyRow): MailReplyDto => ({
   id: r.id, messageId: r.messageId, origin: r.origin, items: r.items, toAddress: r.toAddress, subject: r.subject, body: r.body,
   attachResume: r.attachResume, state: r.state, note: r.note, createdAt: r.createdAt, sentAt: r.sentAt,
+  outMessageId: r.outMessageId ?? null,
 });

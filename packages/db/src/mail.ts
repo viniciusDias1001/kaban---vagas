@@ -322,7 +322,7 @@ async function mailMessageDtos(db: Db, where: SQL | undefined, order: 'newest' |
   return rows.map(({ message: m, company, jobTitle, replyState, replyOrigin, replyApprovedBy }) => {
     const move = moveOf.get(m.id);
     return {
-      id: m.id, threadKey: m.threadKey, direction: m.direction, fromAddress: m.fromAddress, fromName: m.fromName,
+      id: m.id, messageId: m.messageId, threadKey: m.threadKey, direction: m.direction, fromAddress: m.fromAddress, fromName: m.fromName,
       toAddress: m.toAddress, subject: m.subject, sentAt: m.sentAt, body: m.body, kind: m.kind, summary: m.summary, lang: m.lang,
       requests: m.requests, jobId: m.jobId, company: company ?? null, jobTitle: jobTitle ?? null, linkedBy: m.linkedBy,
       corrected: m.corrected, backfill: m.backfill,
