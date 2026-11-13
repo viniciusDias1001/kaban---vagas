@@ -191,9 +191,9 @@ const { description: _description, dedupHash: _dedupHash, ...JOB_LIST_COLUMNS } 
 
 /**
  * As vagas do quadro (`GET /jobs`), com o estado da candidatura de cada uma (null sem candidatura), na ordem do quadro
- * (posição, id). `where` filtra pela tabela `jobs`.
+ * (posição, id). `where` filtra pela tabela `jobs`. As marcas de e-mail (`mail`) a rota junta depois.
  */
-export async function listJobItems(db: Db, where?: SQL): Promise<JobListItemDto[]> {
+export async function listJobItems(db: Db, where?: SQL): Promise<Omit<JobListItemDto, 'mail'>[]> {
   return db
     .select({ ...JOB_LIST_COLUMNS, applicationStatus: applications.status })
     .from(jobs)

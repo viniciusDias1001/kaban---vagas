@@ -1,8 +1,9 @@
-import { and, asc, count, desc, eq, inArray, isNotNull, isNull, lt, or } from 'drizzle-orm';
-import type { EmailKind, EmailLang, EmailRequest, MailIgnoredDto } from '@kv/shared';
+import { and, asc, count, desc, eq, gte, inArray, isNotNull, isNull, lt, or, sql, type SQL } from 'drizzle-orm';
+import type { Column, EmailKind, EmailLang, EmailRequest, JobEmailsDto, MailIgnoredDto, MailMessageDto } from '@kv/shared';
 import { COLUMNS, isAppliedOrLater } from '@kv/shared';
 import type { Db } from './client';
-import { applications, jobEvents, jobs, mailAccount, mailIgnored, mailMessages } from './schema';
+import { toMailReplyDto } from './mail-replies';
+import { alerts, applications, jobEvents, jobs, mailAccount, mailIgnored, mailMessages, mailReplies } from './schema';
 
 export type MailAccountRow = typeof mailAccount.$inferSelect;
 export type MailMessageRow = typeof mailMessages.$inferSelect;
@@ -237,6 +238,101 @@ export async function mailMessageById(db: Db, id: number): Promise<MailMessageRo
 /** Mais antiga primeiro. */
 export async function threadMessages(db: Db, threadKey: string): Promise<MailMessageRow[]> {
   return db.select().from(mailMessages).where(eq(mailMessages.threadKey, threadKey)).orderBy(asc(mailMessages.sentAt), asc(mailMessages.id));
+}
+
+/** Teto da lista de e-mails de vaga (`GET /email/messages`). */
+const MAIL_LIST_MAX = 500;
+
+/**
+ * Os e-mails de vaga, mais novos primeiro (pela data do e-mail), até 500. `kind` filtra pelo tipo, `unmatched` deixa só os
+ * sem card e `since` só os com data a partir dela.
+ */
+export async function listMailMessages(
+  db: Db, filter: { kind?: EmailKind; unmatched?: boolean; since?: number } = {},
+): Promise<MailMessageDto[]> {
+  const where = and(
+    filter.kind !== undefined ? eq(mailMessages.kind, filter.kind) : undefined,
+    filter.unmatched ? isNull(mailMessages.jobId) : undefined,
+    filter.since !== undefined ? gte(mailMessages.sentAt, filter.since) : undefined,
+  );
+  return mailMessageDtos(db, where, 'newest', MAIL_LIST_MAX);
+}
+
+/** A conversa de um card: as mensagens ligadas a ele (mais antigas primeiro) e as respostas preparadas para elas. */
+export async function jobEmails(db: Db, jobId: number): Promise<JobEmailsDto> {
+  const messages = await mailMessageDtos(db, eq(mailMessages.jobId, jobId), 'oldest');
+  if (messages.length === 0) return { messages, replies: [] };
+  const replies = await db
+    .select()
+    .from(mailReplies)
+    .where(inArray(mailReplies.messageId, messages.map((m) => m.id)))
+    .orderBy(asc(mailReplies.createdAt), asc(mailReplies.id));
+  return { messages, replies: replies.map(toMailReplyDto) };
+}
+
+/**
+ * Mensagens com o card, a resposta, o movimento que causaram e se geraram alerta, em quatro consultas fixas (nunca uma
+ * por mensagem): as mensagens (com vaga e resposta por junção), os eventos de autor `email` delas, o evento mais recente
+ * de cada card movido e as mensagens com algum alerta (aberto ou não, direto ou pela resposta).
+ */
+async function mailMessageDtos(db: Db, where: SQL | undefined, order: 'newest' | 'oldest', limit?: number): Promise<MailMessageDto[]> {
+  const ordering = order === 'newest'
+    ? [desc(mailMessages.sentAt), desc(mailMessages.id)]
+    : [asc(mailMessages.sentAt), asc(mailMessages.id)];
+  const query = db
+    .select({
+      message: mailMessages, company: jobs.company, jobTitle: jobs.title,
+      replyState: mailReplies.state, replyOrigin: mailReplies.origin, replyApprovedBy: mailReplies.approvedBy,
+    })
+    .from(mailMessages)
+    .leftJoin(jobs, eq(jobs.id, mailMessages.jobId))
+    .leftJoin(mailReplies, eq(mailReplies.messageId, mailMessages.id))
+    .where(where)
+    .orderBy(...ordering)
+    .$dynamic();
+  const rows = limit === undefined ? await query : await query.limit(limit);
+  if (rows.length === 0) return [];
+  const ids = rows.map((r) => r.message.id);
+
+  const alertMessage = sql<number>`coalesce(${alerts.mailMessageId}, ${mailReplies.messageId})`;
+  const [events, alerted] = await Promise.all([
+    db
+      .select({ id: jobEvents.id, jobId: jobEvents.jobId, toColumn: jobEvents.toColumn, messageId: jobEvents.mailMessageId })
+      .from(jobEvents)
+      .where(and(inArray(jobEvents.mailMessageId, ids), eq(jobEvents.actor, 'email')))
+      // Mais antigos primeiro: se uma mensagem moveu o card mais de uma vez, o último movimento sobrescreve no mapa.
+      .orderBy(asc(jobEvents.createdAt), asc(jobEvents.id)),
+    db
+      .selectDistinct({ messageId: alertMessage.mapWith(Number) })
+      .from(alerts)
+      .leftJoin(mailReplies, eq(mailReplies.id, alerts.replyId))
+      .where(inArray(alertMessage, ids)),
+  ]);
+  const moveOf = new Map<number, { id: number; jobId: number; toColumn: Column }>();
+  for (const e of events) if (e.messageId !== null) moveOf.set(e.messageId, e);
+  const movedJobs = [...new Set(events.map((e) => e.jobId))];
+  const latest = movedJobs.length === 0 ? [] : await db
+    .selectDistinctOn([jobEvents.jobId], { jobId: jobEvents.jobId, id: jobEvents.id })
+    .from(jobEvents)
+    .where(inArray(jobEvents.jobId, movedJobs))
+    .orderBy(jobEvents.jobId, desc(jobEvents.createdAt), desc(jobEvents.id));
+  const latestOf = new Map(latest.map((e) => [e.jobId, e.id]));
+  const alertedIds = new Set(alerted.map((a) => a.messageId));
+
+  return rows.map(({ message: m, company, jobTitle, replyState, replyOrigin, replyApprovedBy }) => {
+    const move = moveOf.get(m.id);
+    return {
+      id: m.id, threadKey: m.threadKey, direction: m.direction, fromAddress: m.fromAddress, fromName: m.fromName,
+      toAddress: m.toAddress, subject: m.subject, sentAt: m.sentAt, body: m.body, kind: m.kind, summary: m.summary, lang: m.lang,
+      requests: m.requests, jobId: m.jobId, company: company ?? null, jobTitle: jobTitle ?? null, linkedBy: m.linkedBy,
+      corrected: m.corrected, backfill: m.backfill,
+      movedTo: move?.toColumn ?? null,
+      // O mesmo critério de `undoEmailMove`: o movimento é o último do card e a mensagem não foi corrigida.
+      canUndoMove: move !== undefined && !m.corrected && latestOf.get(move.jobId) === move.id,
+      replyState: replyState ?? null, replyOrigin: replyOrigin ?? null, replyApprovedBy: replyApprovedBy ?? null,
+      alerted: alertedIds.has(m.id),
+    };
+  });
 }
 
 export interface NewIgnored { messageId: string; uid: number; fromAddress: string; fromName: string; subject: string; sentAt: number; company: string }

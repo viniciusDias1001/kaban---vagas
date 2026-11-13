@@ -1,9 +1,12 @@
 import { and, asc, eq, ilike, ne, or, sql, type SQL } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { JOBS_WRITE_LOCK, applicationForJob, jobEvents, jobs, listJobItems, requestCancel, settleAppliedByOwner, type Db } from '@kv/db';
 import {
-  ColumnSchema, JobPatchSchema, LIMITS, hasNul, isAppliedOrLater, type Column, type JobDto, type JobListItemDto,
+  JOBS_WRITE_LOCK, applicationForJob, jobEvents, jobs, listJobItems, mailMarksForJobs, mailMessages, requestCancel, settleAppliedByOwner,
+  type Db,
+} from '@kv/db';
+import {
+  ColumnSchema, JobPatchSchema, LIMITS, NO_MAIL_MARKS, hasNul, isAppliedOrLater, type Column, type JobDto, type JobListItemDto,
 } from '@kv/shared';
 import type { AiContext } from '../ai-context';
 import { intendedIndex } from '../position';
@@ -30,6 +33,12 @@ const JobsQuerySchema = z.object({
 export const escapeLike = (term: string) => term.replace(/[\\%_]/g, (ch) => `\\${ch}`);
 
 export function jobRoutes(app: FastifyInstance, db: Db, ctx: AiContext) {
+  /** A vaga com o estado da candidatura e as marcas dos e-mails. */
+  async function toJobDto(job: typeof jobs.$inferSelect): Promise<JobDto> {
+    const [application, marks] = await Promise.all([applicationForJob(db, job.id), mailMarksForJobs(db)]);
+    return { ...job, applicationStatus: application?.status ?? null, mail: marks.get(job.id) ?? NO_MAIL_MARKS };
+  }
+
   app.get('/jobs', async (req): Promise<JobListItemDto[]> => {
     // Parâmetro vazio (`?q=`) é o mesmo que ausente.
     const raw = Object.fromEntries(Object.entries(req.query as Record<string, unknown>).filter(([, v]) => v !== ''));
@@ -46,9 +55,10 @@ export function jobRoutes(app: FastifyInstance, db: Db, ctx: AiContext) {
       const term = `%${escapeLike(query.q)}%`;
       where.push(or(ilike(jobs.title, term), ilike(jobs.company, term))!);
     }
-    // Sem a descrição nem o dedupHash; cada vaga vem com o estado da candidatura dela (null sem candidatura), que o
-    // quadro usa nos selos.
-    return listJobItems(db, and(...where));
+    // Sem a descrição nem o dedupHash; cada vaga vem com o estado da candidatura dela (null sem candidatura) e as marcas
+    // dos e-mails, que o quadro usa nos selos. As marcas vêm de uma leitura só, juntadas em memória.
+    const [items, marks] = await Promise.all([listJobItems(db, and(...where)), mailMarksForJobs(db)]);
+    return items.map((item) => ({ ...item, mail: marks.get(item.id) ?? NO_MAIL_MARKS }));
   });
 
   app.get('/jobs/:id', async (req, reply) => {
@@ -56,9 +66,17 @@ export function jobRoutes(app: FastifyInstance, db: Db, ctx: AiContext) {
     if (id === null) return reply.code(404).send(notFound);
     const [job] = await db.select().from(jobs).where(eq(jobs.id, id));
     if (!job) return reply.code(404).send(notFound);
-    const events = await db.select().from(jobEvents).where(eq(jobEvents.jobId, id)).orderBy(asc(jobEvents.id));
-    const application = await applicationForJob(db, id);
-    const dto: JobDto = { ...job, applicationStatus: application?.status ?? null };
+    // Cada evento com o e-mail que o causou (tipo e assunto), quando há um.
+    const rows = await db
+      .select({ event: jobEvents, mailKind: mailMessages.kind, mailSubject: mailMessages.subject })
+      .from(jobEvents)
+      .leftJoin(mailMessages, eq(mailMessages.id, jobEvents.mailMessageId))
+      .where(eq(jobEvents.jobId, id))
+      .orderBy(asc(jobEvents.id));
+    const events = rows.map(({ event, mailKind, mailSubject }) => ({
+      ...event, mail: mailSubject === null ? null : { kind: mailKind, subject: mailSubject },
+    }));
+    const dto = await toJobDto(job);
     return { job: dto, events };
   });
 
@@ -107,8 +125,7 @@ export function jobRoutes(app: FastifyInstance, db: Db, ctx: AiContext) {
       return row;
     });
     if (!updated) return reply.code(404).send(notFound);
-    const application = await applicationForJob(db, id);
-    const dto: JobDto = { ...updated, applicationStatus: application?.status ?? null };
+    const dto = await toJobDto(updated);
     // Mover para Selecionadas pede a análise da vaga (camadas 1 e 2). É idempotente, e uma falha aqui
     // não desfaz o movimento do card.
     if (patch.column === 'selecionadas') {
