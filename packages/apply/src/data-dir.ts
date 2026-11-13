@@ -31,6 +31,8 @@ export function shotPath(dataDir: string, applicationId: number, kind: ShotKind)
 /** Caminho absoluto de uma foto gravada, ou null se o relativo sai da pasta de dados. */
 export function resolveShot(dataDir: string, rel: string): string | null {
   if (!rel || isAbsolute(rel) || posix.isAbsolute(rel) || win32.isAbsolute(rel)) return null;
+  // Os caminhos gravados usam só "/": barra invertida, letra de unidade e segmentos ".." nunca são legítimos.
+  if (rel.includes('\\')|| rel.includes(':') || rel.split('/').includes('..')) return null;
   const root = resolve(dataDir);
   const abs = resolve(root, rel);
   const back = relative(root, abs);

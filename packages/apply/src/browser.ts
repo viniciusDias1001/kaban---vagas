@@ -89,37 +89,58 @@ export function createBrowserSession(opts: { userDataDir: string; launch: Launch
   let current: Page | null = null;
   let opening: Promise<Page> | null = null;
   let usedAt = 0;
+  // Sobe a cada `close()`: uma abertura em andamento que termina depois dele descarta o que abriu.
+  let epoch = 0;
 
   async function open(): Promise<Page> {
+    const mine = epoch;
     const ctx = await opts.launch(opts.userDataDir);
+    if (mine !== epoch) {
+      await ctx.close().catch(() => {});
+      throw new Error('a sessão do navegador foi fechada durante a abertura');
+    }
     context = ctx;
     // Fechar a janela (ou cair o navegador) volta a sessão ao estado fechado; a próxima `page()` abre de novo.
     ctx.on('close', () => {
       if (context === ctx) { context = null; current = null; }
     });
     // Alguns navegadores abrem uma aba inicial própria: a sessão cria a sua e nunca usa `pages()[0]`.
-    current = await ctx.newPage();
-    return current;
+    const page = await ctx.newPage();
+    if (mine !== epoch) {
+      await ctx.close().catch(() => {});
+      throw new Error('a sessão do navegador foi fechada durante a abertura');
+    }
+    current = page;
+    return page;
+  }
+
+  async function replacePage(ctx: BrowserContext): Promise<Page> {
+    const page = await ctx.newPage();
+    current = page;
+    return page;
   }
 
   return {
     async page() {
       usedAt = now();
       if (context && current && !current.isClosed()) return current;
-      if (context && current?.isClosed()) {
-        current = await context.newPage();
-        return current;
+      if (!opening) {
+        const p: Promise<Page> = (context ? replacePage(context) : open()).finally(() => {
+          if (opening === p) opening = null;
+        });
+        opening = p;
       }
-      opening ??= open().finally(() => { opening = null; });
       return opening;
     },
     async bringToFront() {
       if (current && !current.isClosed()) await current.bringToFront();
     },
     async close() {
+      epoch += 1;
       const ctx = context;
       context = null;
       current = null;
+      opening = null;
       await ctx?.close().catch(() => {});
     },
     isOpen: () => context !== null,

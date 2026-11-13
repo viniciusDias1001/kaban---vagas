@@ -15,6 +15,7 @@ export function isFakeVariant(v: string): v is FakeVariant {
 
 /** Caminho absoluto do HTML de uma variante. */
 export function fakeFixturePath(variant: string): string {
+  if (!isFakeVariant(variant)) throw new Error(`variante desconhecida do site de teste: ${variant}`);
   return fileURLToPath(new URL(`../../fixtures/fake/${variant}.html`, import.meta.url));
 }
 
@@ -29,11 +30,18 @@ export function createFakeSite(): ApplySite {
     match(job: ApplyJob): ApplyTarget | null {
       if (job.source !== 'fake') return null;
       let variant = 'form';
+      let url = job.url;
       try {
-        variant = new URL(job.url).searchParams.get('variant') ?? 'form';
+        const parsed = new URL(job.url);
+        variant = parsed.searchParams.get('variant') ?? 'form';
+        if (!isFakeVariant(variant)) {
+          // Variante desconhecida: a URL acompanha a variante realmente usada.
+          variant = 'form';
+          parsed.searchParams.set('variant', variant);
+          url = parsed.toString();
+        }
       } catch { /* url inválida: variante padrão */ }
-      if (!isFakeVariant(variant)) variant = 'form';
-      return { site: 'fake', url: job.url, ref: { variant } };
+      return { site: 'fake', url, ref: { variant } };
     },
 
     async sessionState() {
@@ -52,7 +60,8 @@ export function createFakeSite(): ApplySite {
       if (!(await step.count())) throw new SiteLayoutError('formulário do site de teste não encontrado');
       const questions = await step.locator('.field').evaluateAll((fields): Question[] =>
         fields.map((field) => {
-          const input = field.querySelector('input, textarea, select') as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
+          const input = field.querySelector('input, textarea, select') as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null;
+          if (!input) return { id: '', label: '', help: '', kind: 'text', options: [], required: false, maxLength: null };
           const label = field.querySelector('label')?.textContent?.trim() ?? '';
           const tag = input.tagName.toLowerCase();
           const type = (input as HTMLInputElement).type;

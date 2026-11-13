@@ -94,6 +94,8 @@ describe('fake site', () => {
     await site.open(page, target('form'));
     await site.fillStep(page, answers, { resumePath: resume });
     await site.discard(page);
+    expect(page.url()).toBe('about:blank');
+    expect(await page.locator('form').count()).toBe(0);
     expect(await page.content()).not.toMatch(/Candidatura recebida/);
   });
   it('blocks the network outside the fixtures', async () => {

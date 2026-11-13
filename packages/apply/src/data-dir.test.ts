@@ -24,4 +24,9 @@ describe('data folder', () => {
     expect(resolveShot('/data', '../etc/passwd')).toBeNull();
     expect(resolveShot('/data', '/etc/passwd')).toBeNull();
   });
+  it('rejects the Windows and nested traversal forms too', () => {
+    for (const bad of ['..\\x', 'C:\\x', 'C:x', '\\\\srv\\s','a/../../x', 'a/../x']) {
+      expect(resolveShot('/data', bad), bad).toBeNull();
+    }
+  });
 });

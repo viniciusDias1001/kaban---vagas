@@ -1,6 +1,21 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserContext, Page } from 'playwright';
-import { createBrowserSession, detectBrowserChannel } from './browser';
+import { createBrowserSession, detectBrowserChannel, realLaunch } from './browser';
+
+const launchPersistentContext = vi.hoisted(() => vi.fn(async () => ({})));
+vi.mock('playwright', () => ({ chromium: { launchPersistentContext } }));
+
+describe('realLaunch', () => {
+  beforeEach(() => launchPersistentContext.mockClear());
+  it('turns a channel into channel, always headed with the given profile', async () => {
+    await realLaunch('msedge')('/profile');
+    expect(launchPersistentContext).toHaveBeenCalledWith('/profile', { headless: false, channel: 'msedge' });
+  });
+  it('turns { executablePath } into executablePath, always headed', async () => {
+    await realLaunch({ executablePath: '/opt/opera/opera' })('/profile');
+    expect(launchPersistentContext).toHaveBeenCalledWith('/profile', { headless: false, executablePath: '/opt/opera/opera' });
+  });
+});
 
 describe('detectBrowserChannel', () => {
   it('honours APPLY_BROWSER=chrome or msedge without looking at the disk', () => {
@@ -57,6 +72,34 @@ describe('createBrowserSession', () => {
     expect(context.newPage).toHaveBeenCalledTimes(1);
     expect(session.isOpen()).toBe(true);
     expect(session.lastUsedAt()).toBe(250);
+  });
+  it('does not open two pages for concurrent calls, even after the page was closed', async () => {
+    const { context } = stubContext();
+    let closed = false;
+    const mk = () => ({ isClosed: () => closed }) as unknown as Page;
+    const first = mk();
+    const second = mk();
+    (context.newPage as ReturnType<typeof vi.fn>).mockResolvedValueOnce(first).mockResolvedValue(second);
+    const session = createBrowserSession({ userDataDir: '/p', launch: async () => context });
+    expect(await session.page()).toBe(first);
+    closed = true;
+    const [a, b] = await Promise.all([session.page(), session.page()]);
+    expect(a).toBe(second);
+    expect(b).toBe(second);
+    expect(context.newPage).toHaveBeenCalledTimes(2);
+  });
+  it('closes a browser whose launch finishes after close() was called', async () => {
+    const { context } = stubContext();
+    let release!: () => void;
+    const launch = vi.fn(() => new Promise<BrowserContext>((r) => { release = () => r(context); }));
+    const session = createBrowserSession({ userDataDir: '/p', launch });
+    const pending = session.page();
+    const outcome = expect(pending).rejects.toThrow();
+    await session.close();
+    release();
+    await outcome;
+    expect(context.close).toHaveBeenCalledTimes(1);
+    expect(session.isOpen()).toBe(false);
   });
   it('reopens after close, and notices when the owner closes the window', async () => {
     const { context, handlers } = stubContext();
