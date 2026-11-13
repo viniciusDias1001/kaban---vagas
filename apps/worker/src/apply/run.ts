@@ -107,7 +107,7 @@ async function engine(
       profile: ready.profile,
       job: { id: ready.job.id, source: ready.job.source, url: ready.job.url, externalId: ready.job.externalId, company: ready.job.company, title: ready.job.title },
       sourceLabel: sourceLabel(ready.job.source), resumeFileName: ready.resumeFileName,
-      company: ready.job.company, jobId: ready.job.id, country: ready.job.country === 'BR' ? 'BR' : null,
+      company: ready.job.company, jobId: ready.job.id, country: ready.job.country,
     },
     resolveDeps: resolveDepsFor(ai, { profile: ready.profile, job: jobForAi(ready.job), lang: ready.lang, signal: controller.signal, now: c.now }),
     state, clock, workTimeoutMs: c.workTimeoutMs, humanPollMs: c.humanPollMs, humanWaitMs: c.humanWaitMs, now: c.now,

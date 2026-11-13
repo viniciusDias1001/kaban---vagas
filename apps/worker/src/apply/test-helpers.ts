@@ -21,7 +21,7 @@ export async function seedJob(
   db: Db,
   o: {
     variant?: string; source?: string; company?: string; score?: number | null; version?: number; discoveredAt?: number;
-    description?: string; column?: typeof jobs.$inferInsert.column;
+    description?: string; column?: typeof jobs.$inferInsert.column; country?: 'BR' | 'INT';
   } = {},
 ): Promise<typeof jobs.$inferSelect> {
   seq += 1;
@@ -31,7 +31,7 @@ export async function seedJob(
     .insert(jobs)
     .values({
       source, externalId: String(seq), url, title: 'Pessoa desenvolvedora React', company: o.company ?? `Empresa ${seq}`,
-      location: 'São Paulo, SP', country: 'BR', remote: true, stacks: [], description: o.description ?? 'Vaga com React e Node.',
+      location: 'São Paulo, SP', country: o.country ?? 'BR', remote: true, stacks: [], description: o.description ?? 'Vaga com React e Node.',
       postedAt: null, discoveredAt: o.discoveredAt ?? NOON - 86_400_000, dedupHash: url, profileId: null, position: seq,
       ...(o.column ? { column: o.column } : {}),
     })

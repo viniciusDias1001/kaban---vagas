@@ -6,7 +6,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { desc, eq } from 'drizzle-orm';
 import { createFakeProvider, parseOutput, readBlock, readTask, type AiConfig, type AiProvider } from '@kv/ai';
 import {
-  applications, applicationForJob, applyCommands, applyCountsSince, applyWorkerState, closeDb, createApplication, enqueueApplyCommand, jobEvents, jobs,
+  applications, applicationForJob, applyCommands, applyCountsSince, applyWorkerState, jobAi, closeDb, createApplication, enqueueApplyCommand, jobEvents, jobs,
   nextApplyCommand, nextQueuedApplication, recordUsage, requestCancel, retryApplication, saveApplyAnswer, siteState, transitionApplication,
   updateSiteState, usageByLayer,
   type Db,
@@ -318,7 +318,21 @@ describe('answers', () => {
     expect(answers.find((a) => a.questionId === 'salary')).toMatchObject({ value: '20000', source: 'bank' });
   });
 
-  it('never leaves the owner a file question he cannot answer in the app: the application goes to him to finish on the site', async () => {
+  it('uses a saved answer tied to a country only on a job of that country', async () => {
+    const visa = { ...BASIC_QUESTIONS[0], id: 'visa', label: 'Do you require visa sponsorship?' };
+    site.variants.form = { questions: [...BASIC_QUESTIONS, visa] };
+    await saveApplyAnswer(db, { question: visa.label, answer: 'No', kind: 'text', scope: 'always', scopeValue: null, country: 'INT' });
+    const q = queue({ mode: 'real' });
+    const { id: abroad } = await candidate({ country: 'INT' });
+    await db.update(jobAi).set({ language: 'pt' }).where(eq(jobAi.jobId, abroad)); // currículo em pt-BR, o perfil semeado
+    await runUntilIdle(q);
+    expect(await applicationForJob(db, abroad)).toMatchObject({ status: 'submitted' });
+    const { id: home } = await candidate({ country: 'BR' });
+    await runUntilIdle(q);
+    expect(await applicationForJob(db, home)).toMatchObject({ status: 'needs_human', reason: 'question' });
+  });
+
+  it('never leaves the owner a file question he cannot answer in the app:the application goes to him to finish on the site', async () => {
     const cover = { ...BASIC_QUESTIONS[0], id: 'cover', label: 'Cover letter', kind: 'file' as const };
     site.variants.form = { questions: [...BASIC_QUESTIONS, cover] };
     const { id: jobId } = await candidate();
