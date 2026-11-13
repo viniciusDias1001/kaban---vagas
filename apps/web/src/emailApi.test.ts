@@ -52,7 +52,7 @@ describe('emailApi', () => {
     ['listIgnored', () => email.listIgnored(), '/api/email/ignored', undefined, undefined],
     ['promoteIgnored', () => email.promoteIgnored(6), '/api/email/ignored/6/promote', 'POST', undefined],
     ['editReply', () => email.editReply(7, 'Olá'), '/api/email/replies/7', 'PATCH', { body: 'Olá' }],
-    ['approveReply', () => email.approveReply(7), '/api/email/replies/7/approve', 'POST', undefined],
+    ['approveReply', () => email.approveReply(7, 'Olá\n\nMaria'), '/api/email/replies/7/approve', 'POST', { body: 'Olá\n\nMaria' }],
     ['discardReply', () => email.discardReply(7), '/api/email/replies/7/discard', 'POST', undefined],
     ['listAlerts', () => email.listAlerts(), '/api/alerts', undefined, undefined],
     ['dismissAlert', () => email.dismissAlert(8), '/api/alerts/8/dismiss', 'POST', undefined],
@@ -90,10 +90,11 @@ describe('emailApi', () => {
       [409, 'wrong_kind', 'Esta ação não vale para este alerta.'],
       [409, 'alert_closed', 'Este alerta já foi resolvido ou dispensado.'],
       [409, 'cannot_undo', 'Este movimento não pode mais ser desfeito.'],
+      [409, 'reply_changed', 'O texto desta resposta mudou. Confira o texto atual antes de enviar.'],
     ];
     for (const [status, error, message] of cases) {
       reply(status, JSON.stringify({ error, message }));
-      const e = await email.approveReply(1).catch((x: unknown) => x);
+      const e = await email.approveReply(1, 'Texto.').catch((x: unknown) => x);
       expect(e).toBeInstanceOf(ApiError);
       expect((e as ApiError).status).toBe(status);
       expect((e as ApiError).message).toBe(message.charAt(0).toUpperCase() + message.slice(1));

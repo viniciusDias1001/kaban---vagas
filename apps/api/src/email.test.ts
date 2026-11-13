@@ -159,7 +159,7 @@ describe('replies', () => {
   it('edits and approves a draft, and refuses one with a gap', async () => {
     const job = await seedJob(db);
     const replyId = await draftFor(await seedMail({ jobId: job.id, linkedBy: 'auto', kind: 'entrevista' }));
-    const refused = await post(`/email/replies/${replyId}/approve`);
+    const refused = await post(`/email/replies/${replyId}/approve`, { body: 'Posso na [[dia e hora]].\n\nMaria Exemplo da Silva' });
     expect(refused.statusCode).toBe(422);
     expect(refused.json()).toMatchObject({ error: 'draft_has_gaps' });
     expect((await replyById(db, replyId))!.state).toBe('rascunho');
@@ -167,7 +167,8 @@ describe('replies', () => {
     const edited = await patch(`/email/replies/${replyId}`, { body: 'Posso na terça, às 10h.\n\nMaria Exemplo da Silva' });
     expect(edited.statusCode).toBe(200);
     expect(edited.json()).toMatchObject({ id: replyId, body: 'Posso na terça, às 10h.\n\nMaria Exemplo da Silva', state: 'rascunho' });
-    expect((await post(`/email/replies/${replyId}/approve`)).statusCode).toBe(200);
+    const approved = await post(`/email/replies/${replyId}/approve`, { body: 'Posso na terça, às 10h.\n\nMaria Exemplo da Silva' });
+    expect(approved.statusCode).toBe(200);
     expect((await replyById(db, replyId))!).toMatchObject({ state: 'aprovada', approvedBy: 'owner' });
   });
 
@@ -176,7 +177,7 @@ describe('replies', () => {
     const edit = await patch(`/email/replies/${replyId}`, { body: 'Outro texto.' });
     expect(edit.statusCode).toBe(409);
     expect(edit.json()).toMatchObject({ error: 'not_a_draft' });
-    const approve = await post(`/email/replies/${replyId}/approve`);
+    const approve = await post(`/email/replies/${replyId}/approve`, { body: 'Meu telefone.' });
     expect(approve.statusCode).toBe(409);
     expect(approve.json()).toMatchObject({ error: 'wrong_state' });
     expect((await replyById(db, replyId))!).toMatchObject({ state: 'enviada', body: 'Meu telefone.' });
@@ -186,8 +187,27 @@ describe('replies', () => {
     const replyId = await draftFor(await seedMail({ kind: 'entrevista' }));
     expect((await patch(`/email/replies/${replyId}`, { body: '   ' })).statusCode).toBe(400);
     expect((await patch('/email/replies/999', { body: 'Texto.' })).statusCode).toBe(404);
-    expect((await post('/email/replies/999/approve')).statusCode).toBe(404);
+    expect((await post('/email/replies/999/approve', { body: 'Texto.' })).statusCode).toBe(404);
     expect((await post('/email/replies/999/discard')).statusCode).toBe(404);
+  });
+
+  it('approves only the text the owner saw', async () => {
+    const replyId = await draftFor(await seedMail({ kind: 'entrevista' }), 'Posso na terça.');
+    await raiseAlert(db, { kind: 'draft', replyId }, NOW);
+    // Outra aba mudou o texto; esta ainda mostra o antigo.
+    expect((await patch(`/email/replies/${replyId}`, { body: 'Posso na quarta.' })).statusCode).toBe(200);
+    const stale = await post(`/email/replies/${replyId}/approve`, { body: 'Posso na terça.' });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json()).toEqual({ error: 'reply_changed', message: 'O texto desta resposta mudou. Confira o texto atual antes de enviar.' });
+    expect((await replyById(db, replyId))!).toMatchObject({ state: 'rascunho', approvedBy: null, body: 'Posso na quarta.' });
+    expect((await get('/alerts')).json().alerts).toHaveLength(1);
+
+    expect((await post(`/email/replies/${replyId}/approve`)).statusCode).toBe(400);
+    expect((await post(`/email/replies/${replyId}/approve`, { body: 'Posso na quarta.', extra: 1 })).statusCode).toBe(400);
+    const ok = await post(`/email/replies/${replyId}/approve`, { body: 'Posso na quarta.' });
+    expect(ok.statusCode).toBe(200);
+    expect((await replyById(db, replyId))!).toMatchObject({ state: 'aprovada', approvedBy: 'owner', body: 'Posso na quarta.' });
+    expect((await get('/alerts')).json().alerts).toEqual([]);
   });
 
   it('discarding a draft clears its alerts', async () => {
@@ -206,7 +226,7 @@ describe('replies', () => {
   it('approving a draft clears the alert that asked for it', async () => {
     const replyId = await draftFor(await seedMail({ kind: 'entrevista' }), 'Posso na terça.');
     await raiseAlert(db, { kind: 'draft', replyId }, NOW);
-    expect((await post(`/email/replies/${replyId}/approve`)).statusCode).toBe(200);
+    expect((await post(`/email/replies/${replyId}/approve`, { body: 'Posso na terça.' })).statusCode).toBe(200);
     expect((await get('/alerts')).json().alerts).toEqual([]);
   });
 });

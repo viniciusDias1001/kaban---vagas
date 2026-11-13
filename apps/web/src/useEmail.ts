@@ -140,7 +140,7 @@ export function useReplyActions() {
   const opts = { meta: INLINE_ERROR, onSuccess: refresh } as const;
   return {
     edit: useMutation({ ...opts, mutationFn: (v: { id: number; body: string }) => api.editReply(v.id, v.body) }),
-    approve: useMutation({ ...opts, mutationFn: (id: number) => api.approveReply(id) }),
+    approve: useMutation({ ...opts, mutationFn: (v: { id: number; body: string }) => api.approveReply(v.id, v.body) }),
     discard: useMutation({ ...opts, mutationFn: (id: number) => api.discardReply(id) }),
   };
 }

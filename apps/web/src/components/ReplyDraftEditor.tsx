@@ -78,7 +78,9 @@ export function ReplyDraftEditor({ reply, jobId, ids, otherRecipient, failedText
   const approve = async () => {
     setError(null);
     try {
-      await actions.approve.mutateAsync(reply.id);
+      // Vai o texto guardado que a caixa mostra (`draftGate` só liga o botão quando são o mesmo): se ele mudou em outra aba,
+      // a API recusa e a conversa relida mostra o texto atual.
+      await actions.approve.mutateAsync({ id: reply.id, body: reply.body });
     } catch (e) {
       fail(e);
     }

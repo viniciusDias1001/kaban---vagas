@@ -27,6 +27,8 @@ export const PhoneTokenInputSchema = z.strictObject({
     .regex(TELEGRAM_TOKEN_PATTERN, 'o token não tem espaços nem acentos'),
 });
 export const ReplyEditSchema =z.strictObject({ body: z.string().trim().min(1).max(MAIL_LIMITS.draftChars) });
+/** POST /email/replies/:id/approve: o texto que o dono vê, comparado sem mudança nenhuma com o guardado. */
+export const ReplyApproveSchema = z.strictObject({ body: z.string() });
 export const LinkMessageSchema = z.strictObject({ jobId: z.number().int().positive() });
 export const AlertMoveSchema = z.strictObject({ accept: z.boolean() });
 export const MailMessagesQuerySchema = z.object({
