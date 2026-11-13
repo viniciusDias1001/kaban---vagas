@@ -13,6 +13,7 @@
     "typecheck": "pnpm -r exec tsc --noEmit",
     "e2e": "pnpm --filter @kv/web exec playwright test",
     "ai:smoke": "tsx scripts/ai-smoke.ts",
+    "resume:preview": "tsx scripts/resume-preview.ts",
     "start:prod": "node scripts/start-prod.mjs",
     "worker:install": "node scripts/install-worker.mjs"
   },

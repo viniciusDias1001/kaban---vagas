@@ -165,6 +165,7 @@ function translate(profile: ProfileWire, target: string): ProfileWire {
   const tag = (text: string) => (text ? `[${target}] ${text}` : text);
   return {
     ...profile,
+    headline: tag(profile.headline),
     summary: tag(profile.summary),
     experiences: profile.experiences.map((e) => ({
       ...e,
@@ -184,6 +185,7 @@ function extract(text: string): ProfileWire {
   const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
   const out: ProfileWire = {
     contact: { name: lines[0] ?? '', email: '', phone: '', location: '' },
+    headline: '',
     summary: lines[1] ?? '',
     experiences: [], education: [], skills: [], languages: [], certifications: [], links: [],
   };
@@ -200,13 +202,13 @@ function extract(text: string): ProfileWire {
       out.contact.email = parts.find((p) => p.includes('@')) ?? '';
       out.contact.location = parts.length > 1 ? parts[parts.length - 1] : '';
     } else if (section === 'experience' && cells.length === 4) {
-      out.experiences.push({ id: '', title: cells[0], company: cells[1], start: cells[2], end: cells[3], location: '', achievements: [] });
+      out.experiences.push({ id: '', title: cells[0], company: cells[1], start: cells[2], end: cells[3], location: '', section: 'principal', note: '', achievements: [] });
     } else if (section === 'experience' && line.startsWith('- ')) {
       out.experiences.at(-1)?.achievements.push({ id: '', text: line.slice(2) });
     } else if (section === 'education' && cells.length === 4) {
       out.education.push({ id: '', degree: cells[0], institution: cells[1], start: cells[2], end: cells[3] });
     } else if (section === 'skills') {
-      out.skills.push(...line.split(',').map((name) => ({ id: '', name: name.trim() })).filter((k) => k.name));
+      out.skills.push(...line.split(',').map((name) => ({ id: '', name: name.trim(), group: '' })).filter((k) => k.name));
     } else if (section === 'languages') {
       for (const item of line.split(',')) {
         const m = /^(.*?)\s*\((.*)\)$/.exec(item.trim());

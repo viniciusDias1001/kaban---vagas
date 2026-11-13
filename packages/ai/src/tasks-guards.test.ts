@@ -3,12 +3,13 @@ import type { CandidateProfile, ProfileWire } from '@kv/shared';
 import { AiError } from './errors';
 import { readBlock } from './prompts';
 import {
-  InputTooLargeError, JOB_FIELD_CHARS, PROFILE_JSON_MAX_CHARS, PROFILE_OUTPUT_TOKENS, RESUME_TEXT_MAX_CHARS, TIER1_EXCERPT_CHARS,
+  InputTooLargeError, JOB_FIELD_CHARS, PROFILE_JSON_MAX_CHARS, PROFILE_LAYOUT_FIELDS_CHARS, PROFILE_OUTPUT_TOKENS, RESUME_TEXT_MAX_CHARS, TIER1_EXCERPT_CHARS,
   TIER2_DESCRIPTION_CHARS, TIER2_OUTPUT_TOKENS, TIER3_DESCRIPTION_CHARS, analyzeJob, draftTailored, estimateInterruptedUsage, extractProfile,
   scoreJobs, testConnection, translateProfile,
 } from './tasks';
 import { CALL_TIMEOUT_MS, estimateAbortedUsage, outputAllowance } from './limits';
-import { REALISTIC_PROFILE, SAMPLE_JOB, SAMPLE_PROFILE, SAMPLE_RESUME_TEXT } from './testing';
+import { LIMITS } from '@kv/shared';
+import { LAYOUT_PROFILE, REALISTIC_PROFILE, SAMPLE_JOB, SAMPLE_PROFILE, SAMPLE_RESUME_TEXT } from './testing';
 import { ProfileTranslationError, numberMismatch } from './translation';
 import type { AiProvider, AiRequest } from './types';
 
@@ -38,8 +39,8 @@ const translate = (mutate: (p: ProfileWire) => void, source: CandidateProfile = 
   });
   return translateProfile(provider, source, 'en');
 };
-const violationsOf = async (mutate: (p: ProfileWire) => void) => {
-  const error = await translate(mutate).catch((e: unknown) => e);
+const violationsOf = async (mutate: (p: ProfileWire) => void, source: CandidateProfile = REALISTIC_PROFILE) => {
+  const error = await translate(mutate, source).catch((e: unknown) => e);
   expect(error).toBeInstanceOf(ProfileTranslationError);
   return (error as ProfileTranslationError).violations.map((v) => `${v.code}@${v.path}:${v.detail ?? ''}`);
 };
@@ -180,8 +181,8 @@ describe('A2: profile translation is checked field by field', () => {
 
 describe('A1: inputs are bounded before the call and failures after it carry the usage', () => {
   it('relates the résumé cap to the output cap', () => {
-    expect(PROFILE_OUTPUT_TOKENS).toBe(8_000);
-    expect(PROFILE_JSON_MAX_CHARS).toBe(24_000);
+    expect(PROFILE_OUTPUT_TOKENS).toBe(9_000);
+    expect(PROFILE_JSON_MAX_CHARS).toBe(27_000);
     expect(RESUME_TEXT_MAX_CHARS).toBe(19_200);
   });
 
@@ -199,7 +200,7 @@ describe('A1: inputs are bounded before the call and failures after it carry the
     const padded = SAMPLE_RESUME_TEXT.split('\n').join(`${' '.repeat(400)}\n\n\n\n`) + ' '.repeat(30_000);
     expect(padded.length).toBeGreaterThan(RESUME_TEXT_MAX_CHARS);
     const { provider, requests } = scripted(() => ({
-      contact: { name: 'Maria', email: '', phone: '', location: '' }, summary: '', experiences: [], education: [], skills: [],
+      contact: { name: 'Maria', email: '', phone: '', location: '' }, headline: '', summary: '', experiences: [], education: [], skills: [],
       languages: [], certifications: [], links: [],
     }));
     await extractProfile(provider, padded);
@@ -218,7 +219,7 @@ describe('A1: inputs are bounded before the call and failures after it carry the
 
   it('carries the usage when the extracted profile is empty or invalid', async () => {
     const { provider } = scripted(() => ({
-      contact: { name: '', email: '', phone: '', location: '' }, summary: 'x', experiences: [], education: [], skills: [],
+      contact: { name: '', email: '', phone: '', location: '' }, headline: '', summary: 'x', experiences: [], education: [], skills: [],
       languages: [], certifications: [], links: [],
     }));
     await expect(extractProfile(provider, 'texto')).rejects.toMatchObject({ kind: 'invalid_output', usage: USAGE, model: 'scripted' });
@@ -261,9 +262,9 @@ describe('A1: inputs are bounded before the call and failures after it carry the
       inputTokens: 1_201, outputTokens: 16_000,
     });
     expect(outputAllowance('fast', 1_800)).toBe(3_800);
-    expect(estimateInterruptedUsage('tier2')).toEqual({ inputTokens: 13_300, outputTokens: 16_000 });
-    expect(estimateInterruptedUsage('tier3')).toEqual({ inputTokens: 15_967, outputTokens: 14_000 });
-    expect(estimateInterruptedUsage('profile_translate')).toEqual({ inputTokens: 9_000, outputTokens: 16_000 });
+    expect(estimateInterruptedUsage('tier2')).toEqual({ inputTokens: 14_300, outputTokens: 16_000 });
+    expect(estimateInterruptedUsage('tier3')).toEqual({ inputTokens: 16_967, outputTokens: 14_000 });
+    expect(estimateInterruptedUsage('profile_translate')).toEqual({ inputTokens: 10_000, outputTokens: 17_000 });
     expect(estimateInterruptedUsage('tier1')).toEqual({ inputTokens: 800, outputTokens: 380 });
     // O tempo limite do SDK comporta o teto de saída do nível a 40 tokens por segundo.
     expect(CALL_TIMEOUT_MS.strong / 1000).toBeGreaterThanOrEqual(outputAllowance('strong', TIER2_OUTPUT_TOKENS) / 40);
@@ -285,5 +286,35 @@ describe('A1: inputs are bounded before the call and failures after it carry the
     const error = await draftTailored(createFakeProvider(), SAMPLE_PROFILE, { ...SAMPLE_JOB, description: 'FAKE_AI_EXTRA_FIELD' }, 'pt-BR').catch((e: unknown) => e);
     expect(error).toMatchObject({ kind: 'invalid_output', model: 'fake-strong' });
     expect((error as AiError).usage?.inputTokens).toBeGreaterThan(0);
+  });
+});
+
+describe('layout fields in the translation', () => {
+  it('translates each skill group once and reuses it for every skill of the group', async () => {
+    const { data } = await translate((p) => {
+      p.skills[3].group = 'Databases';
+      p.skills[4].group = 'Database';
+      p.skills[5].group = 'DevOps and Kubernetes';
+    }, LAYOUT_PROFILE);
+    expect(data.skills.map((k) => k.group)).toEqual(['Front-end', 'Front-end', 'Back-end & APIs', 'Databases', 'Databases', 'DevOps and Kubernetes']);
+  });
+  it('keeps the source group when its translation adds a number or a term, without failing', async () => {
+    const { data } = await translate((p) => { p.skills[3].group = 'Databases (Oracle, 10 years)'; }, LAYOUT_PROFILE);
+    expect(data.skills.slice(3, 5).map((k) => k.group)).toEqual(['Banco de dados', 'Banco de dados']);
+  });
+  it('translates headline and note under the title rules and copies the section', async () => {
+    const { data } = await translate((p) => {
+      p.headline = 'Senior Front-end Developer'; p.experiences[0].note = 'Promoted after 18 months'; p.experiences[1].section = 'principal';
+    }, LAYOUT_PROFILE);
+    expect([data.headline, data.experiences[0].note, data.experiences[1].section]).toEqual(['Senior Front-end Developer', 'Promoted after 18 months', 'complementar']);
+    expect(await violationsOf((p) => { p.headline = 'Lead Front-end Developer'; }, LAYOUT_PROFILE)).toEqual(['novel_term@headline:lead']);
+    expect(await violationsOf((p) => { p.experiences[0].note = 'Promoted after 24 months'; }, LAYOUT_PROFILE))
+      .toEqual(['new_number@experiences[0].note:24', 'new_number@experiences[0].note:18']);
+  });
+  it('reserves room in the output for the layout fields of a profile at the item limits', () => {
+    const skills = Array.from({ length: LIMITS.profileItems }, (_, i) => ({ id: '', name: `s${i}` }));
+    const experiences = Array.from({ length: 12 }, () => ({ id: '', company: 'c', title: 't', start: '', end: '', location: '', achievements: [] }));
+    const withFields = { headline: '', skills: skills.map((k) => ({ ...k, group: 'g'.repeat(30) })), experiences: experiences.map((e) => ({ ...e, section: 'complementar', note: '' })) };
+    expect(JSON.stringify(withFields).length - JSON.stringify({ skills, experiences }).length).toBeLessThanOrEqual(PROFILE_LAYOUT_FIELDS_CHARS);
   });
 });
