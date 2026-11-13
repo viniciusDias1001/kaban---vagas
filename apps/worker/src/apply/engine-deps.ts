@@ -120,17 +120,25 @@ export function buildEngineDeps(input: EngineDepsInput): EngineDeps {
       if (await cancelled()) return false;
       guard(); // o tempo pode ter acabado durante a leitura acima
       state.phase = 'click';
-      const ok = await transitionApplication(db, id, { status: 'submitting', from: BEFORE_CLICK, set: { answers: update.answers } }, now());
+      // O pedido de cancelamento é conferido de novo dentro da gravação travada: um cancelamento que chega entre a leitura
+      // acima e a gravação vence, e o clique não acontece.
+      const ok = await transitionApplication(
+        db, id, { status: 'submitting', from: BEFORE_CLICK, unlessCancelled: true, set: { answers: update.answers } }, now(),
+      );
       if (!ok) {
         state.phase = 'pre';
+        if (await cancelled()) return false;
         throw new Error('a candidatura saiu do andamento antes do envio');
       }
       return true;
     }
     if (await cancelled()) return false;
     guard();
-    const ok = await transitionApplication(db, id, { status: update.status, from: BEFORE_CLICK }, now());
-    if (!ok) throw new Error('a candidatura saiu do andamento');
+    const ok = await transitionApplication(db, id, { status: update.status, from: BEFORE_CLICK, unlessCancelled: true }, now());
+    if (!ok) {
+      if (await cancelled()) return false;
+      throw new Error('a candidatura saiu do andamento');
+    }
     return true;
   }
 

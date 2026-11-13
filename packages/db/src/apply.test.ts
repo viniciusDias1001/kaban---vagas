@@ -95,6 +95,15 @@ describe('createApplication / transitionApplication', () => {
     expect(await applicationForJob(db, job.id)).toMatchObject({ status: 'preparing', startedAt: 5004 });
   });
 
+  it('refuses a transition marked unlessCancelled when the cancel flag is set, under the same lock', async () => {
+    const { job, id } = await create();
+    await transitionApplication(db, id, { status: 'filling' }, 2000);
+    await db.update(applications).set({ cancelRequested: true }).where(eq(applications.id, id));
+    expect(await transitionApplication(db, id, { status: 'submitting', from: ['filling'], unlessCancelled: true }, 3000)).toBe(false);
+    expect(await applicationForJob(db, job.id)).toMatchObject({ status: 'filling', cancelRequested: true });
+    expect(await transitionApplication(db, id, { status: 'cancelled', from: ['filling'] }, 3000)).toBe(true);
+  });
+
   it('returns false for an unknown id', async () => {
     expect(await transitionApplication(db, 999, { status: 'queued' }, 1)).toBe(false);
   });

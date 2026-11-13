@@ -39,6 +39,11 @@ export interface Transition {
   status: ApplicationStatus;
   /** Só grava se o estado atual está na lista (a leitura e a escrita são na mesma transação travada); senão devolve false. */
   from?: readonly ApplicationStatus[];
+  /**
+   * Não grava (devolve false) se o dono pediu o cancelamento: o pedido é lido na mesma transação travada, então um
+   * cancelamento gravado antes da escrita sempre vence (o `submitting` antes do clique final usa isto).
+   */
+  unlessCancelled?: true;
   reason?: ApplicationReason | null;
   detail?: string | null;
   /** Texto do evento na linha do tempo. */
@@ -79,6 +84,7 @@ export async function transitionApplication(db: Db, id: number, t: Transition, n
     const [row] = await tx.select().from(applications).where(eq(applications.id, id)).for('update');
     if (!row || row.status === 'submitted') return false;
     if (t.from && !t.from.includes(row.status)) return false;
+    if (t.unlessCancelled && row.cancelRequested) return false;
     await writeTransition(tx, row, t, now);
     return true;
   });
