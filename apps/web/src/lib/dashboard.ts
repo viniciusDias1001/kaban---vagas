@@ -1,7 +1,17 @@
-import { APPLY_SITE_LABELS, type ApplicationReason, type ApplySiteId, type DashboardDto, type Ratio } from '@kv/shared/client';
+import {
+  APPLY_SITE_LABELS, type ApplicationReason, type ApplySiteId, type DashboardDto, type DashboardPeriod, type Ratio,
+} from '@kv/shared/client';
 import { APPLIED_BY_OWNER_LABEL, reasonText } from './apply';
 
 /** Textos do Painel (sem React). Os números saem com vírgula decimal, sem depender do idioma da máquina. */
+
+/** O período em que "Abrir a lista" (resumo da primeira leitura da caixa) abre o Painel: a primeira leitura vai 30 dias para trás. */
+export const FIRST_READ_PERIOD: DashboardPeriod = '30';
+
+/** O período em que o Painel abre: o pedido pela navegação, quando há; senão, o último escolhido (`stored`). */
+export function painelStartPeriod(requested: DashboardPeriod | undefined, stored: DashboardPeriod): DashboardPeriod {
+  return requested ?? stored;
+}
 
 /** Número com `digits` casas e vírgula decimal. */
 const decimal = (value: number, digits: number): string => value.toFixed(digits).replace('.', ',');

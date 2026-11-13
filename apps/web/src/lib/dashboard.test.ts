@@ -1,8 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import type { DashboardDto } from '@kv/shared/client';
 import {
-  blockerLabel, breakdownLabel, daysText, emptyReason, funnelShares, minutesText, ratioShare, ratioText, usdText,
+  FIRST_READ_PERIOD, blockerLabel, breakdownLabel, daysText, emptyReason, funnelShares, minutesText, painelStartPeriod, ratioShare,
+  ratioText, usdText,
 } from './dashboard';
+
+describe('painelStartPeriod', () => {
+  it('opens on the period the navigation asks for, else on the last one chosen', () => {
+    // "Abrir a lista" do resumo da primeira leitura: os e-mails contados são dos últimos 30 dias.
+    expect(FIRST_READ_PERIOD).toBe('30');
+    expect(painelStartPeriod(FIRST_READ_PERIOD, '7')).toBe('30');
+    expect(painelStartPeriod(FIRST_READ_PERIOD, 'all')).toBe('30');
+    expect(painelStartPeriod(undefined, '7')).toBe('7');
+  });
+});
 
 const zeroKinds = { confirmation: 0, interview: 0, rejection: 0, offer: 0, question: 0, other: 0 } as unknown as DashboardDto['email']['received'];
 const emptyDto: DashboardDto = {

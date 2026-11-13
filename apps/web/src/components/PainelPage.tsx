@@ -8,7 +8,7 @@ import {
 } from '@kv/shared/client';
 import { api } from '../api';
 import {
-  blockerLabel, breakdownLabel, daysText, emptyReason, minutesText, ratioShare, ratioText, usdText,
+  blockerLabel, breakdownLabel, daysText, emptyReason, minutesText, painelStartPeriod, ratioShare, ratioText, usdText,
 } from '../lib/dashboard';
 import { STATUS_LABELS } from '../lib/apply';
 import { spring } from '../lib/motion';
@@ -343,8 +343,12 @@ function Loading() {
   );
 }
 
-export default function PainelPage({ onOpenJob }: { onOpenJob: (jobId: number) => void }) {
-  const [period, setPeriod] = useState<DashboardPeriod>(loadPeriod);
+export default function PainelPage({ initialPeriod, onOpenJob }: {
+  /** O período pedido pela navegação ("Abrir a lista" do resumo da primeira leitura pede 30 dias); sem ele, o último escolhido. */
+  initialPeriod?: DashboardPeriod;
+  onOpenJob: (jobId: number) => void;
+}) {
+  const [period, setPeriod] = useState<DashboardPeriod>(() => painelStartPeriod(initialPeriod, loadPeriod()));
   const periodLabelId = useId();
   const dashboard = useDashboard(period);
   const { data: sources = [] } = useQuery({ queryKey: ['sources'], queryFn: api.sources });

@@ -93,9 +93,9 @@ const messageOf = (e: unknown) => (e instanceof Error && e.message.trim() ? e.me
 
 /**
  * A busca e o botão "Ligar a esta vaga", com o erro logo abaixo: para um e-mail sem card fora do sino (a conversa do
- * Painel). Ao ligar, a lista e a conversa são relidas e o e-mail passa a mostrar a vaga.
+ * Painel). Ao ligar, a lista e a conversa são relidas e o e-mail passa a mostrar a vaga; `onLinked` é chamado depois do sucesso.
  */
-export function LinkMailToJob({ messageId, testIdPrefix }: { messageId: number; testIdPrefix: string }) {
+export function LinkMailToJob({ messageId, testIdPrefix, onLinked }: { messageId: number; testIdPrefix: string; onLinked?: () => void }) {
   const { link } = useMessageActions();
   const [picked, setPicked] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -107,7 +107,9 @@ export function LinkMailToJob({ messageId, testIdPrefix }: { messageId: number; 
       await link.mutateAsync({ id: messageId, jobId: picked });
     } catch (e) {
       setError(messageOf(e));
+      return;
     }
+    onLinked?.();
   };
 
   return (

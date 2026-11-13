@@ -4,11 +4,14 @@ import { Fragment, useEffect, useId, useMemo, useRef, useState, type KeyboardEve
 import {
   EMAIL_KINDS, EMAIL_KIND_LABELS, periodSince, type DashboardPeriod, type EmailKind, type MailMessageDto, type MailReplyDto,
 } from '@kv/shared/client';
-import { mailActions, mailListNotice, replyStateLabel, selectedMail, threadConversation } from '../lib/email';
+import {
+  MAIL_LINKED_TOAST, afterMailLinked, mailActions, mailListNotice, replyStateLabel, selectedMail, threadConversation,
+} from '../lib/email';
 import { useMediaQuery } from '../lib/hooks';
 import { spring } from '../lib/motion';
 import { CARD, EYEBROW } from '../lib/styles';
 import { cn } from '../lib/utils';
+import { showToast } from '../toast';
 import { useJobEmails, useMailMessages } from '../useEmail';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
@@ -197,13 +200,16 @@ function JobThread({ mail, jobId }: { mail: MailMessageDto; jobId: number }) {
   );
 }
 
-function MailSheet({ mail, open, onClose, onOpenJob }: {
+function MailSheet({ mail, open, onClose, onOpenJob, onLinked, onCloseAutoFocus }: {
   mail: MailMessageDto | null; open: boolean; onClose: () => void; onOpenJob: (jobId: number) => void;
+  /** O e-mail sem vaga foi ligado a uma vaga pela conversa. */
+  onLinked: (mailId: number) => void;
+  onCloseAutoFocus: (e: Event) => void;
 }) {
   return (
     <Sheet open={open} onOpenChange={(o) => !o && onClose()}>
       {mail && (
-        <SheetContent>
+        <SheetContent onCloseAutoFocus={onCloseAutoFocus}>
           <div className="flex h-full flex-col">
             <header className="flex items-start justify-between gap-4 border-b border-line p-5">
               <div className="min-w-0">
@@ -228,7 +234,9 @@ function MailSheet({ mail, open, onClose, onOpenJob }: {
                 <div className="space-y-3">
                   <Bubble m={mail} />
                   {/* Sem card: liga o e-mail (e o fio dele) a uma vaga daqui, como no alerta do sino. */}
-                  {mail.direction === 'in' && <LinkMailToJob key={mail.id} messageId={mail.id} testIdPrefix="painel-mail-link" />}
+                  {mail.direction === 'in' && (
+                    <LinkMailToJob key={mail.id} messageId={mail.id} testIdPrefix="painel-mail-link" onLinked={() => onLinked(mail.id)} />
+                  )}
                 </div>
               ) : <JobThread mail={mail} jobId={mail.jobId} />}
             </div>
@@ -283,11 +291,31 @@ export function PainelEmailList({ period, onOpenJob }: { period: DashboardPeriod
     setSelectedId(m.id);
     setSheetOpen(true);
   };
+  // Para onde vai o foco quando a conversa fecha depois de ligar um e-mail sob "Sem vaga": a linha que toma o lugar dele
+  // (id) ou o filtro (null). `undefined`: o de sempre, de volta à linha que abriu a conversa.
+  const sectionRef = useRef<HTMLElement>(null);
+  const focusOnClose = useRef<number | null | undefined>(undefined);
+  const linked = (mailId: number) => {
+    showToast(MAIL_LINKED_TOAST, 'info');
+    const next = afterMailLinked(rows.map((m) => m.id), mailId, unmatched);
+    if (!next.close) return;
+    focusOnClose.current = next.focusRowId;
+    setSheetOpen(false);
+  };
+  const closeFocus = (e: Event) => {
+    const target = focusOnClose.current;
+    focusOnClose.current = undefined;
+    if (target === undefined) return;
+    e.preventDefault();
+    const section = sectionRef.current;
+    const row = target === null ? null : section?.querySelector<HTMLElement>(`[data-testid="painel-mail-row-${target}"]`);
+    (row ?? section?.querySelector<HTMLElement>('[data-testid="painel-mail-filter-unmatched"]'))?.focus();
+  };
   const capped = data ? mailListNotice(data.length) : null;
 
   return (
     <motion.section
-      data-testid="painel-mail-list" aria-labelledby={titleId}
+      ref={sectionRef} data-testid="painel-mail-list" aria-labelledby={titleId}
       initial={reduced ? false : { opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={spring}
       className={cn(CARD, 'min-w-0 p-5 sm:p-6')}
     >
@@ -325,6 +353,7 @@ export function PainelEmailList({ period, onOpenJob }: { period: DashboardPeriod
       <MailSheet
         mail={selected} open={sheetOpen} onClose={() => setSheetOpen(false)}
         onOpenJob={(id) => { setSheetOpen(false); onOpenJob(id); }}
+        onLinked={linked} onCloseAutoFocus={closeFocus}
       />
     </motion.section>
   );

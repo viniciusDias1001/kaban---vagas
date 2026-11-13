@@ -216,6 +216,25 @@ export function selectedMail(rows: readonly MailMessageDto[], id: number | null,
   return rows.find((m) => m.id === id) ?? (last?.id === id ? last : null);
 }
 
+/** O aviso de sucesso depois de ligar um e-mail a uma vaga pela conversa do Painel. */
+export const MAIL_LINKED_TOAST = 'E-mail ligado à vaga.';
+
+/**
+ * Depois de ligar um e-mail a uma vaga pela conversa do Painel. Com o filtro "Sem vaga" o e-mail sai da lista: a conversa
+ * fecha (não fica mostrando um e-mail que não está mais ali) e o foco vai para a linha que toma o lugar dele, a seguinte ou,
+ * se ele era a última, a anterior; `focusRowId` null quando a lista ficou vazia (o foco vai para o filtro). Sem o filtro, o
+ * e-mail continua na lista e a conversa fica aberta, já mostrando a vaga.
+ */
+export function afterMailLinked(
+  rowIds: readonly number[], linkedId: number, unmatched: boolean,
+): { close: false } | { close: true; focusRowId: number | null } {
+  if (!unmatched) return { close: false };
+  const at = rowIds.indexOf(linkedId);
+  const rest = rowIds.filter((id) => id !== linkedId);
+  if (rest.length === 0) return { close: true, focusRowId: null };
+  return { close: true, focusRowId: rest[Math.min(Math.max(at, 0), rest.length - 1)] };
+}
+
 /** O e-mail que moveu o card, numa linha do histórico: "E-mail — Reprovação: Sua candidatura na Acme". */
 export function historyMailLine(mail: { kind: EmailKind | null; subject: string }): string {
   const subject = mail.subject.trim() || '(sem assunto)';

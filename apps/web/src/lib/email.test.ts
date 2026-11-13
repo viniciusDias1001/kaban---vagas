@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ALERT_KINDS, type AlertDto, type MailMessageDto } from '@kv/shared/client';
 import {
-  MAIL_LIST_MAX, alertAction, alertBody, alertCanLink, alertTitle, alertsToNotify, draftGate, mailActions, mailBadgeLabel, mailListNotice,
+  MAIL_LINKED_TOAST, MAIL_LIST_MAX, afterMailLinked, alertAction, alertBody, alertCanLink, alertTitle, alertsToNotify, draftGate, mailActions, mailBadgeLabel, mailListNotice,
   mailPasswordProblem, replyStateLabel, selectedMail, summaryLine,
 } from './email';
 
@@ -192,5 +192,16 @@ describe('the Painel mail list', () => {
     expect(selectedMail([message({ id: 1 }), after], 7, before)).toBe(after);
     expect(selectedMail([message({ id: 1 })], 7, before)).toBe(before);
     expect(selectedMail([after], null, before)).toBeNull();
+  });
+
+  it('closes the conversation after a link under "Sem vaga" and focuses the row that takes its place', () => {
+    // A linha ligada sai da lista: o foco vai para a seguinte, ou para a anterior se era a última.
+    expect(afterMailLinked([3, 7, 9], 7, true)).toEqual({ close: true, focusRowId: 9 });
+    expect(afterMailLinked([3, 7, 9], 9, true)).toEqual({ close: true, focusRowId: 7 });
+    // A lista ficou vazia: o foco vai para o filtro (null).
+    expect(afterMailLinked([7], 7, true)).toEqual({ close: true, focusRowId: null });
+    // Sem o filtro o e-mail continua na lista: a conversa fica aberta, já mostrando a vaga.
+    expect(afterMailLinked([3, 7, 9], 7, false)).toEqual({ close: false });
+    expect(MAIL_LINKED_TOAST).toBe('E-mail ligado à vaga.');
   });
 });

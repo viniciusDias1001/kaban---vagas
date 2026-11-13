@@ -2,11 +2,12 @@ import { useQuery } from '@tanstack/react-query';
 import { Activity, ChartColumn, CircleAlert, CircleCheck, Columns3, Send, Settings, SlidersHorizontal, TriangleAlert, UserRound } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Suspense, lazy, useCallback, useEffect, useState } from 'react';
-import type { ApplicationFilter } from '@kv/shared/client';
+import type { ApplicationFilter, DashboardPeriod } from '@kv/shared/client';
 import { api } from './api';
 import { AlertBell } from './components/AlertBell';
 import { Board } from './components/Board';
 import { Tooltip } from './components/ui/tooltip';
+import { FIRST_READ_PERIOD } from './lib/dashboard';
 import { useMediaQuery } from './lib/hooks';
 import { spring, springSnap } from './lib/motion';
 import { cn } from './lib/utils';
@@ -65,7 +66,11 @@ export function App() {
     setScrollTarget({ view: 'perfil', selector: ANSWERS_SECTION });
     setView('perfil');
   }, []);
+  // O Painel abre no período pedido pela navegação, como a aba Candidaturas abre no filtro pedido: o resumo conta os
+  // e-mails dos últimos 30 dias, então "Abrir a lista" abre a lista nesse período. `at` remonta o Painel se ele já está aberto.
+  const [painelRequest, setPainelRequest] = useState<{ period: DashboardPeriod; at: number } | undefined>(undefined);
   const openPainel = useCallback(() => {
+    setPainelRequest({ period: FIRST_READ_PERIOD, at: Date.now() });
     setScrollTarget({ view: 'painel', selector: MAIL_LIST_SECTION });
     setView('painel');
   }, []);
@@ -138,6 +143,7 @@ export function App() {
                   key={v.id}
                   onClick={() => {
                     setApplicationsFilter(undefined);
+                    setPainelRequest(undefined);
                     setView(v.id);
                   }}
                   aria-current={active ? 'page' : undefined}
@@ -203,7 +209,9 @@ export function App() {
           {view === 'quadro' && <Board onOpen={setOpenJob} onShowNeedsHuman={showNeedsHuman} />}
           <Suspense fallback={null}>
             {view === 'candidaturas' && <ApplicationsPage initialFilter={applicationsFilter} onOpenJob={setOpenJob} />}
-            {view === 'painel' && <PainelPage onOpenJob={setOpenJob} />}
+            {view === 'painel' && (
+              <PainelPage key={painelRequest?.at ?? 'nav'} initialPeriod={painelRequest?.period} onOpenJob={setOpenJob} />
+            )}
             {view === 'perfis' && <ProfilesPage onRunQueued={catchUp} />}
             {view === 'fontes' && <HealthPanel />}
             {view === 'perfil' && <MyProfilePage onOpenSettings={openSettings} />}
