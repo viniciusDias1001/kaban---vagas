@@ -3,6 +3,7 @@ import {
   type AnswerScope, type AnswerSource, type AnswerValue, type ApplicationListItemDto, type ApplicationReason, type ApplicationStatus,
   type ApplyAiAnswers, type ApplyStatusDto, type PendingQuestion,
 } from '@kv/shared/client';
+import type { Question, ShotKind } from '@kv/shared/client';
 import { errorMessage } from '../apiError';
 
 /** Lógica pura das telas de candidatura automática (sem React). */
@@ -167,6 +168,7 @@ const ERROR_CODE_MESSAGES: Record<string, string> = {
   apply_unavailable: 'A candidatura automática só funciona com o app em endereço local.',
   apply_disabled: 'A candidatura automática está desligada nas configurações.',
   no_login: 'Este site não usa login.',
+  not_cancellable: 'Esta candidatura já terminou.',
 };
 
 /** Texto para o dono quando uma rota de candidatura recusa: o código conhecido vira frase; o resto segue o tratamento geral. */
@@ -178,4 +180,115 @@ export function applyErrorMessage(status: number, bodyText: string): string {
     /* corpo que não é JSON */
   }
   return errorMessage(status, bodyText);
+}
+
+/* ---- Aba Candidaturas e seção "Candidatura" do painel da vaga ---- */
+
+/** Ordem em que a aba procura um filtro com candidaturas ao abrir: o que pede o dono vem primeiro. */
+const FILTER_PRIORITY: readonly ApplicationFilter[] = ['needs_human', 'active', 'rehearsals', 'submitted', 'skipped'];
+
+/** O filtro em que a aba abre quando ninguém escolheu: o primeiro com candidaturas; "Em andamento" se não há nenhuma. */
+export function firstFilterWithItems(counts: Record<ApplicationFilter, number>): ApplicationFilter {
+  return FILTER_PRIORITY.find((f) => counts[f] > 0) ?? 'active';
+}
+
+/** Os botões que cada estado mostra no painel da vaga. */
+export interface ApplicationActions {
+  /** "Enviar de verdade": só ensaio pronto. */
+  send: boolean;
+  /** "Tentar de novo": parada (menos o envio não confirmado), falha, pulada ou cancelada. */
+  retry: boolean;
+  /** "Cancelar": todo estado que não é final. */
+  cancel: boolean;
+  /** Em andamento: o cancelamento vale no próximo ponto seguro, e um envio já iniciado pode concluir. */
+  cancelLater: boolean;
+  /** "Já apliquei por conta própria": o envio começou e o site não confirmou. */
+  alreadyApplied: boolean;
+}
+
+export function applicationActions(app: { status: ApplicationStatus; reason: ApplicationReason | null }): ApplicationActions {
+  const unconfirmed = app.status === 'needs_human' && app.reason === 'confirm_submission';
+  const running = RUNNING.includes(app.status);
+  return {
+    send: app.status === 'dry_run_ready',
+    retry: (app.status === 'needs_human' && !unconfirmed) || app.status === 'failed' || app.status === 'skipped' || app.status === 'cancelled',
+    cancel: app.status === 'queued' || running || app.status === 'needs_human' || app.status === 'dry_run_ready',
+    cancelLater: running,
+    alreadyApplied: unconfirmed,
+  };
+}
+
+/** "Aplicar com IA": a vaga não tem candidatura (`null`; `undefined` = ainda carregando) e a função está disponível e ligada. */
+export function canApplyNow(status: ApplyStatusDto | undefined, application: unknown | null | undefined): boolean {
+  return application === null && status?.available === true && status.enabled;
+}
+
+const WAITING_TEXT: Record<string, string> = {
+  captcha: 'Resolva o captcha na janela do navegador das candidaturas',
+  verification_code: 'Digite o código de verificação na janela do navegador das candidaturas',
+  login: 'Entre na sua conta na janela do navegador das candidaturas',
+};
+
+/** O que o dono precisa fazer agora numa espera ao vivo (`ApplyStatusDto.waiting.gate`). */
+export function waitingText(gate: string): string {
+  return WAITING_TEXT[gate] ?? 'Conclua o passo pedido na janela do navegador das candidaturas';
+}
+
+export const SCOPE_LABELS: Record<AnswerScope, string> = { always: 'sempre', company: 'só nesta empresa', job: 'só nesta vaga' };
+
+export const SHOT_LABELS: Record<ShotKind, string> = {
+  filled: 'Formulário preenchido', confirmation: 'Confirmação do site', blocked: 'Onde parou',
+};
+
+/** Dica de uma proposta da IA: o texto escrito vale só para a vaga; o fato do perfil fica salvo para as próximas. */
+export const PROPOSAL_HINTS = {
+  written: 'Você pode editar o texto antes de aprovar. A resposta aprovada fica salva só para esta vaga.',
+  profile: 'A resposta aprovada fica salva e será usada nas próximas candidaturas.',
+} as const;
+
+/** Um valor de resposta para ler na tela: Sim/Não, opções separadas por vírgula, travessão quando vazio. */
+export function answerText(value: AnswerValue): string {
+  if (typeof value === 'boolean') return value ? 'Sim' : 'Não';
+  if (Array.isArray(value)) return value.length > 0 ? value.join(', ') : '—';
+  return value === null || value.trim() === '' ? '—' : value;
+}
+
+/** O valor em branco no tipo da pergunta: lista para múltipla escolha, null para sim/não, texto vazio no resto. */
+export function emptyAnswerValue(question: Question): AnswerValue {
+  if (question.kind === 'multiselect') return [];
+  if (question.kind === 'boolean' && question.options.length === 0) return null;
+  return '';
+}
+
+/** O alcance com que a API grava uma proposta aprovada: o texto escrito vale só para a vaga. */
+const proposalScope = (p: PendingQuestion): AnswerScope => (p.proposal?.source === 'written' ? 'job' : 'always');
+
+/** Como a pendência começa no formulário: sem resposta, em branco; com proposta, aceita. */
+export function initialPendingDraft(p: PendingQuestion): PendingDraft {
+  const id = p.question.id;
+  if (p.kind === 'unanswered' || !p.proposal) return { questionId: id, accept: false, value: emptyAnswerValue(p.question), scope: 'always' };
+  return { questionId: id, accept: true, value: p.proposal.value, scope: proposalScope(p) };
+}
+
+const sameAnswerValue = (a: AnswerValue, b: AnswerValue): boolean => {
+  if (Array.isArray(a) && Array.isArray(b)) return JSON.stringify([...a].sort()) === JSON.stringify([...b].sort());
+  if (typeof a === 'string' && typeof b === 'string') return a.trim() === b.trim();
+  return a === b;
+};
+
+/** O dono mudou o valor: numa proposta da IA, o valor igual ao proposto continua sendo o aceite; diferente, vira a resposta dele. */
+export function editPendingDraft(p: PendingQuestion, draft: PendingDraft, value: AnswerValue): PendingDraft {
+  if (p.kind === 'confirm_proposal' && p.proposal) {
+    return sameAnswerValue(value, p.proposal.value) ? initialPendingDraft(p) : { ...draft, accept: false, value, scope: proposalScope(p) };
+  }
+  return { ...draft, accept: false, value };
+}
+
+/** A recusa da API ("Rótulo: motivo") ao lado da pergunta que ela nomeia; null quando não nomeia nenhuma. */
+export function pendingErrorFor(pending: PendingQuestion[], message: string): { questionId: string; text: string } | null {
+  const lower = message.toLowerCase();
+  const hit = pending.find((p) => lower.startsWith(`${p.question.label.toLowerCase()}: `));
+  if (!hit) return null;
+  const rest = message.slice(hit.question.label.length + 2).trim();
+  return { questionId: hit.question.id, text: rest.charAt(0).toUpperCase() + rest.slice(1) };
 }

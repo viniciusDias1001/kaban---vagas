@@ -2,6 +2,9 @@ import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tansta
 import type { ApplySiteId } from '@kv/shared/client';
 import { applyApi, type ApplyAnswerInput, type PendingAnswersBody } from './applyApi';
 import { applyPollMs } from './lib/apply';
+import { useEffect, useRef } from 'react';
+import type { ApplicationListItemDto, ApplyStatusDto } from '@kv/shared/client';
+import { waitingText } from './lib/apply';
 
 /** Chaves do React Query das telas de candidatura automática. */
 export const APPLY_KEYS = {
@@ -95,4 +98,32 @@ export function useApplyActions() {
       mutationFn: (v: { id: number; normalized: string }) => applyApi.removeAlias(v.id, v.normalized),
     }),
   };
+}
+
+/**
+ * Uma notificação do navegador por espera ao vivo nova (captcha, código, login), se o dono já deu a permissão. A
+ * permissão só é pedida por um botão na aba Candidaturas, nunca ao carregar a página.
+ */
+export function useLiveWaitNotification(waiting: ApplyStatusDto['waiting'] | undefined) {
+  const qc = useQueryClient();
+  const notified = useRef<string | null>(null);
+  const key = waiting ? `${waiting.applicationId}:${waiting.gate}` : null;
+  useEffect(() => {
+    if (!waiting || key === null) {
+      notified.current = null;
+      return;
+    }
+    if (notified.current === key) return;
+    notified.current = key;
+    if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+    const item = qc.getQueryData<ApplicationListItemDto[]>(APPLY_KEYS.applications)?.find((a) => a.id === waiting.applicationId);
+    try {
+      new Notification('Uma candidatura precisa de você', {
+        body: `${waitingText(waiting.gate)}.${item ? ` Vaga: ${item.jobTitle} (${item.company}).` : ''}`,
+        tag: `apply-wait-${key}`,
+      });
+    } catch {
+      // navegador sem suporte a `new Notification` (ex.: só via service worker): o aviso da aba continua valendo
+    }
+  }, [key, waiting, qc]);
 }
