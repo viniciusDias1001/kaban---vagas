@@ -60,16 +60,28 @@ export function useMoveJob() {
   });
   const { mutate } = mutation;
 
-  /** Move para antes de `beforeId` na ordem real da coluna, ou para o fim de verdade dela (`null`). */
+  /**
+   * Move para antes de `beforeId` na ordem real da coluna, ou para o fim de verdade dela (`null`). `onSettled` roda quando
+   * o PATCH termina (com sucesso ou erro); um movimento que não muda nada não chama a API nem `onSettled`.
+   */
   const moveTo = useCallback(
-    (id: number, column: Column, beforeId: number | null) => {
+    (id: number, column: Column, beforeId: number | null, onSettled?: () => void) => {
       const jobs = qc.getQueryData<JobListItemDto[]>(JOBS_KEY);
-      if (!jobs) return mutate({ id, column });
+      if (!jobs) return mutate({ id, column }, { onSettled });
       const target = groupByColumn(jobs)[column];
       if (isNoopMove(target, id, beforeId)) return;
-      mutate({ id, column, position: dropPosition(target, id, beforeId) });
+      mutate({ id, column, position: dropPosition(target, id, beforeId) }, { onSettled });
     },
     [qc, mutate],
+  );
+
+  /**
+   * Manda a coluna atual de novo, sem posição (o card não sai do lugar). É o "Já apliquei por conta própria" de um card
+   * que já está em Aplicada ou depois: a API encerra a candidatura da vaga mesmo sem o card mudar de coluna.
+   */
+  const resendColumn = useCallback(
+    (id: number, column: Column, onSettled?: () => void) => mutate({ id, column }, { onSettled }),
+    [mutate],
   );
 
   /**
@@ -85,5 +97,5 @@ export function useMoveJob() {
     [qc, mutate],
   );
 
-  return { moveTo, moveToColumn, isPending: mutation.isPending };
+  return { moveTo, moveToColumn, resendColumn, isPending: mutation.isPending };
 }

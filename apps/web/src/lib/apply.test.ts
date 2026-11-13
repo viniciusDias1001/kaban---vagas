@@ -1,37 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import { APPLICATION_STATUSES, type ApplyAnswerDto, NEEDS_HUMAN_REASONS, SKIP_REASONS, type AnswerSource, type ApplicationListItemDto, type ApplicationStatus, type ApplyStatusDto, type PendingQuestion, type Question } from '@kv/shared';
+import { APPLICATION_FILTERS, APPLICATION_STATUSES, NUMBER_FORMAT_PROBLEM, applicationFilterOf, type ApplyAnswerDto, NEEDS_HUMAN_REASONS, SKIP_REASONS, type AnswerSource, type ApplicationListItemDto, type ApplicationStatus, type ApplyStatusDto, type PendingQuestion, type Question } from '@kv/shared';
 import {
-  AI_ANSWER_LABELS, FILTER_LABELS, PENDING_KIND_LABELS, type ApplicationFilter, ANSWER_SOURCE_LABELS, STATUS_LABELS, applyErrorMessage, applyPollMs, cardBadge, filterApplications,
+  AI_ANSWER_LABELS, FILTER_LABELS, PENDING_KIND_LABELS, ANSWER_SOURCE_LABELS, STATUS_LABELS, applyErrorMessage, applyPollMs, cardBadge,
   ANSWER_LIMITS, EMPTY_NEW_ANSWER, accountFeedback, answerField, answerInput, answerProblem, answerToStore, booleanAnswer, booleanChoice, counterVisible,
-  countryLabel, kindHint, newAnswerInput, numberProblem, saveStateLabel, scopeLabel, splitAnswers, usedLabel, validateNewAnswer, filterCounts, reasonText, toPendingAnswersBody, validatePendingDrafts, NUMBER_FORMAT_PROBLEM, decideCommit, queueSignature, createKeyedQueue, type AccountAction, type AccountMutationView, type PendingDraft,
+  countryLabel, kindHint, newAnswerInput, numberProblem, saveStateLabel, scopeLabel, splitAnswers, usedLabel, validateNewAnswer, reasonText, toPendingAnswersBody, validatePendingDrafts, decideCommit, queueSignature, createKeyedQueue, type AccountAction, type AccountMutationView, type PendingDraft,
 } from './apply';
 
-const item = (id: number, status: ApplicationStatus): ApplicationListItemDto => ({
-  id, jobId: id, jobTitle: 'Dev', company: 'Acme', site: 'fake', status, reason: null, detail: null, mode: 'dry_run',
-  gateScore: 80, pendingCount: 0, createdAt: 1, submittedAt: null,
-});
-const items = [
-  item(1, 'queued'), item(2, 'filling'), item(3, 'needs_human'), item(4, 'dry_run_ready'),
-  item(5, 'submitted'), item(6, 'submitted'), item(7, 'submitted'), item(8, 'skipped'), item(9, 'skipped'),
-];
 const idle: ApplyStatusDto = {
-  available: true, unavailableReason: null, enabled: true, withinWindow: true, sites: [], totalToday: 0, totalCap: 30,
+  available: true, unavailableReason: null, enabled: true, withinWindow: true, worker: null, sites: [], totalToday: 0, totalCap: 30,
   queued: 0, needsHuman: 0, running: 0, waiting: null,
 };
 
 describe('filters', () => {
-  it('groups applications by filter', () => {
-    expect(filterCounts(items)).toEqual({ active: 2, needs_human: 1, rehearsals: 1, submitted: 3, skipped: 2 });
-    expect(filterApplications(items, 'needs_human').map((i) => i.status)).toEqual(['needs_human']);
-    expect(filterApplications(items, 'active').map((i) => i.id)).toEqual([1, 2]);
-  });
-  it('puts every status in exactly one filter, so "not sent" includes failed and cancelled', () => {
-    const filters = Object.keys(FILTER_LABELS) as ApplicationFilter[];
-    for (const status of APPLICATION_STATUSES) {
-      const hits = filters.filter((f) => filterApplications([item(1, status)], f).length === 1);
-      expect(hits, status).toHaveLength(1);
-    }
-    expect(filterApplications([item(1, 'failed'), item(2, 'cancelled'), item(3, 'skipped')], 'skipped')).toHaveLength(3);
+  it('labels every shared filter, and "not sent" (from the shared mapping) holds failed and cancelled', () => {
+    expect(Object.keys(FILTER_LABELS)).toEqual([...APPLICATION_FILTERS]);
+    expect(['failed', 'cancelled', 'skipped'].map((s) => applicationFilterOf(s as ApplicationStatus))).toEqual(['skipped', 'skipped', 'skipped']);
     expect(FILTER_LABELS).toEqual({
       active: 'Em andamento', needs_human: 'Precisam de você', rehearsals: 'Ensaios prontos', submitted: 'Enviadas', skipped: 'Não enviadas',
     });
@@ -42,18 +25,20 @@ describe('filters', () => {
 });
 
 describe('cardBadge', () => {
+  const job = (appliedBy: 'ia' | 'humano' | null, needsHuman: boolean, applicationStatus: ApplicationStatus | null) =>
+    ({ appliedBy, needsHuman, applicationStatus });
   it('chooses the card badge', () => {
-    expect(cardBadge({ appliedBy: null, needsHuman: true }, 'needs_human')).toBe('needs_human');
-    expect(cardBadge({ appliedBy: null, needsHuman: false }, 'filling')).toBe('applying');
-    expect(cardBadge({ appliedBy: null, needsHuman: false }, 'dry_run_ready')).toBe('rehearsal');
-    expect(cardBadge({ appliedBy: 'ia', needsHuman: false }, 'submitted')).toBe('applied_by_ai');
-    expect(cardBadge({ appliedBy: 'humano', needsHuman: false }, undefined)).toBeNull();
+    expect(cardBadge(job(null, true, 'needs_human'))).toBe('needs_human');
+    expect(cardBadge(job(null, false, 'filling'))).toBe('applying');
+    expect(cardBadge(job(null, false, 'dry_run_ready'))).toBe('rehearsal');
+    expect(cardBadge(job('ia', false, 'submitted'))).toBe('applied_by_ai');
+    expect(cardBadge(job('humano', false, null))).toBeNull();
   });
   it('lets the job mark win, and leaves queued without a badge', () => {
-    expect(cardBadge({ appliedBy: 'ia', needsHuman: true }, 'submitted')).toBe('needs_human');
-    expect(cardBadge({ appliedBy: null, needsHuman: true }, undefined)).toBe('needs_human');
-    expect(cardBadge({ appliedBy: null, needsHuman: false }, 'queued')).toBeNull();
-    for (const s of ['preparing', 'waiting_human', 'submitting'] as const) expect(cardBadge({ appliedBy: null, needsHuman: false }, s)).toBe('applying');
+    expect(cardBadge(job('ia', true, 'submitted'))).toBe('needs_human');
+    expect(cardBadge(job(null, true, null))).toBe('needs_human');
+    expect(cardBadge(job(null, false, 'queued'))).toBeNull();
+    for (const s of ['preparing', 'waiting_human', 'submitting'] as const) expect(cardBadge(job(null, false, s))).toBe('applying');
   });
 });
 
@@ -119,7 +104,7 @@ describe('pending answers', () => {
   const draft = (questionId: string, over: Partial<PendingDraft> = {}): PendingDraft => ({ questionId, accept: false, value: null, scope: 'always', ...over });
 
   it('builds the body, dropping blank optional drafts and sending accept as confirmMatch', () => {
-    expect(toPendingAnswersBody([
+    expect(toPendingAnswersBody([pend(q('a')), pend(q('b')), pend(q('c'))], [
       draft('a', { value: 'Sim' }), draft('b', { accept: true, value: 'Yes', scope: 'job' }), draft('c', { value: '  ' }),
     ])).toEqual({
       answers: [
@@ -193,10 +178,9 @@ describe('answer bank rows', () => {
     expect(['Sim', 'Não', '', 'talvez'].map(booleanChoice)).toEqual(['yes', 'no', 'none', 'none']);
     expect((['yes', 'no', 'none'] as const).map(booleanAnswer)).toEqual(['Sim', 'Não', '']);
   });
-  it('refuses a number with a thousands separator or letters, accepts a plain or decimal one', () => {
-    for (const ok of ['', '  ', '20000', '8000,50', '8000.5', '0']) expect(numberProblem(ok)).toBeNull();
-    for (const bad of ['20.000', '20,000', '1.234,56', '0.125', '8000.500']) expect(numberProblem(bad)).toBe(NUMBER_FORMAT_PROBLEM);
-    for (const bad of ['abc', '12a', '-5', '1,2,3']) expect(numberProblem(bad)).toMatch(/só números/);
+  it('refuses a number with a thousands separator or letters, accepts a plain, negative or decimal one', () => {
+    for (const ok of ['', '  ', '20000', '8000,50', '8000.5', '0', '-5']) expect(numberProblem(ok)).toBeNull();
+    for (const bad of ['20.000', '20,000', '1.234,56', '0.125', '8000.500', 'abc', '12a', '1,2,3', '1,2345']) expect(numberProblem(bad)).toBe(NUMBER_FORMAT_PROBLEM);
     expect(answerProblem('text', '20.000')).toBeNull();
     expect(answerProblem('number', '20.000')).toBe(NUMBER_FORMAT_PROBLEM);
   });
@@ -219,6 +203,7 @@ describe('answer bank rows', () => {
     expect(scopeLabel('job', 'x')).toBe('só nesta vaga');
     expect(countryLabel('BR')).toBe('vagas no Brasil');
     expect(countryLabel('US')).toBe('vagas em US');
+    expect(countryLabel('INT')).toBe('vagas fora do Brasil');
     expect(countryLabel(null)).toBeNull();
     expect([0, 1, 3].map(usedLabel)).toEqual(['ainda não usada', 'usada 1 vez', 'usada 3 vezes']);
   });

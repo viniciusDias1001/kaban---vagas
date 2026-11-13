@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { APPLICATION_STATUSES, type ApplyStatusDto, type PendingQuestion, type Question } from '@kv/shared';
+import { APPLICATION_STATUSES, type PendingQuestion, type Question } from '@kv/shared';
 import {
-  SCOPE_LABELS, SHOT_LABELS, answerText, applicationActions, applyErrorMessage, canApplyNow, editPendingDraft, emptyAnswerValue,
+  SCOPE_LABELS, SHOT_LABELS, answerText, applicationActions, applyErrorMessage, editPendingDraft, emptyAnswerValue,
   firstFilterWithItems, initialPendingDraft, pendingErrorFor, waitingText, toPendingAnswersBody, waitNotice, afterSend, UNCONFIRMED_TEXT, reasonText,
 } from './apply';
 
@@ -14,42 +14,29 @@ const pending = (question: Question, kind: PendingQuestion['kind'], over: Partia
     ? null
     : { bankAnswerId: kind === 'confirm_match' ? 7 : null, bankQuestion: null, bankAnswer: null, value: 'Sim', source: kind === 'confirm_match' ? 'bank' : 'profile', basis: [], ...over },
 });
-const status = (over: Partial<ApplyStatusDto> = {}): ApplyStatusDto => ({
-  available: true, unavailableReason: null, enabled: true, withinWindow: true, sites: [], totalToday: 0, totalCap: 30,
-  queued: 0, needsHuman: 0, running: 0, waiting: null, ...over,
-});
+const free = { column: 'selecionadas' as const, appliedBy: null };
 
 describe('applicationActions', () => {
   it('offers "Enviar de verdade" only for a ready rehearsal', () => {
-    for (const s of APPLICATION_STATUSES) expect(applicationActions({ status: s, reason: null }).send, s).toBe(s === 'dry_run_ready');
+    for (const s of APPLICATION_STATUSES) expect(applicationActions({ status: s, reason: null, cancelRequested: false }, free).send, s).toBe(s === 'dry_run_ready');
   });
 
   it('offers retry for stopped applications, except an unconfirmed submission', () => {
-    const retry = APPLICATION_STATUSES.filter((s) => applicationActions({ status: s, reason: null }).retry);
+    const retry = APPLICATION_STATUSES.filter((s) => applicationActions({ status: s, reason: null, cancelRequested: false }, free).retry);
     expect(retry.sort()).toEqual(['cancelled', 'failed', 'needs_human', 'skipped']);
-    expect(applicationActions({ status: 'needs_human', reason: 'question' }).retry).toBe(true);
-    const unconfirmed = applicationActions({ status: 'needs_human', reason: 'confirm_submission' });
+    expect(applicationActions({ status: 'needs_human', reason: 'question', cancelRequested: false }, free).retry).toBe(true);
+    const unconfirmed = applicationActions({ status: 'needs_human', reason: 'confirm_submission', cancelRequested: false }, free);
     expect(unconfirmed).toMatchObject({ retry: false, cancel: true, alreadyApplied: true, send: false });
   });
 
   it('offers cancel for every state that is not final, warning that a running one stops later', () => {
-    const cancel = APPLICATION_STATUSES.filter((s) => applicationActions({ status: s, reason: null }).cancel);
+    const cancel = APPLICATION_STATUSES.filter((s) => applicationActions({ status: s, reason: null, cancelRequested: false }, free).cancel);
     expect(cancel.sort()).toEqual(['dry_run_ready', 'filling', 'needs_human', 'preparing', 'queued', 'submitting', 'waiting_human']);
-    expect(applicationActions({ status: 'filling', reason: null }).cancelLater).toBe(true);
-    expect(applicationActions({ status: 'queued', reason: null }).cancelLater).toBe(false);
-    expect(applicationActions({ status: 'submitted', reason: null })).toEqual({
-      send: false, retry: false, cancel: false, cancelLater: false, alreadyApplied: false,
+    expect(applicationActions({ status: 'filling', reason: null, cancelRequested: false }, free).cancelLater).toBe(true);
+    expect(applicationActions({ status: 'queued', reason: null, cancelRequested: false }, free).cancelLater).toBe(false);
+    expect(applicationActions({ status: 'submitted', reason: null, cancelRequested: false }, free)).toEqual({
+      send: false, retry: false, cancel: false, cancelLater: false, alreadyApplied: false, cancelPending: false,
     });
-  });
-});
-
-describe('canApplyNow', () => {
-  it('needs no application and the feature available and on', () => {
-    expect(canApplyNow(status(), null)).toBe(true);
-    expect(canApplyNow(status(), undefined)).toBe(false);
-    expect(canApplyNow(undefined, null)).toBe(false);
-    expect(canApplyNow(status({ enabled: false }), null)).toBe(false);
-    expect(canApplyNow(status({ available: false }), null)).toBe(false);
   });
 });
 
@@ -134,9 +121,9 @@ describe('an edited pending question becomes the request body', () => {
     const proposal = pending(q('w', { kind: 'longtext' }), 'confirm_proposal', { source: 'written', value: 'Gosto de Go.' });
     const optional = pending(q('o', { required: false }), 'unanswered');
     const start = initialPendingDraft(proposal);
-    expect(toPendingAnswersBody([start]).answers).toEqual([{ questionId: 'w', value: 'Gosto de Go.', scope: 'job', confirmMatch: true }]);
+    expect(toPendingAnswersBody([proposal], [start]).answers).toEqual([{ questionId: 'w', value: 'Gosto de Go.', scope: 'job', confirmMatch: true }]);
     const edited = editPendingDraft(proposal, start, 'Gosto de Go e Rust.');
-    const body = toPendingAnswersBody([edited, initialPendingDraft(optional)]);
+    const body = toPendingAnswersBody([proposal, optional], [edited, initialPendingDraft(optional)]);
     expect(body.answers).toEqual([{ questionId: 'w', value: 'Gosto de Go e Rust.', scope: 'job', confirmMatch: false }]);
   });
 });
@@ -158,7 +145,7 @@ describe('afterSend', () => {
   it('shows a sent rehearsal as queued for a real send until the application is read again', () => {
     const app = { status: 'dry_run_ready', mode: 'dry_run', reason: 'question' } as Parameters<typeof afterSend>[0];
     expect(afterSend(app)).toMatchObject({ status: 'queued', mode: 'real', reason: null });
-    expect(applicationActions(afterSend(app)).send).toBe(false);
+    expect(applicationActions(afterSend(app), free).send).toBe(false);
   });
 });
 

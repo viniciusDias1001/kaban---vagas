@@ -7,9 +7,10 @@ import type { ApplyAnswerInput } from '../applyApi';
 import {
   ANSWER_LIMITS, BOOLEAN_LABELS, EMPTY_NEW_ANSWER, NEW_ANSWER_KIND_LABELS, answerField, answerInput, answerProblem, answerToStore,
   booleanAnswer, booleanChoice, counterVisible, countryLabel, kindHint, newAnswerInput, saveStateLabel, scopeLabel, splitAnswers, usedLabel,
-  validateNewAnswer, createKeyedQueue, decideCommit, type BooleanChoice, type NewAnswerDraft, type NewAnswerKind, type SaveStatus,
+  validateNewAnswer, createKeyedQueue, decideCommit, firstNewAnswerError, type BooleanChoice, type NewAnswerDraft, type NewAnswerKind, type SaveStatus,
 } from '../lib/apply';
 import { spring } from '../lib/motion';
+import { CARD, EYEBROW } from '../lib/styles';
 import { cn } from '../lib/utils';
 import { APPLY_KEYS, useApplyActions, useApplyAnswers } from '../useApply';
 import { Badge } from './ui/badge';
@@ -20,8 +21,6 @@ import { Notice } from './ui/notice';
 import { Segmented } from './ui/segmented';
 import { Skeleton } from './ui/skeleton';
 
-const CARD = 'rounded-3xl border border-line bg-surface/85 shadow-raised';
-const EYEBROW = 'text-[11px] font-semibold uppercase tracking-[0.08em] text-faint';
 /** Linha de pergunta + campo: a pergunta à esquerda, a resposta à direita (empilhadas em tela estreita). */
 const ROW_GRID = 'grid gap-x-8 gap-y-2.5 md:grid-cols-[minmax(0,1fr)_minmax(0,26rem)]';
 const FIELD_TEXT = 'min-h-10 py-2';
@@ -374,7 +373,14 @@ function NewAnswerForm({ save, onDone }: { save: SaveFn; onDone: () => void }) {
     const found = validateNewAnswer(draft);
     setErrors(found);
     setServerError(null);
-    if (Object.keys(found).length > 0) return;
+    const first = firstNewAnswerError(found);
+    if (first) {
+      // Como nos outros formulários: o foco vai para o primeiro campo com erro (no sim/não, para o primeiro botão).
+      const el = document.getElementById(ids[first]);
+      const target = el && el.matches('input, textarea, select, button') ? el : el?.querySelector<HTMLElement>('input, textarea, button');
+      target?.focus();
+      return;
+    }
     submitting.current = true;
     setSaving(true);
     try {

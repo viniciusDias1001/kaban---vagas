@@ -143,7 +143,7 @@ Esses casos ficam com o prompt e com a revisão do usuário. **Leia sempre o cur
 
 ### Seus dados: o que fica guardado e como apagar
 
-Tudo fica no **seu** banco de dados (o do `DATABASE_URL`), com uma exceção: a candidatura automática também grava arquivos na pasta de dados do seu computador (últimas duas linhas da tabela). O app não tem servidor próprio nem telemetria.
+Tudo fica no **seu** banco de dados (o do `DATABASE_URL`), com uma exceção: a candidatura automática também grava arquivos na pasta de dados do seu computador (últimas quatro linhas da tabela). O app não tem servidor próprio nem telemetria.
 
 | O que | Onde (tabela) | Como apagar |
 |---|---|---|
@@ -154,16 +154,17 @@ Tudo fica no **seu** banco de dados (o do `DATABASE_URL`), com uma exceção: a 
 | Fila de tarefas da IA (tipo, estado, mensagem de erro; nunca o texto do currículo) | `ai_tasks` | "Apagar todos os dados de IA"; as terminadas somem sozinhas depois de 30 dias |
 | Histórico de gasto: provedor, modelo, camada, tokens e custo estimado de cada chamada | `ai_usage` | não é apagado pela tela: não tem conteúdo pessoal e é o que mantém o limite diário valendo |
 | Chaves de API, cifradas | `ai_keys` | aba **Configurações**, "Remover" |
-| Candidaturas automáticas: estado, motivo, respostas com a origem, perguntas pendentes, o PDF enviado, o e-mail usado e o texto de confirmação do site | `applications` | "Apagar todos os dados de IA" apaga o conteúdo (respostas, PDF, e-mail, confirmação) e **mantém** a linha com estado, motivo e datas, e a linha do tempo (`application_events`) |
+| Candidaturas automáticas: estado, motivo e detalhe, respostas com a origem, perguntas pendentes, o PDF enviado, o e-mail usado, o texto de confirmação do site e os textos da linha do tempo | `applications`, `application_events` | "Apagar todos os dados de IA" apaga o conteúdo (respostas, perguntas pendentes, PDF, e-mail, confirmação, detalhe do motivo e os textos da linha do tempo) e **mantém** a linha com estado, motivo e datas, e as datas e estados da linha do tempo. As candidaturas que esperavam respostas suas viram "Cancelada" (as perguntas foram apagadas) e o card perde o selo "precisa de você" |
 | Suas respostas para formulários (banco de respostas) | `apply_answers` | "Apagar todos os dados de IA", ou uma a uma em **Meu perfil > Respostas para candidaturas** |
-| Fotos do formulário preenchido e da confirmação (têm dados pessoais) | arquivos em `shots/` na pasta de dados (`APPLY_DATA_DIR`), não no banco | **não** são apagadas pelos botões acima: apague a pasta `shots/` à mão; o app também remove as com mais de 90 dias |
-| Sessão dos sites (cookies) e o resto do perfil do navegador | pasta `browser/` em `APPLY_DATA_DIR`, nunca no banco | "Desconectar" em Configurações apaga os cookies do site; ou apague a pasta |
+| Fotos do formulário preenchido e da confirmação (têm dados pessoais) | arquivos em `shots/` na pasta de dados (`APPLY_DATA_DIR`), não no banco | "Apagar todos os dados de IA" apaga a pasta `shots/`; o app também remove as fotos com mais de 90 dias, mesmo com a função desligada |
+| PDF do currículo enquanto uma candidatura está sendo preenchida | arquivos em `resumes/` em `APPLY_DATA_DIR` | apagado ao fim de cada candidatura e quando o worker reinicia; "Apagar todos os dados de IA" apaga a pasta `resumes/` |
+| Fotos de página inteira de formulários reais e os PDFs gerados pelo `pnpm apply:smoke` | arquivos em `smoke/` em `APPLY_DATA_DIR` | nada apaga esta pasta: apague à mão quando não precisar mais |
+| Sessão dos sites (cookies) e o resto do perfil do navegador | pasta `browser/` em `APPLY_DATA_DIR`, nunca no banco | "Desconectar" em Configurações apaga os cookies do site; ou apague a pasta. "Apagar todos os dados de IA" não toca nela |
 
 - **Apagar um idioma** (`DELETE /api/ai/resumes/:lang`) remove o arquivo, o texto lido, o perfil daquele idioma, os currículos adaptados escritos nele e as leituras/traduções de perfil que estejam na fila. As notas e análises das vagas ficam, marcadas como desatualizadas.
-- **Apagar todos os dados de IA** (`DELETE /api/ai/data`) remove currículos, perfis, currículos adaptados, notas, títulos traduzidos, análises, a fila inteira, o banco de respostas e o conteúdo das candidaturas automáticas (veja a tabela). Ficam as vagas com as suas anotações, o histórico de gasto, as configurações e as chaves.
+- **Apagar todos os dados de IA** (`DELETE /api/ai/data`) remove currículos, perfis, currículos adaptados, notas, títulos traduzidos, análises, a fila inteira, o banco de respostas, o conteúdo das candidaturas automáticas e as pastas `shots/` e `resumes/` da pasta de dados (veja a tabela). Ficam as vagas com as suas anotações, o histórico de gasto, as configurações, as chaves, o perfil do navegador (`browser/`) e a pasta `smoke/`. Um arquivo que outro programa esteja usando naquele instante (uma foto aberta num visualizador, por exemplo) pode ficar para trás; apague-o à mão depois.
 - As duas ações pedem confirmação e **não têm volta**. Uma chamada de IA que esteja em andamento termina, mas o resultado dela é descartado.
 - O que já foi enviado ao provedor de IA não é apagado por aqui: vale a política de retenção do provedor. O mesmo vale para o que já foi enviado a uma empresa numa candidatura.
-- Apagar os dados de IA não toca as fotos nem o perfil do navegador (ficam em disco, fora do banco); veja as duas últimas linhas da tabela.
 - A descrição de uma vaga buscada sob demanda (LinkedIn, Indeed) fica na própria vaga e sai com ela.
 
 **Currículo enviado: limites.** PDF ou DOCX, até 5 MB; o tipo é conferido pelo conteúdo do arquivo, não pela extensão. O PDF precisa ter texto selecionável: um currículo escaneado (só imagem) é recusado na hora, com a sugestão de exportar de novo ou enviar um DOCX. Também são recusados: PDF com mais de 30 páginas, arquivo protegido por senha, arquivo que leva mais de 15 s para ser lido e texto com mais de cerca de 6 páginas (o que o modelo lê de uma vez com folga para devolver o perfil). A recusa aparece no próprio cartão do idioma e o currículo anterior continua valendo.
@@ -193,36 +194,38 @@ Opcional e **desligada por padrão**. Ela depende da [IA de perfil](#ia-de-perfi
 
 > **Leia antes de ligar.**
 >
-> - **É em seu nome.** Com o site em modo Enviar, o app envia candidaturas reais, com o seu nome, e-mail, telefone e currículo, e respostas que você não leu antes (as que a regra ou o modo Automático dão). Enviar não tem volta.
+> - **É em seu nome.** Com o site em modo Enviar, o app envia candidaturas reais, com os seus dados de identificação (nome, contato, cidade, links e também a empresa e o cargo atuais), o seu currículo e respostas que você não leu antes (as que a regra ou o modo Automático dão). Enviar não tem volta.
 > - **Sites de vagas costumam proibir automação.** Os termos do LinkedIn, por exemplo, proíbem. A conta usada pode ser limitada ou bloqueada, e o app não disfarça o navegador nem tenta parecer humano; só respeita limites e intervalos. Use por sua conta e risco.
 > - **O app não tem login.** Quem alcançar o app pode disparar candidaturas com as contas que estiverem abertas no navegador dele e ler as suas respostas. Por isso a função só liga quando o app está em endereço local (`HOST` ausente, `127.0.0.1`, `localhost` ou `::1`), e **não deve rodar em container nem atrás de um endereço público**. Em outro `HOST`, a tela de Configurações mostra o motivo e bloqueia as opções.
 > - **Quem confere é você.** As conferências do app são regras e verificadores em código, não uma pessoa; leia os ensaios antes de passar um site para Enviar.
 
 ### O que faz
 
-1. **Escolhe as vagas.** A cada 5 minutos, dentro do horário, o worker procura vagas em **Descobertas** com nota da camada 1 igual ou acima do mínimo (padrão 70), descobertas há até 14 dias, de um site suportado e sem candidatura anterior. A de nota mais alta vem primeiro. Há também o botão **"Aplicar com IA"** no painel da vaga, para qualquer vaga de um site suportado, seja qual for a nota.
+1. **Escolhe as vagas.** A cada 5 minutos, dentro do horário, o worker procura vagas em **Descobertas** com nota da camada 1 igual ou acima do mínimo (padrão 70), descobertas há até 14 dias, de um site suportado e sem candidatura anterior. A de nota mais alta vem primeiro. Há também o botão **"Aplicar com IA"** no painel da vaga, para qualquer vaga de um site suportado que ainda não foi aplicada, seja qual for a nota. O botão só aparece quando a vaga pode mesmo receber a candidatura; numa vaga de site não suportado, já aplicada ou na lista de bloqueio, o painel fica como sempre foi.
 2. **Confere a vaga.** Busca a descrição se faltar (sem entrar em conta nenhuma), pede ao modelo rápido uma nota nova com a descrição inteira e um aviso de requisito que exclui você (país, visto, idioma). Nota abaixo do mínimo, requisito que exclui ou empresa na lista de bloqueio: a candidatura é **pulada**, com o motivo, e o card fica onde está. Passando, o card vai de Descobertas para Selecionadas.
 3. **Prepara o currículo.** Padrão "Adaptado à vaga": reaproveita ou gera o currículo adaptado da camada 3, com o mesmo verificador de não invenção; se o rascunho for barrado, a candidatura para em "precisa de você". A outra opção, "Currículo base", envia o perfil como está, sem chamar o modelo. O arquivo se chama `Curriculo_<Nome>_<Empresa>.pdf` (ou `Resume_...`, se a vaga é em inglês).
 4. **Abre o formulário e responde.** As respostas vêm das regras, das suas respostas salvas e, conforme a sua escolha, da IA (veja [Quem responde o quê](#quem-responde-o-quê)). Faltando resposta a uma pergunta **obrigatória**, nada é enviado: a candidatura para em "precisa de você". Pergunta opcional sem resposta fica em branco.
 5. **Ensaia ou envia**, conforme o modo do site (veja [Ensaio e Enviar](#ensaio-e-enviar)). Enviada e confirmada pelo site, o card vai para Aplicada, marcado "aplicada pela IA". A IA nunca move um card além de Aplicada.
 
-Se você mover o card por conta própria, a candidatura que estava na fila é cancelada; uma em andamento é parada no próximo ponto seguro. Uma vaga de site não suportado fica no quadro como sempre, sem candidatura nem selo.
+**Uma vaga já aplicada nunca recebe candidatura.** "Já aplicada" quer dizer: o card está em Aplicada ou numa coluna depois dela (Entrevista, Oferta, Arquivada), ou a vaga está marcada como aplicada (por você ou pela IA). Nesse caso não aparece "Aplicar com IA", "Tentar de novo" nem "Enviar de verdade", a API recusa os três, e o worker confere de novo antes de abrir qualquer formulário.
+
+Se você mover o card para Aplicada ou depois, a candidatura que estava na fila, esperando você ou com ensaio pronto termina como **"Aplicada por você"** e nunca é enviada; uma em andamento é parada no próximo ponto seguro. Mover o card para qualquer outra coluna cancela a candidatura da fila e para a que está em andamento no próximo ponto seguro. Uma vaga de site não suportado fica no quadro como sempre, sem candidatura nem selo.
 
 ### Como ligar
 
 1. Configure a IA e envie o seu currículo (veja [IA de perfil](#ia-de-perfil)). Opcional, mas vale a pena: preencha em **Meu perfil** o bloco "Respostas para candidaturas" (pretensão salarial, visto, disponibilidade...).
-2. Tenha Chrome ou Edge instalado, ou aponte `APPLY_BROWSER` para outro navegador (veja [Navegador e contas](#navegador-e-contas)).
+2. Tenha Chrome ou Edge instalado, ou aponte `APPLY_BROWSER` para outro navegador (`opera-gx` para o Opera GX; veja [Navegador e contas](#navegador-e-contas)).
 3. Em **Configurações > Candidatura automática**: ligue o interruptor, confira a nota mínima, os limites, o horário e a **lista de bloqueio** (o app sugere a sua empresa atual na primeira vez), escolha o currículo (adaptado ou base) e as "Respostas propostas pela IA". Cada site começa em **Ensaio**.
-4. Nos sites com login, abra a conta uma vez (veja [Navegador e contas](#navegador-e-contas)).
+4. Quando o LinkedIn estiver disponível (hoje nenhum site suportado usa login): abra a conta uma vez (veja [Navegador e contas](#navegador-e-contas)).
 5. Deixe tudo em Ensaio por alguns dias. Quando os ensaios estiverem certos, troque cada site para **Enviar**. A tela pede uma confirmação nessa troca.
 
-Com a função ligada, a aba **Candidaturas** lista tudo (em andamento, precisam de você, ensaios prontos, enviadas, não enviadas), os cards ganham os selos "IA aplicando", "ensaio pronto", "precisa de você" e "aplicada pela IA", e o contador **"Precisam de você"** da barra do topo abre a lista filtrada. O painel de cada vaga tem uma seção "Candidatura" com o estado, a linha do tempo, as perguntas com as respostas e a origem de cada uma, o PDF que vai (ou foi) junto e fotos do formulário.
+Com a função ligada, a aba **Candidaturas** lista tudo (em andamento, precisam de você, ensaios prontos, enviadas, não enviadas; cada filtro mostra as 200 mais recentes e diz quando há mais, e o número ao lado de cada filtro conta todas), os cards ganham os selos "IA aplicando", "ensaio pronto", "precisa de você" e "aplicada pela IA", e o contador **"Precisam de você"** da barra do topo abre a lista filtrada. O painel de cada vaga tem uma seção "Candidatura" com o estado, a linha do tempo, as perguntas com as respostas e a origem de cada uma, o PDF que vai (ou foi) junto e fotos do formulário.
 
 ### Ensaio e Enviar
 
-- **Ensaio** (o padrão de todo site): o app faz tudo, fotografa o formulário preenchido, **não clica no envio** e fecha o formulário sem deixar rascunho. O resultado é "Ensaio pronto", com as respostas, o PDF e a foto no painel da vaga.
+- **Ensaio** (o padrão de todo site): o app faz tudo, fotografa o formulário preenchido, **não clica no envio** e fecha o formulário sem deixar rascunho. O resultado é "Ensaio pronto", com as respostas, o PDF e a foto no painel da vaga. **No Lever, o ensaio já envia o arquivo do currículo ao Lever**: o site lê o arquivo assim que ele é anexado, antes de qualquer clique de envio.
 - **Enviar:** o app clica no envio final.
-- **O modo do site é lido quando cada candidatura começa.** Voltar um site para Ensaio faz as que ainda estão na fila ensaiarem em vez de enviar. A exceção são as que você mesmo mandou com "Enviar de verdade": aquele clique foi uma decisão sua sobre aquela candidatura. Passar o site para Enviar **não** dispara os ensaios que já estavam prontos: cada um precisa do "Enviar de verdade", e a aba Candidaturas tem "Enviar todos os ensaios" (com confirmação).
+- **O modo do site é lido quando cada candidatura começa.** Voltar um site para Ensaio faz as que ainda estão na fila ensaiarem em vez de enviar. A exceção são as que você mesmo mandou com "Enviar de verdade": aquele clique foi uma decisão sua sobre aquela candidatura. Passar o site para Enviar **não** dispara os ensaios que já estavam prontos: cada um precisa do "Enviar de verdade", e a aba Candidaturas tem "Enviar todos os ensaios" (com confirmação). Esse botão envia exatamente os ensaios que a aba carregou (até os 200 mais recentes); um que deixou de estar pronto nesse meio-tempo, ou cuja vaga já foi aplicada, fica de fora, e a tela diz quantos.
 - **"Enviar de verdade" envia exatamente as respostas do ensaio que você viu**, com o mesmo PDF. Se o formulário ganhou uma pergunta obrigatória desde então, o app não envia: faz um ensaio novo para você ver.
 
 ### Quem responde o quê
@@ -231,14 +234,14 @@ Cada campo do formulário é classificado por regras de texto e, quando elas nã
 
 **Por regra, sem perguntar a você:**
 
-- nome, e-mail e telefone, do perfil;
+- os seus dados de identificação, do perfil: nome (inteiro, ou nome e sobrenome em campos separados), e-mail, telefone, cidade, país, os endereços do LinkedIn, do GitHub e do portfólio, e **a empresa atual e o cargo atual** (os da experiência sem data de fim). Repare nos dois últimos: eles vão para toda empresa que perguntar, sem você ver antes;
 - o arquivo do currículo;
 - "onde você viu a vaga?": o nome da fonte da vaga;
 - "já trabalhou nesta empresa?", **só** como "Não" e **só** quando nenhuma empresa do seu perfil tem uma palavra significativa em comum com a da vaga; do contrário a pergunta vai direto para você;
 - **consentimento, só para**: a política ou o aviso de privacidade, os termos de uso, o tratamento de dados pessoais para a candidatura e a veracidade das informações. Qualquer outro compromisso ("concordo em não me candidatar a outra vaga da empresa", por exemplo) vai para você;
 - perguntas demográficas (gênero, raça, deficiência, veterano): opcional fica em branco; obrigatória recebe "prefiro não informar" se a opção existir, e senão vai para as suas respostas salvas e, faltando, para você.
 
-**Sempre de você, nunca da IA, em qualquer modo:** as perguntas **pessoais** (pretensão salarial, visto e autorização de trabalho, disponibilidade, mudança de cidade, antecedentes, referências...) e as demográficas. Essas respostas vêm de **Meu perfil > Respostas para candidaturas** e do que você responder na aba Candidaturas. Quando uma candidatura para numa pergunta, você responde ali, escolhe o alcance (sempre, só nesta empresa ou só nesta vaga) e ela volta para a fila sozinha; a resposta fica salva e vale para as próximas. Visto e autorização de trabalho são guardados por país.
+**Sempre de você, nunca da IA, em qualquer modo:** as perguntas **pessoais** (pretensão salarial, visto e autorização de trabalho, disponibilidade, mudança de cidade, antecedentes, referências...) e as demográficas. Essas respostas vêm de **Meu perfil > Respostas para candidaturas** e do que você responder na aba Candidaturas. Quando uma candidatura para numa pergunta, você responde ali, escolhe o alcance (sempre, só nesta empresa ou só nesta vaga) e ela volta para a fila sozinha; a resposta fica salva e vale para as próximas. Uma resposta pessoal que você dá numa candidatura fica ligada ao lado da vaga em que foi dada (Brasil ou exterior) e só é usada em vagas do mesmo lado: a pretensão salarial ou o visto de uma vaga de fora não vai para uma vaga no Brasil. As respostas que você escreve em **Meu perfil** valem para qualquer vaga, a menos que marque "Só para vagas no Brasil".
 
 **Respostas propostas pela IA** (fatos do seu perfil, como "anos de experiência com TypeScript", e textos abertos, como "por que você quer trabalhar aqui?"). Em Configurações, "Respostas propostas pela IA" tem três modos:
 
@@ -269,7 +272,7 @@ Os rótulos e as opções de um formulário são conteúdo de terceiros: vão ao
 | Intervalo nos demais sites | 1 a 3 min, sorteado | não |
 
 - O limite do dia conta **formulários abertos**, seja envio ou ensaio.
-- O botão "Aplicar com IA" dispensa a nota mínima, a conferência, a idade da vaga, o limite por empresa e o horário. Continuam valendo a lista de bloqueio, os limites diários do site e a regra de **um envio por vaga**.
+- O botão "Aplicar com IA" dispensa a nota mínima, a conferência, a idade da vaga, o limite por empresa e o horário. Continuam valendo a lista de bloqueio, os limites diários do site, a regra de **um envio por vaga** e a de nunca aplicar a uma vaga já aplicada.
 - **Lista de bloqueio** (empresas e termos, em Configurações). A empresa é comparada por **palavras inteiras, nos dois sentidos**: bloqueia quando o nome da empresa da vaga contém uma entrada ou quando uma entrada contém o nome da empresa (sem diferença de maiúsculas e acento, e sem "Ltda", "S.A.", "Inc" e parecidos no fim). "Acme" bloqueia "Acme Pagamentos", e uma entrada "Banco Alfa" bloqueia uma empresa chamada só "Alfa". **Uma palavra curta e comum na lista bloqueia mais do que parece**: "Tech", "Group" ou "Brasil" pegam todas as empresas com essa palavra no nome. Os termos são procurados, também por palavras inteiras, no título e na descrição. Vale para candidaturas automáticas e para "Aplicar com IA".
 - **Limite diário de IA.** O limite de gasto da IA (veja [IA de perfil](#ia-de-perfil)) vale para toda candidatura, as manuais também. Atingido, a fila espera o dia seguinte; **não há "Executar mesmo assim"** aqui.
 - **Freio por site.** Três formulários não reconhecidos em seguida, três envios que o site não confirmou em seguida ou qualquer página de restrição, verificação de conta ou "atividade incomum" pausam aquele site até você clicar em **Retomar** em Configurações. Se você não aparecer em duas esperas seguidas por captcha ou código, o site fica em "aguardando você" e as candidaturas dele esperam, sem travar os outros sites.
@@ -283,19 +286,26 @@ Os rótulos e as opções de um formulário são conteúdo de terceiros: vão ao
 | Aguardando você | A janela do navegador está esperando um captcha, um código de verificação ou um login | Resolva na janela (veja abaixo) |
 | Ensaio pronto | Preenchida, não enviada | Confira e use "Enviar de verdade", ou cancele |
 | Precisa de você | Parou: pergunta sem resposta, resposta proposta a aprovar, correspondência a confirmar, currículo barrado, formulário que o app não reconhece, sessão que caiu... O motivo aparece no painel da vaga | Responda na aba Candidaturas ou resolva o que o motivo pede; "Tentar de novo" vale onde aparece |
-| **Confirme no site** | O app clicou no envio final e o site **não confirmou** (erro, captcha que apareceu depois do clique e não foi resolvido, cancelamento nesse momento, queda do worker) | Veja no site ou no seu e-mail se a candidatura chegou. Se chegou, "Já apliquei por conta própria" move o card para Aplicada; se não, cancele |
+| **Confirme no site** | O app clicou no envio final e o site **não confirmou** (erro, captcha que apareceu depois do clique e não foi resolvido, cancelamento nesse momento, queda do worker, ou o app não teve certeza de que o primeiro clique não foi) | Veja no site ou no seu e-mail se a candidatura chegou. Se chegou, "Já apliquei por conta própria" marca a vaga como aplicada (o card vai para Aplicada, ou fica onde está se já estiver lá ou depois) e a candidatura vira "Aplicada por você"; se não, cancele |
 | Enviada | O site confirmou | Nada |
-| Pulada | Não era para aplicar; o motivo diz por quê (nota, requisito, bloqueio, vaga encerrada, site externo, já aplicada) | Nada |
-| Falhou, cancelada | Erro depois das tentativas, ou cancelada por você | "Tentar de novo", se quiser |
+| Aplicada por você | Você marcou a vaga como aplicada (pelo botão acima ou movendo o card para Aplicada ou depois), ou o worker viu que ela já estava aplicada antes de começar | Nada: a IA não envia esta vaga |
+| Pulada | Não era para aplicar; o motivo diz por quê (nota, requisito, bloqueio, vaga encerrada, site externo) | Nada |
+| Falhou, cancelada | Erro depois das tentativas, ou cancelada por você | "Tentar de novo", se quiser (não aparece em vaga já aplicada) |
 
-**"Confirme no site" é o único estado sem "Tentar de novo".** Depois do clique final ninguém consegue saber se o site recebeu a candidatura, e o app **nunca clica de novo** depois de um clique: no máximo uma candidatura é enviada por vaga, mesmo que o worker caia no meio do envio.
+O painel da vaga mostra "Cancelamento pedido; vale no próximo ponto seguro" depois de você cancelar uma candidatura em andamento, até ela parar.
+
+**"Confirme no site" é o único estado parado sem "Tentar de novo".** Depois do clique final ninguém consegue saber com certeza se o site recebeu a candidatura. Por isso o app **nunca clica de novo, a não ser que tenha certeza de que o primeiro clique não foi**: se um captcha ou um código apareceu depois do clique e você o resolveu na janela, o app espera até 30 segundos o site terminar sozinho e só clica de novo se o formulário continua na tela, parado, sem sinal de que o primeiro envio está em andamento. **Na dúvida, ele para e pede que você confirme no site.** No máximo uma candidatura é enviada por vaga, mesmo que o worker caia no meio do envio.
+
+> **Resolveu um captcha na janela? Não clique você mesmo no botão de envio do site.** O app cuida disso; um clique seu pode mandar a candidatura duas vezes.
 
 **Esperas ao vivo.** Captcha, código de verificação e login o app **nunca** resolve. A janela do navegador vem para a frente, a aba Candidaturas avisa (e, se você permitir, o navegador também) e o app espera por até **10 minutos**. Resolvido, continua do ponto em que parou; estourado o prazo, a candidatura vira "precisa de você". Depois de "Abrir para fazer login", em Configurações, a janela também fica aberta por até 10 minutos. Enquanto ela está nessa espera, nenhuma candidatura começa naquele site.
 
 ### Navegador e contas
 
 - O app usa um navegador **com janela**, no seu computador, com um perfil próprio guardado na pasta de dados (`APPLY_DATA_DIR`): `%LOCALAPPDATA%\kanban-vagas` no Windows, `~/Library/Application Support/kanban-vagas` no macOS e `${XDG_DATA_HOME:-~/.local/share}/kanban-vagas` nos demais. Ele **não** usa o perfil do seu navegador do dia a dia: as contas dos sites são abertas nesse perfil à parte.
-- **`APPLY_BROWSER`** escolhe o navegador: um canal instalado (`chrome` ou `msedge`) ou o **caminho completo** do executável de um navegador baseado em Chromium (o `opera.exe` do Opera GX, por exemplo). Sem a variável, o app procura o Chrome e depois o Edge nos lugares padrão. Sem navegador utilizável, a fila não anda: o worker não escolhe vagas e um "Aplicar com IA" fica "Na fila". Quem procura o navegador é o worker, e hoje nem a tela nem o log dele avisam; se nada sai da fila, confira o `APPLY_BROWSER`.
+- **`APPLY_BROWSER`** escolhe o navegador: um canal instalado (`chrome` ou `msedge`), **`opera-gx`** ou o **caminho completo** do executável de outro navegador baseado em Chromium. Sem a variável, o app procura o Chrome e depois o Edge nos lugares padrão.
+- **Opera GX: use `APPLY_BROWSER=opera-gx`**, não o caminho. O Opera GX muda o executável de pasta a cada atualização (`%LOCALAPPDATA%\Programs\Opera GX\<versão>\opera.exe`); com `opera-gx`, o app procura a versão mais nova instalada toda vez que abre o navegador, e uma atualização não quebra nada. Se você usar um caminho completo e ele deixar de existir, o motivo mostrado na tela diz qual é a versão mais nova encontrada ao lado, para você corrigir.
+- **Sem navegador utilizável, nada começa, e a tela diz por quê.** Quem procura o navegador é o worker: ele escreve o motivo no log (ao iniciar e quando o motivo muda) e o publica para a tela. Configurações mostra o aviso "O worker não consegue se candidatar agora" com o motivo (as opções continuam editáveis), o cartão "Hoje" e a aba Candidaturas mostram o mesmo motivo, "Aplicar com IA" e as demais ações recusam com esse texto, e os botões de conta terminam com erro. O worker procura o navegador de novo a cada volta da fila: instalado o navegador (ou atualizado o Opera GX, com `opera-gx`), o aviso some sozinho. Mudou o `APPLY_BROWSER` no `.env`? Reinicie o worker, que só lê as variáveis ao iniciar.
 - Para os sites com login, **Configurações > Candidatura automática** mostra o estado da conta e os botões "Abrir para fazer login", "Verificar" e "Desconectar". **Você digita a senha na página do próprio site; o app nunca a lê nem a guarda.** A sessão fica só no perfil do navegador, no seu disco; nunca vai para o banco nem para o log. "Desconectar" remove os cookies daquele site desse perfil.
 - A janela fecha depois de 5 minutos sem uso.
 
@@ -310,11 +320,11 @@ Estimativas com os modelos padrão do Claude, **a medir no uso real**; a fatura 
 | Resposta aberta, quando há | forte | US$ 0,03 a 0,07 |
 | Currículo adaptado | forte | US$ 0,07 (até US$ 0,70 no pior caso, com a correção) |
 
-Uma candidatura típica custa perto de US$ 0,08; com o limite padrão de US$ 1,00 por dia, cabem cerca de 10 por dia. Com o "Currículo base", o custo cai para centavos. O limite diário é o da IA de perfil: ele soma tudo.
+Uma candidatura típica custa perto de US$ 0,08; com o limite padrão de US$ 1,00 por dia, cabem cerca de 10 por dia. Com o "Currículo base", o custo cai para centavos. O limite diário é o da IA de perfil: ele soma tudo. As notas das vagas e as candidaturas dividem esse mesmo limite, sem reserva para nenhuma das duas: num dia com muitas vagas novas, as notas podem gastar o limite inteiro, e as candidaturas esperam o dia seguinte.
 
 ### O que fica guardado
 
-Veja a tabela de [Seus dados](#seus-dados-o-que-fica-guardado-e-como-apagar). Em resumo: o banco guarda as candidaturas (estado, motivo, respostas com a origem, o PDF exato enviado, o e-mail usado, o texto de confirmação do site e a linha do tempo) e as suas respostas salvas; as **fotos** do formulário (que têm dados pessoais) ficam na pasta de dados do app; a sessão dos sites fica só no perfil do navegador.
+Veja a tabela de [Seus dados](#seus-dados-o-que-fica-guardado-e-como-apagar). Em resumo: o banco guarda as candidaturas (estado, motivo, respostas com a origem, o PDF exato enviado, o e-mail usado, o texto de confirmação do site e a linha do tempo) e as suas respostas salvas; as **fotos** do formulário (que têm dados pessoais) ficam na pasta de dados do app e saem com "Apagar todos os dados de IA"; a sessão dos sites fica só no perfil do navegador.
 
 ### Sites suportados
 
@@ -332,10 +342,14 @@ Veja a tabela de [Seus dados](#seus-dados-o-que-fica-guardado-e-como-apagar). Em
 ### Conferir um site de verdade
 
 ```bash
-pnpm apply:smoke -- --site <linkedin|greenhouse|lever> --job <endereço da vaga> [--resume <pdf>]
+pnpm apply:smoke -- --site <linkedin|greenhouse|lever> --job <endereço da vaga> [--resume <pdf>] [--country BR|INT]
 ```
 
-> **Este comando abre o formulário de uma empresa de verdade.** Ele digita o seu nome, e-mail e telefone reais nos campos e anexa o PDF do seu currículo, sem nunca enviar a candidatura. Mesmo sem o envio, **o Lever pode ler o arquivo anexado antes de qualquer clique de envio**. Use só numa vaga em que você aceita isso.
+> **Este comando abre o formulário de uma empresa de verdade.** Ele digita os seus dados reais de identificação nos campos (nome, e-mail, telefone, cidade, país, os endereços do LinkedIn, do GitHub e do portfólio, a empresa atual e o cargo atual) e anexa o PDF do seu currículo, sem nunca enviar a candidatura. Mesmo sem o envio, **o Lever pode ler o arquivo anexado antes de qualquer clique de envio**. Use só numa vaga em que você aceita isso.
+
+**Pare o worker antes** (`pnpm dev` ou `pnpm start:prod`): o comando usa o mesmo perfil de navegador do worker, e com a janela do worker aberta ele não consegue abrir o navegador.
+
+`--country` diz se a vaga é no Brasil (`BR`) ou fora (`INT`, o padrão, porque o comando não descobre o país pelo endereço): decide quais das suas respostas pessoais salvas (salário, visto, disponibilidade) valem no ensaio.
 
 Ele abre a vaga com janela, preenche como o worker faria e fotografa a página inteira. Sempre roda em ensaio: não tem opção de envio e nunca clica em enviar. Recusa rodar na CI. Imprime as perguntas e as respostas, com a origem de cada uma, e grava a foto em `<pasta de dados>/smoke/`, fora do repositório.
 
@@ -443,7 +457,7 @@ As marcadas com (*) são só o **valor inicial**: podem ser trocadas na aba Conf
 | `AI_BUDGET_TZ` | `America/Sao_Paulo` | Fuso que define o "dia" do limite. Só por variável de ambiente |
 | `AI_ALLOW_FAKE` | desligado | Só testes: `1` acrescenta o provedor falso (sem rede, sem custo) às opções da aba Configurações |
 | `APPLY_DATA_DIR` | `%LOCALAPPDATA%\kanban-vagas` (Windows), `~/Library/Application Support/kanban-vagas` (macOS), `${XDG_DATA_HOME:-~/.local/share}/kanban-vagas` (demais) | Pasta de dados da candidatura automática: perfil do navegador (`browser/`, com as sessões dos sites) e fotos dos formulários (`shots/`). Fica fora do repositório. Só por variável de ambiente |
-| `APPLY_BROWSER` | procura Chrome e depois Edge | Navegador da candidatura automática: `chrome`, `msedge` ou o caminho completo do executável de um navegador baseado em Chromium (`opera.exe` do Opera GX, por exemplo). Só por variável de ambiente |
+| `APPLY_BROWSER` | procura Chrome e depois Edge | Navegador da candidatura automática: `chrome`, `msedge`, `opera-gx` (a versão mais nova do Opera GX instalada) ou o caminho completo do executável de um navegador baseado em Chromium. Só por variável de ambiente |
 | `FAKE_APPLY_SITE` | desligado | `1` troca os sites de candidatura por um site de teste local e o navegador pelo Chromium do Playwright, sem janela (testes e e2e, sem rede) |
 | `E2E_DATABASE_URL` | `postgres://postgres:postgres@localhost:5433/kanban_e2e` | Só no `pnpm e2e`. O nome do banco precisa terminar em `_e2e` ou `_test` |
 | `E2E_SCREENSHOT_DIR` | desligado | Só no `pnpm e2e`: pasta onde o teste grava screenshots |

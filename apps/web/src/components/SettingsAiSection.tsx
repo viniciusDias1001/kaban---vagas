@@ -5,6 +5,7 @@ import {
   type SettingsDto,
 } from '@kv/shared/client';
 import { formatUsd, scoringPauseText } from '../lib/ai';
+import { CARD, EYEBROW } from '../lib/styles';
 import { cn } from '../lib/utils';
 import { OUTCOME_TONE, SOURCE_LABELS, changeProvider, keyView, parseBudget, type SettingsForm, type SettingsFormErrors } from '../settingsForm';
 import { useAiStatus, useAiUsage, useTestConnection } from '../useAi';
@@ -20,8 +21,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 export const LABEL = 'block text-[13px] font-medium text-ink-2';
 export const HINT = 'text-xs leading-snug text-faint';
 export const ERROR = 'text-xs leading-snug text-bad';
-export const EYEBROW = 'text-[11px] font-semibold uppercase tracking-[0.08em] text-faint';
-export const CARD = 'rounded-3xl border border-line bg-surface/85 shadow-raised';
+export { CARD, EYEBROW };
 
 const NONE = 'none';
 const LAYER_LABELS: Record<AiLayer, string> = {

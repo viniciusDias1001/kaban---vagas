@@ -2,15 +2,15 @@ import { useQuery } from '@tanstack/react-query';
 import { Activity, CircleAlert, CircleCheck, Columns3, Send, Settings, SlidersHorizontal, TriangleAlert, UserRound } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Suspense, lazy, useCallback, useEffect, useState } from 'react';
+import type { ApplicationFilter } from '@kv/shared/client';
 import { api } from './api';
 import { Board } from './components/Board';
 import { Tooltip } from './components/ui/tooltip';
-import type { ApplicationFilter } from './lib/apply';
 import { useMediaQuery } from './lib/hooks';
 import { spring, springSnap } from './lib/motion';
 import { cn } from './lib/utils';
 import { useBottomBarHeight, useToast } from './toast';
-import { useApplyStatus, useLiveWaitNotification } from './useApply';
+import { useApplyQueueRefresh, useApplyStatus, useLiveWaitNotification } from './useApply';
 import { useRunCatchUp } from './useRunCatchUp';
 import { isWorkerStale } from './workerStale';
 
@@ -56,6 +56,8 @@ export function App() {
   }, []);
   // Espera ao vivo (captcha, código, login): um ponto na aba e, com a permissão dada, uma notificação do navegador.
   const applyState = useApplyStatus().data;
+  // Um observador só: a fila mudou, as listas, as candidaturas das vagas e os selos do quadro são relidos na hora.
+  useApplyQueueRefresh();
   const applyWaiting = applyState?.waiting ?? null;
   useLiveWaitNotification(applyState ? applyWaiting : undefined);
   const catchUp = useRunCatchUp();
