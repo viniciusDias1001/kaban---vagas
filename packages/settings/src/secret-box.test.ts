@@ -1,6 +1,7 @@
+import { createCipheriv, hkdfSync, randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import type { AiProviderId } from '@kv/shared';
-import { DecryptError, SecretInputError, SecretMissingError, appSecretProblem, openApiKey, sealApiKey } from './secret-box';
+import { DecryptError, SecretInputError, SecretMissingError, appSecretProblem, openApiKey, openSecret, sealApiKey, sealSecret } from './secret-box';
 
 const SECRET = 'segredo-de-teste-com-mais-de-32-caracteres-0001';
 const OTHER_SECRET = 'outro-segredo-de-teste-com-mais-de-32-caracteres';
@@ -145,5 +146,50 @@ describe('sealApiKey / openApiKey', () => {
     expect(appSecretProblem(undefined)).toMatch(/APP_SECRET não está definida/);
     expect(appSecretProblem('curto')).toMatch(/menos de 32 caracteres/);
     expect(appSecretProblem(SECRET)).toBeNull();
+  });
+});
+
+describe('sealSecret / openSecret', () => {
+  const PASSWORD = 'abcdefghijklmnop';
+
+  it('seals a named secret that only opens under the same name', () => {
+    const sealed = sealSecret(PASSWORD, 'mail_password', SECRET);
+    expect(openSecret(sealed, 'mail_password', SECRET)).toBe(PASSWORD);
+    expect(openSecret(new Uint8Array(sealed), 'mail_password', SECRET)).toBe(PASSWORD);
+    expect(() => openSecret(sealed, 'telegram_bot_token', SECRET)).toThrow(DecryptError);
+  });
+
+  it('does not open an AI key as a named secret, nor the other way round', () => {
+    expect(() => openSecret(sealApiKey(KEY, 'openai', SECRET), 'mail_password', SECRET)).toThrow(DecryptError);
+    expect(() => openApiKey(sealSecret(PASSWORD, 'mail_password', SECRET), 'openai', SECRET)).toThrow(DecryptError);
+  });
+
+  it('still opens an AI key sealed before this change', () => {
+    expect(openApiKey(sealApiKey('sk-test-12345678', 'anthropic', SECRET), 'anthropic', SECRET)).toBe('sk-test-12345678');
+    // Selado à mão com o esquema documentado (sal, info e AAD do código antigo): tem de abrir byte a byte.
+    const key = Buffer.from(hkdfSync('sha256', Buffer.from(SECRET), Buffer.from('kanban-vagas/ai-keys'), Buffer.from('aes-256-gcm/v1'), 32));
+    const nonce = randomBytes(12);
+    const cipher = createCipheriv('aes-256-gcm', key, nonce, { authTagLength: 16 });
+    cipher.setAAD(Buffer.from('kv:ai-key:v1:openai'));
+    const body = Buffer.concat([cipher.update(KEY, 'utf8'), cipher.final()]);
+    const legacy = Buffer.concat([Buffer.from([1]), nonce, cipher.getAuthTag(), body]);
+    expect(openApiKey(legacy, 'openai', SECRET)).toBe(KEY);
+  });
+
+  it('refuses to seal without APP_SECRET, and fails to open under another one', () => {
+    expect(() => sealSecret('x', 'mail_password', undefined)).toThrow(SecretMissingError);
+    expect(() => openSecret(sealSecret(PASSWORD, 'mail_password', SECRET), 'mail_password', OTHER_SECRET)).toThrow(DecryptError);
+  });
+
+  it('refuses an unknown name or an empty value, without echoing the value', () => {
+    expect(() => sealSecret(PASSWORD, 'outro' as never, SECRET)).toThrow(expect.objectContaining({ reason: 'unknown_name' }));
+    expect(() => openSecret(Buffer.alloc(40), 'outro' as never, SECRET)).toThrow(SecretInputError);
+    expect(() => sealSecret('   ', 'mail_password', SECRET)).toThrow(expect.objectContaining({ reason: 'empty_key' }));
+    try {
+      sealSecret(PASSWORD, 'mail_password', 'curta');
+    } catch (e) {
+      expect(String(e)).not.toContain(PASSWORD);
+      expect(JSON.stringify(e)).not.toContain(PASSWORD);
+    }
   });
 });

@@ -64,7 +64,7 @@ describe('migrations', () => {
     );
     expect(rows).toEqual(
       [
-        'ai_keys', 'ai_tasks', 'ai_usage', 'application_events', 'applications', 'apply_answers', 'apply_commands', 'apply_sites', 'job_ai', 'job_events', 'jobs', 'profiles', 'resumes', 'runs', 'search_profiles',
+        'ai_keys', 'ai_tasks', 'ai_usage', 'alerts', 'app_secrets', 'application_events', 'applications', 'apply_answers', 'apply_commands', 'apply_sites', 'job_ai', 'job_events', 'jobs', 'mail_account', 'mail_ignored', 'mail_messages', 'mail_replies', 'profiles', 'resumes', 'runs', 'search_profiles',
         'settings', 'tailored_resumes',
       ].map((relname) => ({ relname, relrowsecurity: true })),
     );
@@ -100,6 +100,10 @@ describe('migrations', () => {
       'applications.started_at', 'applications.submitted_at', 'applications.viewed_at',
       'apply_answers.created_at', 'apply_answers.updated_at', 'apply_commands.created_at', 'apply_commands.finished_at',
       'apply_sites.last_form_at', 'apply_sites.last_view_at', 'apply_sites.paused_at', 'apply_sites.session_checked_at',
+      'alerts.created_at', 'alerts.dismissed_at', 'alerts.phone_sent_at', 'alerts.resolved_at', 'app_secrets.updated_at',
+      'mail_account.connected_at', 'mail_account.last_read_at', 'mail_ignored.created_at', 'mail_ignored.sent_at',
+      'mail_messages.classified_at', 'mail_messages.created_at', 'mail_messages.processed_at', 'mail_messages.sent_at',
+      'mail_replies.approved_at', 'mail_replies.created_at', 'mail_replies.sent_at',
     ].sort());
     expect(times.every((r) => r.data_type === 'timestamp with time zone')).toBe(true);
   });

@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
-import { boolean, check, doublePrecision, index, integer, jsonb, pgTable, text, uniqueIndex } from 'drizzle-orm/pg-core';
+import { type AnyPgColumn, bigint, boolean, check, doublePrecision, index, integer, jsonb, pgTable, text, uniqueIndex } from 'drizzle-orm/pg-core';
 import type {
+  AlertKind, AlertPayload, EmailKind, EmailLang, EmailRequest, KnownFact, ReplyOrigin, ReplyState, SecretName,
   Actor, AiLayer, AiProviderId, AiTaskStatus, AiTaskType, CandidateProfile, Column, JobAnalysis, Level, MaxAge, ProfileOrigin, Region,
   ResumeLang, TailoredResume, AnswerRecord, AnswerScope, ApplicationReason, ApplicationStatus, ApplyMode, ApplySiteId, ApplyTrigger,
   PendingQuestion, ShotKind, SitePauseReason, SiteSession,
@@ -71,6 +72,8 @@ export const jobEvents = pgTable(
     fromColumn: text('from_column').$type<Column>(),
     toColumn: text('to_column').$type<Column>().notNull(),
     actor: text('actor').$type<Actor>().notNull(),
+    // E-mail que causou o movimento (só quando o autor é `email`); o evento sobrevive à mensagem.
+    mailMessageId: integer('mail_message_id').references((): AnyPgColumn => mailMessages.id, { onDelete: 'set null' }),
     createdAt: epochMs('created_at').notNull(),
   },
   (t) => [index('job_events_job_idx').on(t.jobId)],
@@ -375,4 +378,119 @@ export const applySites = pgTable('apply_sites', {
   humanTimeouts: integer('human_timeouts').notNull().default(0),
   lastFormAt: epochMs('last_form_at'),
   lastViewAt: epochMs('last_view_at'),
+}).enableRLS();
+
+// ---------------------------------------------------------------------------------------------
+// E-mail
+// ---------------------------------------------------------------------------------------------
+
+/** Segredos cifrados (AES-256-GCM): senha da caixa e token do bot. `sealed` é opaco para o banco. */
+export const appSecrets = pgTable('app_secrets', {
+  name: text('name').$type<SecretName>().primaryKey(),
+  sealed: bytea('sealed').notNull(),
+  updatedAt: epochMs('updated_at').notNull(),
+}).enableRLS();
+
+/** A caixa do dono: no máximo uma linha (`id = 1`). */
+export const mailAccount = pgTable(
+  'mail_account',
+  {
+    id: integer('id').primaryKey(),
+    address: text('address').notNull(),
+    connectedAt: epochMs('connected_at').notNull(),
+    uidValidity: bigint('uid_validity', { mode: 'number' }),
+    lastUid: bigint('last_uid', { mode: 'number' }),
+    lastReadAt: epochMs('last_read_at'),
+    backfillDone: boolean('backfill_done').notNull().default(false),
+    paused: boolean('paused').notNull().default(false),
+    error: text('error'),
+  },
+  (t) => [check('mail_account_single_row', sql`${t.id} = 1`)],
+).enableRLS();
+
+/** Mensagens guardadas (as que passaram pelo filtro local) e as enviadas pelo app. */
+export const mailMessages = pgTable(
+  'mail_messages',
+  {
+    id: integer('id').primaryKey().generatedAlwaysAsIdentity(),
+    messageId: text('message_id').notNull().unique(),
+    threadKey: text('thread_key').notNull(),
+    direction: text('direction').$type<'in' | 'out'>().notNull(),
+    uid: bigint('uid', { mode: 'number' }),
+    fromAddress: text('from_address').notNull(),
+    fromName: text('from_name').notNull(),
+    toAddress: text('to_address').notNull(),
+    replyTo: text('reply_to'),
+    subject: text('subject').notNull(),
+    body: text('body').notNull(),
+    sentAt: epochMs('sent_at').notNull(),
+    inReplyTo: text('in_reply_to'),
+    refs: jsonb('refs').$type<string[]>().notNull().default([]),
+    autoSubmitted: boolean('auto_submitted').notNull().default(false),
+    listId: boolean('list_id').notNull().default(false),
+    backfill: boolean('backfill').notNull().default(false),
+    corrected: boolean('corrected').notNull().default(false),
+    forceClassify: boolean('force_classify').notNull().default(false),
+    kind: text('kind').$type<EmailKind>(),
+    summary: text('summary'),
+    lang: text('lang').$type<EmailLang>(),
+    requests: jsonb('requests').$type<EmailRequest[]>().notNull().default([]),
+    jobId: integer('job_id').references(() => jobs.id, { onDelete: 'set null' }),
+    linkedBy: text('linked_by').$type<'auto' | 'owner'>(),
+    classifiedAt: epochMs('classified_at'),
+    processedAt: epochMs('processed_at'),
+    createdAt: epochMs('created_at').notNull(),
+  },
+  (t) => [index('mail_messages_thread_idx').on(t.threadKey), index('mail_messages_job_idx').on(t.jobId)],
+).enableRLS();
+
+/** Resposta a um e-mail: no máximo uma por mensagem. */
+export const mailReplies = pgTable('mail_replies', {
+  id: integer('id').primaryKey().generatedAlwaysAsIdentity(),
+  messageId: integer('message_id')
+    .notNull()
+    .unique()
+    .references(() => mailMessages.id, { onDelete: 'cascade' }),
+  origin: text('origin').$type<ReplyOrigin>().notNull(),
+  items: jsonb('items').$type<KnownFact[]>().notNull().default([]),
+  toAddress: text('to_address').notNull(),
+  subject: text('subject').notNull(),
+  body: text('body').notNull(),
+  attachResume: boolean('attach_resume').notNull().default(false),
+  state: text('state').$type<ReplyState>().notNull(),
+  approvedBy: text('approved_by').$type<'auto' | 'owner'>(),
+  outMessageId: text('out_message_id'),
+  note: text('note'),
+  createdAt: epochMs('created_at').notNull(),
+  approvedAt: epochMs('approved_at'),
+  sentAt: epochMs('sent_at'),
+}).enableRLS();
+
+/** E-mails fora do filtro de vaga: só o cabeçalho, guardado por 30 dias (sem corpo). */
+export const mailIgnored = pgTable('mail_ignored', {
+  id: integer('id').primaryKey().generatedAlwaysAsIdentity(),
+  messageId: text('message_id').notNull().unique(),
+  uid: bigint('uid', { mode: 'number' }).notNull(),
+  fromAddress: text('from_address').notNull(),
+  fromName: text('from_name').notNull(),
+  subject: text('subject').notNull(),
+  company: text('company').notNull(),
+  sentAt: epochMs('sent_at').notNull(),
+  promote: boolean('promote').notNull().default(false),
+  createdAt: epochMs('created_at').notNull(),
+}).enableRLS();
+
+/** Avisos do painel (e do telefone) sobre e-mails e candidaturas. */
+export const alerts = pgTable('alerts', {
+  id: integer('id').primaryKey().generatedAlwaysAsIdentity(),
+  kind: text('kind').$type<AlertKind>().notNull(),
+  jobId: integer('job_id').references(() => jobs.id, { onDelete: 'cascade' }),
+  mailMessageId: integer('mail_message_id').references(() => mailMessages.id, { onDelete: 'cascade' }),
+  replyId: integer('reply_id').references(() => mailReplies.id, { onDelete: 'cascade' }),
+  payload: jsonb('payload').$type<AlertPayload>().notNull().default({}),
+  createdAt: epochMs('created_at').notNull(),
+  resolvedAt: epochMs('resolved_at'),
+  dismissedAt: epochMs('dismissed_at'),
+  phoneSentAt: epochMs('phone_sent_at'),
+  phoneAttempts: integer('phone_attempts').notNull().default(0),
 }).enableRLS();

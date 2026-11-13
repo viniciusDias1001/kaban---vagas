@@ -50,6 +50,18 @@ function scripted(reply: () => unknown) {
 }
 
 describe('GET /settings and PATCH /settings', () => {
+  it('shows and saves the e-mail settings', async () => {
+    build({ APP_SECRET: TEST_SECRET });
+    expect((await get()).email).toEqual({
+      enabled: { value: true, source: 'default' }, moveMode: { value: 'auto', source: 'default' },
+      factsMode: { value: 'auto', source: 'default' }, aiDrafts: { value: true, source: 'default' },
+    });
+    const res = await patch({ emailMoveMode: 'confirm' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().email.moveMode).toEqual({ value: 'confirm', source: 'ui' });
+    expect((await patch({ emailMoveMode: 'x' })).statusCode).toBe(400);
+  });
+
   it('shows every setting with its origin, under / and /api', async () => {
     build({ APP_SECRET: TEST_SECRET, AI_PROVIDER: 'openai', GREENHOUSE_BOARDS: 'acme' });
     const dto = await get();
