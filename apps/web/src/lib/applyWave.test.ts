@@ -28,7 +28,7 @@ const listItem = (id: number, s: ApplicationStatus = 'dry_run_ready'): Applicati
 
 describe('K1: a job already applied to is never applied to again', () => {
   it('reads "already applied" from the column (Aplicada or later) or the applied-by mark', () => {
-    for (const c of COLUMNS) expect(jobAlreadyApplied({ column: c, appliedBy: null }), c).toBe(['aplicada', 'entrevista', 'oferta', 'arquivada'].includes(c));
+    for (const c of COLUMNS) expect(jobAlreadyApplied({ column: c, appliedBy: null }), c).toBe(['aplicada', 'entrevista', 'oferta', 'perdida', 'arquivada'].includes(c));
     expect(jobAlreadyApplied({ column: 'descobertas', appliedBy: 'humano' })).toBe(true);
     expect(jobAlreadyApplied({ column: 'descobertas', appliedBy: 'ia' })).toBe(true);
   });

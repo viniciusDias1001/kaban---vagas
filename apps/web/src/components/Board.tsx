@@ -145,7 +145,7 @@ const ColumnView = memo(function ColumnView({ column, index, jobs, total, filter
       animate={{ opacity: 1, y: 0 }}
       transition={{ ...spring, delay: index * 0.045 }}
       style={{ '--col': COLUMN_COLOR[column] } as CSSProperties}
-      className="kv-column flex min-w-52 flex-1 basis-0 flex-col"
+      className="kv-column flex min-w-44 flex-1 basis-0 flex-col"
     >
       <header className="flex items-center gap-2.5 px-3.5 pb-2.5 pt-3">
         <span aria-hidden className="kv-dot" />
@@ -218,7 +218,7 @@ function BoardSkeleton() {
         <div
           key={c}
           style={{ '--col': COLUMN_COLOR[c] } as CSSProperties}
-          className="kv-column flex min-w-52 flex-1 basis-0 flex-col"
+          className="kv-column flex min-w-44 flex-1 basis-0 flex-col"
         >
           <div className="flex items-center gap-2.5 px-3.5 pb-2.5 pt-3">
             <span aria-hidden className="kv-dot opacity-50" />

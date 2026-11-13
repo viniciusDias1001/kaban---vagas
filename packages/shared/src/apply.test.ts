@@ -2,7 +2,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
 import {
   ACTIVE_APPLICATION_STATUSES, APPLY_DEFAULTS, APPLY_TIMING, applyAvailability, isActiveApplication,
   normalizeQuestionText, bankBoolean, bankList, bankText, SHOT_KINDS, PendingAnswersBodySchema, ApplyAnswerInputSchema, type AnswerValue, type ApplicationStatus,
-  type PendingQuestion, COLUMNS, isAppliedOrLater, type CannotApplyReason, type JobApplicationDto,
+  type PendingQuestion, COLUMNS, COLUMN_LABELS, isAppliedOrLater, type CannotApplyReason, type JobApplicationDto,
   APPLICATION_FILTERS, APPLICATION_FILTER_STATUSES, APPLICATION_STATUSES, applicationFilterOf, type ApplicationFilter,
   NUMBER_FORMAT_PROBLEM, parseNumberAnswer,
 } from './index';
@@ -77,7 +77,9 @@ describe('application filters', () => {
 
 describe('already applied', () => {
   it('counts Aplicada and every column after it as applied', () => {
-    expect(COLUMNS.filter(isAppliedOrLater)).toEqual(['aplicada', 'entrevista', 'oferta', 'arquivada']);
+    expect(COLUMNS.filter(isAppliedOrLater)).toEqual(['aplicada', 'entrevista', 'oferta', 'perdida', 'arquivada']);
+    expect(COLUMNS.indexOf('perdida')).toBe(COLUMNS.indexOf('oferta') + 1);
+    expect(COLUMN_LABELS.perdida).toBe('Perdida');
   });
   it('describes the application of a job and why it cannot be applied to', () => {
     const dto: JobApplicationDto = { application: null, site: null, canApply: false, cannotApplyReason: 'unsupported_site' };

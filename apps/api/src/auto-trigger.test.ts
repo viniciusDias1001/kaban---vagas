@@ -89,11 +89,12 @@ describe('a layer that ended in error is only run again when the user asks', () 
 });
 
 describe('GET /jobs/ai (the board list, every 15 s)', () => {
-  it('has no justification text and skips archived jobs; the per-job route still has the reason', async () => {
+  it('has no justification text and skips archived and lost jobs; the per-job route still has the reason', async () => {
     const profile = await saveProfile(db, 'pt-BR', SAMPLE_PROFILE, 'extraido');
     const shown = await seedJob(db, { externalId: 'a' });
     const archived = await seedJob(db, { externalId: 'b', column: 'arquivada' });
-    for (const job of [shown, archived]) {
+    const lost = await seedJob(db, { externalId: 'c', column: 'perdida' });
+    for (const job of [shown, archived, lost]) {
       await db.insert(jobAi).values({
         jobId: job.id, language: 'en', titlePt: 'Pessoa desenvolvedora', score: 82, reason: 'React e TypeScript aparecem na vaga.',
         tier1State: 'ok', tier1ProfileVersion: profile.version,

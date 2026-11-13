@@ -91,7 +91,7 @@ function MoveTo({ job, index }: { job: JobDto; index: number }) {
   const titleId = useId();
   return (
     <Section title="Mover para" titleId={titleId} index={index}>
-      <div role="group" aria-labelledby={titleId} className="grid grid-cols-3 gap-1.5">
+      <div role="group" aria-labelledby={titleId} className="grid grid-cols-4 gap-1.5">
         {COLUMNS.map((c: Column) => {
           const current = c === job.column;
           return (

@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull, ne, or, sql } from 'drizzle-orm';
+import { and, desc, eq, isNull, notInArray, or, sql } from 'drizzle-orm';
 import { AI_PENDING, aiTasks, baseProfile, jobAi, jobSubject, jobs, type Db } from '@kv/db';
 
 /** Uma vaga cuja camada 1 falhou só volta para a fila sozinha depois deste tempo. */
@@ -14,7 +14,7 @@ const PENDING = sql.join(AI_PENDING.map((s) => sql`${s}`), sql`, `);
 
 /**
  * Enfileira a camada 1 das vagas que precisam dela, das mais recentes para as mais antigas, no máximo `limit` por
- * chamada. Só roda quando existe perfil. Vagas arquivadas ficam de fora. Entram:
+ * chamada. Só roda quando existe perfil. Vagas arquivadas e perdidas ficam de fora. Entram:
  * - vagas novas (sem linha em `job_ai`, ou com linha mas sem desfecho da camada 1);
  * - vagas cuja camada 1 terminou em ERRO há mais de TIER1_RETRY_AFTER_MS, enquanto não chegarem a
  *   TIER1_MAX_FAILURES falhas. Sem isto, uma falha passageira (ou um provedor fora do ar por um tempo) tirava a
@@ -35,7 +35,7 @@ export async function enqueueTier1ForNewJobs(db: Db, limit = 50, now: number = D
     .leftJoin(jobAi, eq(jobAi.jobId, jobs.id))
     .where(
       and(
-        ne(jobs.column, 'arquivada'),
+        notInArray(jobs.column, ['arquivada', 'perdida']),
         sql`not ${pending}`,
         or(
           isNull(jobAi.jobId),

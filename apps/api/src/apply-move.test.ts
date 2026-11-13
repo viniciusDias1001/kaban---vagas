@@ -59,6 +59,9 @@ describe('PATCH /jobs/:id with an application', () => {
     const rehearsal = await seedApplication('dry_run_ready');
     await move(rehearsal, { column: 'entrevista', position: 0 });
     expect(await applicationForJob(db, rehearsal)).toMatchObject({ status: 'skipped', reason: 'already_applied' });
+    const lost = await seedApplication('needs_human', { needsHuman: true, needsHumanReason: 'Falta uma resposta.' });
+    await move(lost, { column: 'perdida', position: 0 });
+    expect(await applicationForJob(db, lost)).toMatchObject({ status: 'skipped', reason: 'already_applied' });
     const running = await seedApplication('filling');
     await move(running, { column: 'oferta', position: 0 });
     expect(await applicationForJob(db, running)).toMatchObject({ status: 'filling', cancelRequested: true });

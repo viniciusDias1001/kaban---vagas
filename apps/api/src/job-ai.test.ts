@@ -73,6 +73,8 @@ describe('moving a job to selecionadas', () => {
     expect((await app.inject({ method: 'PATCH', url: '/settings', payload: { tier2Auto: true } })).statusCode).toBe(200);
     expect((await move(job.id, 'arquivada')).statusCode).toBe(200);
     expect(await taskTypes()).toEqual([]);
+    expect((await move(job.id, 'perdida')).statusCode).toBe(200);
+    expect(await taskTypes()).toEqual([]);
     expect((await move(job.id, 'selecionadas')).json().column).toBe('selecionadas');
     expect(await taskTypes()).toEqual(['tier1:queued', 'tier2:queued']);
   });

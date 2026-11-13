@@ -1,4 +1,4 @@
-import { and, eq, ne } from 'drizzle-orm';
+import { and, eq, notInArray } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import {
@@ -92,7 +92,7 @@ export function jobAiRoutes(app: FastifyInstance, db: Db, ctx: AiContext) {
   /**
    * Nota, idioma e título traduzido das vagas já avaliadas que estão no quadro: ele junta com GET /jobs pelo id.
    * O quadro relê esta lista a cada 15 s, então ela leva só o que o card mostra: a justificativa (`reason`) fica
-   * em GET /jobs/:id/ai (o card a busca quando o ponteiro para sobre a nota) e vagas arquivadas ficam de fora.
+   * em GET /jobs/:id/ai (o card a busca quando o ponteiro para sobre a nota) e vagas arquivadas e perdidas ficam de fora.
    */
   app.get('/jobs/ai', async (): Promise<JobAiListItemDto[]> => {
     const current = (await baseProfile(db))?.version ?? null;
@@ -102,7 +102,7 @@ export function jobAiRoutes(app: FastifyInstance, db: Db, ctx: AiContext) {
       })
       .from(jobAi)
       .innerJoin(jobs, eq(jobs.id, jobAi.jobId))
-      .where(and(eq(jobAi.tier1State, 'ok'), ne(jobs.column, 'arquivada')));
+      .where(and(eq(jobAi.tier1State, 'ok'), notInArray(jobs.column, ['arquivada', 'perdida'])));
     return rows.map(({ version, ...row }) => ({ ...row, stale: version !== current }));
   });
 

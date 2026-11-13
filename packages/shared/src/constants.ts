@@ -3,7 +3,7 @@
  * (via `@kv/shared/client`); os schemas de validação moram em `schemas.ts` e usam estes valores.
  */
 
-export const COLUMNS = ['descobertas', 'selecionadas', 'aplicada', 'entrevista', 'oferta', 'arquivada'] as const;
+export const COLUMNS = ['descobertas', 'selecionadas', 'aplicada', 'entrevista', 'oferta', 'perdida', 'arquivada'] as const;
 export type Column = (typeof COLUMNS)[number];
 
 export const COLUMN_LABELS: Record<Column, string> = {
@@ -12,10 +12,11 @@ export const COLUMN_LABELS: Record<Column, string> = {
   aplicada: 'Aplicada',
   entrevista: 'Entrevista',
   oferta: 'Oferta',
+  perdida: 'Perdida',
   arquivada: 'Arquivada',
 };
 
-/** A vaga já foi aplicada: o card está em Aplicada ou numa coluna depois dela (Entrevista, Oferta, Arquivada). */
+/** A vaga já foi aplicada: o card está em Aplicada ou numa coluna depois dela (Entrevista, Oferta, Perdida, Arquivada). */
 export function isAppliedOrLater(column: Column): boolean {
   return COLUMNS.indexOf(column) >= COLUMNS.indexOf('aplicada');
 }
