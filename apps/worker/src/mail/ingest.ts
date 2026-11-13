@@ -68,6 +68,8 @@ export async function ingestInbox(deps: IngestDeps): Promise<IngestResult> {
         }
       } catch (e) {
         if (e instanceof MailAuthError || e instanceof MailTransientError) throw e;
+        // Falha passageira do banco: a rodada para antes de o ponto de leitura andar, e a mensagem é lida de novo depois.
+        if (isPassingDbError(e)) throw e;
         log(`[mail] a mensagem de UID ${mail.uid} não pôde ser guardada e foi pulada`);
       }
     }
@@ -106,6 +108,22 @@ export async function promoteNext(deps: IngestDeps): Promise<boolean> {
     });
     return true;
   });
+}
+
+/** Códigos de conexão do driver do Postgres (sem SQLSTATE): a conexão caiu ou não abriu. */
+const CONNECTION_CODES = new Set(['CONNECTION_CLOSED', 'CONNECTION_ENDED', 'CONNECTION_DESTROYED', 'CONNECT_TIMEOUT', 'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EPIPE']);
+
+/**
+ * Erro do banco que passa sozinho: SQLSTATE de conexão (08), de conflito de transação (40), de recurso (53), de operação
+ * interrompida (57) ou de lock não obtido (55P03), ou a conexão do driver caída. O erro do Drizzle traz o do driver em `cause`.
+ */
+export function isPassingDbError(e: unknown): boolean {
+  for (let cur: unknown = e, depth = 0; cur && typeof cur === 'object' && depth < 5; cur = (cur as { cause?: unknown }).cause, depth++) {
+    const code = (cur as { code?: unknown }).code;
+    if (typeof code !== 'string') continue;
+    if (CONNECTION_CODES.has(code) || code === '55P03' || /^(08|40|53|57)/.test(code)) return true;
+  }
+  return false;
 }
 
 /** Erro de login pausa a leitura, grava a causa e abre o alerta; erro passageiro só grava a causa. Relança os dois. */

@@ -180,6 +180,22 @@ describe('ingestInbox', () => {
     expect(lines.join('\n')).not.toContain('careers@acme.com');
   });
 
+  it.each(['40001', '08006', '57014', '55P03'])('retries a job mail on a later round after a passing database error (%s)', async (code) => {
+    await seedAppliedJob('Acme', 'Engenheira de Software', MAIL_NOW - DAY);
+    deliver(acmeJobMail({ messageId: 'boa@acme.com', threadKey: 'boa@acme.com' }));
+    await db.execute(sql.raw(`create or replace function kv_test_fail() returns trigger language plpgsql as $$
+      begin raise exception 'falha passageira' using errcode = '${code}'; end $$`));
+    await db.execute(sql.raw('create trigger kv_test_fail before insert on mail_messages for each row execute function kv_test_fail()'));
+    try {
+      await expect(ingestInbox(deps)).rejects.toThrow();
+    } finally {
+      await db.execute(sql.raw('drop trigger kv_test_fail on mail_messages'));
+    }
+    expect(await getMailAccount(db)).toMatchObject({ lastUid: null });
+    expect(await ingestInbox(deps)).toMatchObject({ stored: 1 });
+    expect((await stored()).map((m) => m.messageId)).toEqual(['boa@acme.com']);
+  });
+
   it('deletes ignored lines older than 30 days', async () => {
     await seedAppliedJob('Acme', 'Engenheira de Software', MAIL_NOW - DAY);
     deliver({ from: { address: 'faturas@acme.com', name: 'Acme' }, subject: 'Sua fatura', text: 'Segue o boleto.', autoSubmitted: true });
