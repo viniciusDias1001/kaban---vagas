@@ -55,6 +55,34 @@ describe('alerts', () => {
     expect(await alertById(db, 999)).toBeNull();
   });
 
+  it('keeps one open alert per kind and effective message when the alert names only the reply', async () => {
+    const jobId = await seedJob('a', 'Acme', 'Dev');
+    const m1 = await seedMessage('<p1@acme.example>', jobId, 'pedido');
+    const m2 = await seedMessage('<p2@acme.example>', jobId, 'pedido');
+    const [r1, r2] = await db
+      .insert(mailReplies)
+      .values([
+        { messageId: m1, origin: 'ai', toAddress: 'rh@acme.example', subject: 'Re', body: 'Olá', state: 'rascunho', createdAt: 1000 },
+        { messageId: m2, origin: 'ai', toAddress: 'rh@acme.example', subject: 'Re', body: 'Olá', state: 'rascunho', createdAt: 1000 },
+      ])
+      .returning({ id: mailReplies.id });
+    expect(await raiseAlert(db, { kind: 'draft', replyId: r1.id }, 1000)).toEqual(expect.any(Number));
+    expect(await raiseAlert(db, { kind: 'draft', replyId: r2.id }, 1001)).toEqual(expect.any(Number));
+    // A mesma mensagem, pela resposta ou pela própria mensagem, já tem o alerta.
+    expect(await raiseAlert(db, { kind: 'draft', replyId: r1.id }, 1002)).toBeNull();
+    expect(await raiseAlert(db, { kind: 'draft', jobId, mailMessageId: m2 }, 1003)).toBeNull();
+    expect((await openAlerts(db)).map((a) => a.messageId).sort()).toEqual([m1, m2].sort());
+  });
+
+  it('keeps one open alert per kind and card when there is neither message nor reply', async () => {
+    const jobA = await seedJob('a', 'Acme', 'Dev');
+    const jobB = await seedJob('b', 'Globex', 'Dev');
+    expect(await raiseAlert(db, { kind: 'move_confirm', jobId: jobA, payload: { moveTo: 'entrevista' } }, 1000)).toEqual(expect.any(Number));
+    expect(await raiseAlert(db, { kind: 'move_confirm', jobId: jobB, payload: { moveTo: 'oferta' } }, 1001)).toEqual(expect.any(Number));
+    expect(await raiseAlert(db, { kind: 'move_confirm', jobId: jobA, payload: { moveTo: 'oferta' } }, 1002)).toBeNull();
+    expect(await openAlerts(db)).toHaveLength(2);
+  });
+
   it('updates the single mailbox-level alert instead of stacking', async () => {
     expect(await raiseAlert(db, { kind: 'budget_waiting', payload: { waiting: 2 } }, 1000)).toEqual(expect.any(Number));
     expect(await raiseAlert(db, { kind: 'budget_waiting', payload: { waiting: 5 } }, 1001)).toBeNull();

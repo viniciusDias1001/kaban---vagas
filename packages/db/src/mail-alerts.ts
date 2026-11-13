@@ -28,18 +28,34 @@ export interface NewAlert {
 }
 
 /**
- * Abre um alerta. Um aberto por (kind, mensagem); os tipos sem mensagem (`mailbox_error`, `backfill_summary`,
- * `budget_waiting`) têm um aberto por tipo, e uma nova chamada só atualiza o payload. Devolve o id, ou null se já havia.
+ * Abre um alerta. Um aberto por (kind, mensagem), sendo a mensagem a dada ou, sem ela, a da resposta dada; sem mensagem
+ * nem resposta, um aberto por (kind, vaga). Os tipos da caixa (`mailbox_error`, `backfill_summary`, `budget_waiting`)
+ * têm um aberto por tipo, e uma nova chamada só atualiza o payload. Devolve o id, ou null se já havia.
  */
 export async function raiseAlert(db: Db, input: NewAlert, now: number = Date.now()): Promise<number | null> {
   return db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(${sql.raw(String(ALERTS_WRITE_LOCK))})`);
     const mailboxLevel = MAILBOX_KINDS.includes(input.kind);
-    const messageId = input.mailMessageId ?? null;
+    const replyId = input.replyId ?? null;
+    let effectiveMessage = input.mailMessageId ?? null;
+    if (effectiveMessage === null && replyId !== null) {
+      const [reply] = await tx.select({ messageId: mailReplies.messageId }).from(mailReplies).where(eq(mailReplies.id, replyId));
+      effectiveMessage = reply?.messageId ?? null;
+    }
+    // A mensagem de um alerta já aberto também pode vir da resposta dele (`alertLinks`).
+    const { messageId: openMessage } = alertLinks();
+    const jobId = input.jobId ?? null;
     const same = mailboxLevel
-      ? eq(alerts.kind, input.kind)
-      : and(eq(alerts.kind, input.kind), messageId === null ? isNull(alerts.mailMessageId) : eq(alerts.mailMessageId, messageId));
-    const [open] = await tx.select({ id: alerts.id }).from(alerts).where(and(same, isOpen)).limit(1);
+      ? undefined
+      : effectiveMessage !== null
+        ? eq(openMessage, effectiveMessage)
+        : and(isNull(openMessage), jobId === null ? isNull(alerts.jobId) : eq(alerts.jobId, jobId));
+    const [open] = await tx
+      .select({ id: alerts.id })
+      .from(alerts)
+      .leftJoin(mailReplies, eq(mailReplies.id, alerts.replyId))
+      .where(and(eq(alerts.kind, input.kind), same, isOpen))
+      .limit(1);
     if (open) {
       if (mailboxLevel) await tx.update(alerts).set({ payload: input.payload ?? {} }).where(eq(alerts.id, open.id));
       return null;
@@ -47,8 +63,7 @@ export async function raiseAlert(db: Db, input: NewAlert, now: number = Date.now
     const [row] = await tx
       .insert(alerts)
       .values({
-        kind: input.kind, jobId: input.jobId ?? null, mailMessageId: messageId, replyId: input.replyId ?? null, payload: input.payload ?? {},
-        createdAt: now,
+        kind: input.kind, jobId, mailMessageId: input.mailMessageId ?? null, replyId, payload: input.payload ?? {}, createdAt: now,
       })
       .returning({ id: alerts.id });
     return row.id;
