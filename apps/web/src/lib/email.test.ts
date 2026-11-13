@@ -10,7 +10,7 @@ const alert = (over: Partial<AlertDto> = {}): AlertDto => ({
 });
 
 const message = (over: Partial<MailMessageDto> = {}): MailMessageDto => ({
-  id: 1, threadKey: 't', direction: 'in', fromAddress: 'rh@example.com', fromName: 'RH', toAddress: 'maria@example.com', subject: 'Olá',
+  id: 1, messageId: 'm1@example.com', threadKey: 't', direction: 'in', fromAddress: 'rh@example.com', fromName: 'RH', toAddress: 'maria@example.com', subject: 'Olá',
   sentAt: 0, body: '', kind: null, summary: null, lang: null, requests: [], jobId: 5, company: 'Acme', jobTitle: 'Dev', linkedBy: 'auto',
   corrected: false, backfill: false, movedTo: null, canUndoMove: false, replyState: null, replyOrigin: null, replyApprovedBy: null,
   alerted: false, ...over,
