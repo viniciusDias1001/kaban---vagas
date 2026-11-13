@@ -3,6 +3,7 @@ import { closeDb, createDb, waitForDb, type Db } from '@kv/db';
 import { createSettingsService } from '@kv/settings';
 import { createAiRuntime } from './ai/runtime';
 import { createApplyRuntime } from './apply/runtime';
+import { createMailRuntime } from './mail/runtime';
 import { createQueue, failStaleRuns, isDue, scheduleHourly } from './scheduler';
 
 const POLL_MS = 5_000;
@@ -114,6 +115,22 @@ async function pollApply() {
 const applyTimer = setInterval(() => void pollApply(), POLL_MS);
 void pollApply();
 
+// Fila de e-mail: lê a caixa a cada 3 min e, entre leituras, uma unidade de trabalho por verificação (promover, classificar,
+// agir, fechar a primeira leitura, enviar), com timer próprio. Só com HOST local, caixa conectada, e-mail ligado e caixa
+// não pausada; só num worker por banco (lock de sessão). As linhas de log saem só quando algo aconteceu.
+const mail = createMailRuntime(db, settings, { log: (msg) => log(`e-mail: ${msg.replace(/^\[mail\] /, '')}`) });
+await mail.recoverInterrupted();
+async function pollMail() {
+  if (stopping) return;
+  try {
+    await mail.tick();
+  } catch (e) {
+    log(`erro na fila de e-mail: ${errorText(e)}`);
+  }
+}
+const mailTimer = setInterval(() => void pollMail(), POLL_MS);
+void pollMail();
+
 /**
  * Redeploy/Ctrl+C: para de pegar runs da fila, espera um pouco os que estão em andamento e fecha o pool.
  * O que não terminar a tempo fica como "running" e vira erro no próximo start (failStaleRuns).
@@ -124,10 +141,11 @@ async function shutdown(signal: string) {
   clearInterval(timer);
   clearInterval(aiTimer);
   clearInterval(applyTimer);
+  clearInterval(mailTimer);
   log(`${signal} recebido, encerrando`);
   setTimeout(() => process.exit(1), DRAIN_MS + 4_000).unref();
   const drained = await Promise.race([
-    Promise.all([queue.idle(), ai.idle(), apply.idle()]).then(() => true),
+    Promise.all([queue.idle(), ai.idle(), apply.idle(), mail.idle()]).then(() => true),
     new Promise<false>((r) => setTimeout(() => r(false), DRAIN_MS)),
   ]);
   // Uma candidatura que não terminou a tempo volta à fila no próximo start; uma pega no envio vai ao dono conferir.
@@ -136,6 +154,12 @@ async function shutdown(signal: string) {
     await apply.close();
   } catch (e) {
     log(`erro ao fechar o navegador: ${errorText(e)}`);
+  }
+  try {
+    // Devolve o lock da fila de e-mail e a conexão reservada para ele (sem isso, fechar o banco esperaria por ela).
+    await mail.close();
+  } catch (e) {
+    log(`erro ao soltar a fila de e-mail: ${errorText(e)}`);
   }
   try {
     await closeDb(db);

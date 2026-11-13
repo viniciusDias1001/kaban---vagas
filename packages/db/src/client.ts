@@ -174,3 +174,10 @@ export function waitForDb(db: Db, opts: WaitOptions = {}): Promise<void> {
  * vagas: a inserção do worker e a renumeração de coluna da API. Use com `pg_advisory_xact_lock`.
  */
 export const JOBS_WRITE_LOCK = 7461001;
+
+/**
+ * Chave (arbitrária, fixa) do advisory lock de SESSÃO que faz da fila de e-mail uma só: o worker que o segura lê a caixa e
+ * envia; outro worker no mesmo banco não faz trabalho de e-mail enquanto ele estiver no ar. Use com `pg_try_advisory_lock`
+ * numa conexão reservada (o lock vive enquanto a conexão viver).
+ */
+export const MAIL_QUEUE_LOCK = 7461020;
