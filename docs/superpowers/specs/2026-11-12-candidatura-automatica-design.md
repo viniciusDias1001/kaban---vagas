@@ -476,3 +476,14 @@ Seletores e detalhes de cada roteiro; nomes e tipos exatos de colunas; prompts; 
 - **Sub-projeto 5, painel**: aba com as métricas (taxa de sucesso por site, fonte, faixa de nota e idioma; tempo até a primeira resposta; o que mais trava as candidaturas; custo por candidatura) e os e-mails recebidos e respondidos, no estilo do sistema.
 - **Sub-projeto 6, mais sites e fontes**: Ashby, Workable e Gupy; busca no LinkedIn já logado, filtrando candidatura simplificada; lista de empresas do Greenhouse e do Lever que cresce sozinha; seguir o link externo do LinkedIn quando leva a um site suportado; Indeed e Glassdoor por último.
 - Leitor genérico de formulário para sites desconhecidos; reescrita do título profissional por vaga; avisos por WhatsApp ou Telegram.
+
+## Adendo de 2026-11-13: coluna Descartada
+
+Decisão do dono em 2026-11-13, depois de ver três vagas puladas pela candidatura automática paradas em Descobertas ("as deixadas de lado por nota baixa têm que ir para uma coluna tipo perdida"). Ele escolheu uma coluna nova, a oitava, sabendo que todas ficam mais estreitas.
+
+- **A coluna.** Ordem: Descobertas, Selecionadas, Aplicada, Entrevista, Oferta, Perdida, **Descartada**, Arquivada. Descartada **não** conta como "já aplicada": o conjunto de colunas aplicadas continua Aplicada, Entrevista, Oferta, Perdida e Arquivada.
+- **O movimento.** Quando uma candidatura automática termina pulada (`skipped`) por `below_min_score`, `not_eligible` ou `closed`, o worker põe o card no topo de Descartada, com evento de autor `ia`, só se o card ainda está em Descobertas ou Selecionadas. Um card que o dono já levou para outra coluna nunca é tocado. Os outros motivos (`blocked`, `external`, `already_applied`) não movem o card para Descartada. Isto muda o item 3 das decisões ("nunca além"): Descartada é a única exceção.
+- **Recuperação.** A cada varredura da fila, os cards em Descobertas com candidatura pulada por um desses três motivos vão para Descartada do mesmo jeito, uma vez só (um card que já passou por Descartada e que o dono tirou de lá fica onde ele deixou).
+- **O que não muda.** O Painel não conta Descartada como candidatura, resposta nem reprovação. A procura de vaga dos e-mails (cards em Aplicada ou depois, ou com candidatura enviada) não inclui Descartada. A fila nunca pega um card em Descartada. A nota automática da camada 1 e a lista de notas do quadro deixam Descartada de fora, como Arquivada e Perdida. O dono arrasta um card para fora de Descartada como de qualquer coluna.
+- **O motivo** continua no bloco da candidatura, no painel da vaga; o histórico do card mostra o movimento pela "IA".
+- **O quadro com oito colunas.** Cada coluna tem uma largura mínima em que o título de um card ainda se lê; em janela estreita o quadro inteiro rola na horizontal (uma barra só), nunca uma coluna sozinha, e a página não rola na horizontal.

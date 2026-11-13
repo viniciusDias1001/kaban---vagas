@@ -155,6 +155,22 @@ describe('appliedJobFacts', () => {
     expect((await appliedJobFacts(db, null))[0]).toMatchObject({ lostAt: 6000 });
   });
 
+  it('does not count a move to Descartada as an application, a response or a loss', async () => {
+    // Pulada pela conferência e posta de lado pela IA: nunca foi aplicada.
+    const skipped = await seedJob({ column: 'descartada' });
+    await application(skipped, 'skipped', { reason: 'below_min_score' });
+    await event(skipped, 'descartada', 1000, { actor: 'ia', fromColumn: 'descobertas' });
+    expect(await appliedJobFacts(db, null)).toEqual([]);
+
+    // Aplicada e depois posta em Descartada pelo dono: segue aplicada, sem resposta e sem perda.
+    const applied = await seedJob({ column: 'descartada', appliedBy: 'humano' });
+    await event(applied, 'aplicada', 1000);
+    await event(applied, 'descartada', 2000, { fromColumn: 'aplicada' });
+    expect(await appliedJobFacts(db, null)).toEqual([
+      expect.objectContaining({ jobId: applied, appliedAt: 1000, firstResponseAt: null, interviewAt: null, offerAt: null, lostAt: null }),
+    ]);
+  });
+
   it('uses a fixed number of queries', async () => {
     let queries = 0;
     const logged = await createTestDb({ logQuery: () => void (queries += 1) });

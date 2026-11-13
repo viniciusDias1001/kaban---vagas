@@ -8,5 +8,6 @@ export const COLUMN_COLOR: Record<Column, string> = {
   entrevista: 'var(--col-entrevista)',
   oferta: 'var(--col-oferta)',
   perdida: 'var(--col-perdida)',
+  descartada: 'var(--col-descartada)',
   arquivada: 'var(--col-arquivada)',
 };

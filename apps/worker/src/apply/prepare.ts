@@ -10,7 +10,7 @@ import { MAX_DESCRIPTION_CHARS, type DescriptionFetcher } from '@kv/connectors';
 import { APPLY_DEFAULTS, APPLY_TIMING, type ApplyConfig, type CandidateProfile, type ResumeLang } from '@kv/shared';
 import type { Billing } from '../ai/billing';
 import type { ApplyAi } from './ai-calls';
-import { moveCardByAi } from './board';
+import { discardSkipped, moveCardByAi } from './board';
 import { DAY_MS } from './day';
 import { BEFORE_CLICK, cancelRequested, requeueTomorrow, settle, stopForOwner, BUDGET_DETAIL } from './outcome';
 import { applicationResume } from './resume';
@@ -147,7 +147,11 @@ export async function prepare(c: PrepareContext, row: ApplicationRow): Promise<P
   }
   const decision = decideGate({ blockedBy, gate, minScore: cfg.minScore, manual });
   if (!decision.pass) {
-    await settle(db, row.id, { status: 'skipped', reason: decision.reason, detail: decision.detail, set: { gateScore: gate?.score ?? null } }, c.now());
+    const status = await settle(
+      db, row.id, { status: 'skipped', reason: decision.reason, detail: decision.detail, set: { gateScore: gate?.score ?? null } }, c.now(),
+    );
+    // Abaixo da nota ou inelegível: o card vai para Descartada (bloqueada fica onde está).
+    if (status === 'skipped') await discardSkipped(db, row.jobId, decision.reason, c.now());
     return null;
   }
   if (await cancelRequested(db, row.id)) return cancel();

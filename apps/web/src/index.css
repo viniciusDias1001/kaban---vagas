@@ -61,6 +61,8 @@
   --col-entrevista: #f6c05c;
   --col-oferta: #4fd6a0;
   --col-perdida: #d9858f;
+  /* Cinza-violeta, "posta de lado": nem o vermelho apagado de Perdida nem o cinza-azulado de Arquivada. */
+  --col-descartada: #ac98c6;
   --col-arquivada: #8d97b5;
 }
 

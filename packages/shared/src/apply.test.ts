@@ -81,6 +81,12 @@ describe('already applied', () => {
     expect(COLUMNS.indexOf('perdida')).toBe(COLUMNS.indexOf('oferta') + 1);
     expect(COLUMN_LABELS.perdida).toBe('Perdida');
   });
+  it('has Descartada between Perdida and Arquivada, and it is not an applied column', () => {
+    expect(COLUMNS).toEqual(['descobertas', 'selecionadas', 'aplicada', 'entrevista', 'oferta', 'perdida', 'descartada', 'arquivada']);
+    expect(COLUMN_LABELS.descartada).toBe('Descartada');
+    expect(isAppliedOrLater('descartada')).toBe(false);
+    expect(isAppliedOrLater('arquivada')).toBe(true);
+  });
   it('describes the application of a job and why it cannot be applied to', () => {
     const dto: JobApplicationDto = { application: null, site: null, canApply: false, cannotApplyReason: 'unsupported_site' };
     expectTypeOf(dto.cannotApplyReason).toEqualTypeOf<CannotApplyReason | null>();

@@ -99,6 +99,13 @@ describe('stored messages', () => {
     ]);
   });
 
+  it('leaves a card set aside in Descartada out of the match pool', async () => {
+    const discarded = await seedJob({ company: 'Acme', column: 'descartada' });
+    await db.insert(applications).values({ jobId: discarded.id, site: 'fake', trigger: 'auto', mode: 'real', status: 'skipped', reason: 'below_min_score', createdAt: 1 });
+    await db.insert(jobEvents).values({ jobId: discarded.id, fromColumn: 'descobertas', toColumn: 'descartada', actor: 'ia', createdAt: 2 });
+    expect(await mailMatchPool(db)).toEqual([]);
+  });
+
   it('hands out work oldest first and skips settled messages', async () => {
     await insertMailMessage(db, msg({ messageId: 'a@x', sentAt: 300 }), 1);
     const b = (await insertMailMessage(db, msg({ messageId: 'b@x', sentAt: 100 }), 1))!;

@@ -20,7 +20,7 @@ import { collectProblems } from './problems';
 const JOB_TITLE = 'Fake React Developer';
 /** Chave fictícia: nunca é usada em chamada nenhuma (o provedor escolhido no teste é o falso). */
 const E2E_KEY = 'sk-e2e-chave-ficticia-1234';
-const COLUMNS = ['descobertas', 'selecionadas', 'aplicada', 'entrevista', 'oferta', 'perdida', 'arquivada'];
+const COLUMNS = ['descobertas', 'selecionadas', 'aplicada', 'entrevista', 'oferta', 'perdida', 'descartada', 'arquivada'];
 const REVISED_SUMMARY = 'Resumo revisado por mim, sem números novos.';
 
 /** Só grava screenshots quando E2E_SCREENSHOT_DIR está definida (inspeção visual manual). */
