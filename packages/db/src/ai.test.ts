@@ -195,6 +195,6 @@ describe('usage', () => {
     expect(await aiSpentSince(db, 0)).toBeCloseTo(1.75);
     expect(await aiSpentSince(db, 200)).toBeCloseTo(1.5);
     expect(await aiSpentSince(db, 301)).toBe(0);
-    expect(await usageByLayer(db, 200)).toEqual({ profile: 0, tier1: 0.5, tier2: 0, tier3: 1, apply: 0, test: 0 });
+    expect(await usageByLayer(db, 200)).toEqual({ profile: 0, tier1: 0.5, tier2: 0, tier3: 1, apply: 0, email: 0, test: 0 });
   });
 });

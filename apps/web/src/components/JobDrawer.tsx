@@ -22,7 +22,7 @@ import { Segmented } from './ui/segmented';
 import { Sheet, SheetClose, SheetContent, SheetTitle } from './ui/sheet';
 import { Skeleton } from './ui/skeleton';
 
-const ACTOR_LABEL = { ia: 'IA', humano: 'Você', sistema: 'Sistema' } as const;
+const ACTOR_LABEL = { ia: 'IA', humano: 'Você', sistema: 'Sistema', email: 'E-mail' } as const;
 const EYEBROW = 'text-[11px] font-semibold uppercase tracking-[0.08em] text-faint';
 /** A partir de quanto do limite o contador de caracteres das notas aparece. */
 const NOTES_COUNTER_FROM = Math.floor(LIMITS.notes * 0.9);
