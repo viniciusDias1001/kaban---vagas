@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { ArrowUpRight, CloudOff, Globe, Info, MapPin, RotateCw, X } from 'lucide-react';
 import { motion } from 'motion/react';
-import { useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useId, useState, type CSSProperties, type ReactNode } from 'react';
 import { AI_TIER2_DESCRIPTION_CHARS, COLUMNS, COLUMN_LABELS, LIMITS, type Column, type JobDto } from '@kv/shared/client';
 import { ageLabel } from '../age';
 import { api } from '../api';
@@ -117,16 +117,7 @@ function MoveTo({ job, index }: { job: JobDto; index: number }) {
 
 function Notes({ jobId, serverNotes, index }: { jobId: number; serverNotes: string; index: number }) {
   const notes = useJobNotes(jobId, serverNotes);
-  const field = useRef<HTMLTextAreaElement>(null);
   const errorId = useId();
-
-  // O campo começa baixo e cresce com o texto (até um teto; depois rola).
-  useLayoutEffect(() => {
-    const el = field.current;
-    if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = `${el.scrollHeight + 2}px`;
-  }, [notes.text, notes.seeded]);
 
   const failed = notes.status === 'error';
   const status = notes.status === 'saving' ? 'Salvando…' : failed ? 'Não salvo' : notes.status === 'saved' && !notes.dirty ? 'Salvo' : '';
@@ -139,7 +130,6 @@ function Notes({ jobId, serverNotes, index }: { jobId: number; serverNotes: stri
     >
       {notes.seeded && (
         <Textarea
-          ref={field}
           value={notes.text}
           onChange={(e) => notes.edit(e.target.value)}
           onBlur={notes.flush}
@@ -149,7 +139,8 @@ function Notes({ jobId, serverNotes, index }: { jobId: number; serverNotes: stri
           aria-label="Notas"
           aria-invalid={failed || undefined}
           aria-describedby={failed ? errorId : undefined}
-          className="max-h-80 min-h-[4.25rem] resize-none overflow-y-auto"
+          // Começa baixo e cresce com o texto até o teto; depois rola.
+          className="max-h-80 min-h-[4.25rem] overflow-y-auto"
         />
       )}
       {length >= NOTES_COUNTER_FROM && (
