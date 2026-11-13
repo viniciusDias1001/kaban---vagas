@@ -24,7 +24,7 @@ export const ERROR = 'text-xs leading-snug text-bad';
 export { CARD, EYEBROW };
 
 const NONE = 'none';
-const LAYER_LABELS: Record<AiLayer, string> = {
+export const LAYER_LABELS: Record<AiLayer, string> = {
   profile: 'Perfil',
   tier1: 'Camada 1: notas',
   tier2: 'Camada 2: análises',
