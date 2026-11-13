@@ -1,6 +1,6 @@
 import { asc, eq, inArray, sql } from 'drizzle-orm';
 import type { AnswerScope, ApplyAnswerDto } from '@kv/shared';
-import { normalizeQuestionText } from '@kv/shared';
+import { normalizeQuestionText, sameOptionSet } from '@kv/shared';
 import type { Db } from './client';
 import { applyAnswers } from './schema';
 
@@ -61,25 +61,31 @@ export async function saveApplyAnswer(
     updatedAt: now,
   };
   if (input.id !== undefined) {
-    const [row] = await db.update(applyAnswers).set(fields).where(eq(applyAnswers.id, input.id)).returning();
-    if (!row) throw new Error(`Resposta ${input.id} não existe.`);
-    return row;
+    return db.transaction(async (tx) => {
+      const [old] = await tx.select().from(applyAnswers).where(eq(applyAnswers.id, input.id!)).for('update');
+      if (!old) throw new Error(`Resposta ${input.id} não existe.`);
+      /** Variações confirmadas valem para a resposta como estava; mudando o que ela diz ou onde vale, o dono confirma de novo. */
+      const meaningChanged =
+        old.answer !== fields.answer || old.kind !== fields.kind || old.scope !== fields.scope ||
+        old.scopeValue !== fields.scopeValue || old.country !== fields.country;
+      const [row] = await tx
+        .update(applyAnswers)
+        .set(meaningChanged ? { ...fields, aliases: [] } : fields)
+        .where(eq(applyAnswers.id, input.id!))
+        .returning();
+      return row!;
+    });
   }
   const [row] = await db.insert(applyAnswers).values({ ...fields, createdAt: now }).returning();
   return row!;
 }
-
-const sameOptions = (a: string[], b: string[]): boolean => {
-  const key = (xs: string[]) => JSON.stringify(xs.map(normalizeQuestionText).sort());
-  return key(a) === key(b);
-};
 
 /** O dono confirmou que este texto (com este conjunto de opções) pede a mesma coisa. Repetir substitui a variação anterior. */
 export async function confirmAlias(db: Db, id: number, alias: Alias, now: number = Date.now()): Promise<void> {
   await db.transaction(async (tx) => {
     const [row] = await tx.select().from(applyAnswers).where(eq(applyAnswers.id, id)).for('update');
     if (!row) return;
-    const kept = row.aliases.filter((x) => !(x.normalized === alias.normalized && sameOptions(x.options, alias.options)));
+    const kept = row.aliases.filter((x) => !(x.normalized === alias.normalized && sameOptionSet(x.options, alias.options)));
     await tx.update(applyAnswers).set({ aliases: [...kept, alias], updatedAt: now }).where(eq(applyAnswers.id, id));
   });
 }

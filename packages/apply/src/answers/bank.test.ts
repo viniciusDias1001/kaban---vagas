@@ -51,4 +51,35 @@ describe('answer bank matching', () => {
     expect(optionFor('não', ['Sim', 'Não'])).toBe('Não');
     expect(optionFor('Não', ['Yes', 'No'])).toBeNull();
   });
+
+  it('a confirmed variation of a text question returns the current answer', () => {
+    const saved = a('Salary?', 'R$ 25.000', { aliases: [{ normalized: 'expected pay', options: [], value: 'R$ 20.000' }] });
+    expect(exactBankMatch(q('Expected pay?'), [saved], ctx)?.value).toBe('R$ 25.000');
+  });
+  it('a stale list alias value that is no longer an option is not used', () => {
+    const saved = a('Precisa de visto?', 'Sim', { aliases: [{ normalized: 'do you need a visa', options: ['Yes', 'No'], value: 'No' }] });
+    expect(exactBankMatch(q('Do you need a visa?', ['Yes', 'No']), [saved], ctx)?.value).toBe('No');
+  });
+  it('optionFor keeps symbols and digits and refuses ties', () => {
+    expect(optionFor('>5 years', ['<5 years', '>5 years'])).toBe('>5 years');
+    expect(optionFor('R$ 2,000', ['R$ 2.000'])).toBeNull();
+    expect(optionFor('5+ years', ['5 years'])).toBeNull();
+    expect(optionFor('C++', ['C'])).toBeNull();
+    expect(optionFor('nao', ['Sim', 'Não'])).toBe('Não');
+    expect(optionFor('  NÃO ', ['Sim', 'Não'])).toBe('Não');
+    expect(optionFor('Não', ['Não', 'nao'])).toBeNull();
+  });
+  it('a more specific scope beats the country', () => {
+    const always = a('Visto?', 'Sim', { country: 'BR' });
+    const job = a('Visto?', 'Não', { scope: 'job', scopeValue: '1', country: null });
+    expect(exactBankMatch(q('Visto?'), [always, job], ctx)?.value).toBe('Não');
+    const alwaysNull = a('Visto?', 'Talvez', { country: null });
+    expect(exactBankMatch(q('Visto?'), [alwaysNull, always], ctx)?.value).toBe('Sim');
+  });
+  it('empty question text and empty company scope never match', () => {
+    expect(exactBankMatch(q('?'), [a('!!', 'x')], ctx)).toBeNull();
+    const row = a('Por quê?', 'x', { scope: 'company', scopeValue: '' });
+    expect(exactBankMatch(q('Por quê?'), [row], { ...ctx, company: '' })).toBeNull();
+    expect(exactBankMatch(q('Por quê?'), [row], ctx)).toBeNull();
+  });
 });

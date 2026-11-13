@@ -1,4 +1,4 @@
-import { normalizeQuestionText, type Question } from '@kv/shared';
+import { normalizeQuestionText, optionKey, sameOptionSet, type Question } from '@kv/shared';
 import type { ApplyAnswerRow } from '@kv/db';
 
 export interface BankContext {
@@ -11,7 +11,10 @@ export interface BankContext {
 const SCOPE_RANK = { job: 0, company: 1, always: 2 } as const;
 
 function inScope(row: ApplyAnswerRow, ctx: BankContext): boolean {
-  if (row.scope === 'company') return normalizeQuestionText(row.scopeValue ?? '') === normalizeQuestionText(ctx.company);
+  if (row.scope === 'company') {
+    const wanted = normalizeQuestionText(row.scopeValue ?? '');
+    return wanted !== '' && wanted === normalizeQuestionText(ctx.company);
+  }
   if (row.scope === 'job') return row.scopeValue === String(ctx.jobId);
   return true;
 }
@@ -24,32 +27,28 @@ export function bankCandidates(bank: ApplyAnswerRow[], ctx: BankContext): ApplyA
   );
 }
 
-/** A opção cujo texto normalizado é igual ao da resposta salva, ou null. Nunca traduz. */
+/** A única opção com a mesma chave estrita da resposta salva (símbolos e dígitos contam), ou null. Nunca traduz. */
 export function optionFor(saved: string, options: string[]): string | null {
-  const target = normalizeQuestionText(saved);
+  const target = optionKey(saved);
   if (target === '') return null;
-  return options.find((o) => normalizeQuestionText(o) === target) ?? null;
-}
-
-function sameOptionSet(a: string[], b: string[]): boolean {
-  const key = (xs: string[]) => JSON.stringify(xs.map(normalizeQuestionText).sort());
-  return key(a) === key(b);
+  const hits = options.filter((o) => optionKey(o) === target);
+  return hits.length === 1 ? hits[0]! : null;
 }
 
 function valueFor(row: ApplyAnswerRow, question: Question): string | null {
   const normalized = normalizeQuestionText(question.label);
+  if (normalized === '') return null;
   const isList = question.options.length > 0;
   if (row.normalized === normalized) return isList ? optionFor(row.answer, question.options) : row.answer;
   const alias = row.aliases.find((x) => x.normalized === normalized && sameOptionSet(x.options, question.options));
   if (!alias) return null;
-  if (isList) return optionFor(alias.value, question.options);
-  return alias.value.trim() !== '' ? alias.value : row.answer;
+  return isList ? optionFor(alias.value, question.options) : row.answer;
 }
 
 /**
  * Casamento que vale sem confirmação: o texto normalizado da pergunta é igual ao da resposta salva, ou a uma variação
  * confirmada com o mesmo conjunto de opções. Em pergunta de lista, a resposta precisa ser uma das opções.
- * Entre várias, vence o alcance mais específico e, depois, a resposta do país da vaga.
+ * Entre várias, vence o alcance mais específico (job, company, always); no mesmo alcance, a resposta do país da vaga; depois o menor id.
  */
 export function exactBankMatch(
   question: Question, bank: ApplyAnswerRow[], ctx: BankContext,
@@ -63,8 +62,8 @@ export function exactBankMatch(
   const countryRank = (r: ApplyAnswerRow) => (r.country !== null ? 0 : 1);
   hits.sort(
     (x, y) =>
-      countryRank(x.answer) - countryRank(y.answer) ||
       SCOPE_RANK[x.answer.scope] - SCOPE_RANK[y.answer.scope] ||
+      countryRank(x.answer) - countryRank(y.answer) ||
       x.answer.id - y.answer.id,
   );
   return hits[0]!;

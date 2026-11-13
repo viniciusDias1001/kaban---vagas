@@ -122,3 +122,14 @@ export interface ApplyAnswerDto {
   scope: AnswerScope; scopeValue: string | null; country: string | null;
   aliases: { normalized: string; options: string[]; value: string }[]; usedCount: number; updatedAt: number;
 }
+
+/** Chave estrita de uma opção de lista: sem espaços sobrando, minúscula, sem acentos; dígitos, pontuação e símbolos ficam. */
+export function optionKey(text: string): string {
+  return text.normalize('NFD').replace(/\p{M}+/gu, '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+/** Mesmo conjunto de opções (ordem não importa), comparado pela chave estrita. */
+export function sameOptionSet(a: string[], b: string[]): boolean {
+  const key = (xs: string[]) => JSON.stringify(xs.map(optionKey).sort());
+  return key(a) === key(b);
+}

@@ -62,6 +62,18 @@ describe('answer bank (db)', () => {
     expect(row!.updatedAt).toBe(13);
   });
 
+  it('clears variations when the answer changes and keeps them on a question text edit', async () => {
+    const saved = await saveApplyAnswer(db, { ...base, question: 'Visto?', answer: 'Não' });
+    await confirmAlias(db, saved.id, { normalized: 'visa', options: ['Yes', 'No'], value: 'No' });
+    const renamed = await saveApplyAnswer(db, { ...base, id: saved.id, question: 'Precisa de visto?', answer: 'Não' });
+    expect(renamed.aliases).toHaveLength(1);
+    const changed = await saveApplyAnswer(db, { ...base, id: saved.id, question: 'Precisa de visto?', answer: 'Sim' });
+    expect(changed.aliases).toEqual([]);
+    await confirmAlias(db, saved.id, { normalized: 'visa', options: [], value: 'x' });
+    const moved = await saveApplyAnswer(db, { ...base, id: saved.id, question: 'Precisa de visto?', answer: 'Sim', country: 'BR' });
+    expect(moved.aliases).toEqual([]);
+  });
+
   it('counts uses and deletes', async () => {
     const a = await saveApplyAnswer(db, { ...base, question: 'A', answer: '1' });
     const b = await saveApplyAnswer(db, { ...base, question: 'B', answer: '2' });
