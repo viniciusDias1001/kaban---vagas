@@ -70,7 +70,8 @@ function Block({ title, testId, empty, emptyTestId, aside, children, index, clas
   title: string;
   testId?: string;
   empty: string | null;
-  emptyTestId: string;
+  /** Só nos blocos que podem ficar vazios sozinhos. */
+  emptyTestId?: string;
   aside?: ReactNode;
   children?: ReactNode;
   /** Posição na página, para a entrada em sequência. */
@@ -119,12 +120,6 @@ function Figure({ label, children, testId }: { label: string; children: ReactNod
 }
 
 function Kpis({ dto }: { dto: DashboardDto }) {
-  const empty = emptyReason('kpis', dto);
-  if (empty) {
-    return (
-      <Block title="Números do período" empty={empty} emptyTestId="painel-empty-kpis" index={0} />
-    );
-  }
   return (
     <motion.div
       initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={spring}
@@ -170,7 +165,7 @@ function Breakdowns({ dto, sources }: { dto: DashboardDto; sources: { id: string
   return (
     <Block
       title="Taxa de resposta e de entrevista" testId="painel-breakdown" index={2}
-      empty={emptyReason('breakdowns', dto)} emptyTestId="painel-empty-breakdowns"
+      empty={null}
       aside={(
         <div data-testid="painel-breakdown-dimension" className="max-w-full">
           <span id={labelId} className="sr-only">Separar por</span>
@@ -295,13 +290,21 @@ function Email({ dto }: { dto: DashboardDto }) {
 }
 
 function Blocks({ dto, sources }: { dto: DashboardDto; sources: { id: string; name: string }[] }) {
+  // Sem candidaturas no período, números, funil e taxas dizem a mesma coisa: um cartão só, com a frase uma vez.
+  const noApplications = emptyReason('kpis', dto);
   return (
     <>
-      <Kpis dto={dto} />
-      <Block title="Funil" testId="painel-funnel" index={1} empty={emptyReason('funnel', dto)} emptyTestId="painel-empty-funnel">
-        <FunnelChart funnel={dto.funnel} />
-      </Block>
-      <Breakdowns dto={dto} sources={sources} />
+      {noApplications ? (
+        <Block title="Números do período" empty={noApplications} emptyTestId="painel-empty-kpis" index={0} />
+      ) : (
+        <>
+          <Kpis dto={dto} />
+          <Block title="Funil" testId="painel-funnel" index={1} empty={null}>
+            <FunnelChart funnel={dto.funnel} />
+          </Block>
+          <Breakdowns dto={dto} sources={sources} />
+        </>
+      )}
       <div className="grid items-start gap-5 lg:grid-cols-2">
         <Timing dto={dto} />
         <Blockers dto={dto} />
