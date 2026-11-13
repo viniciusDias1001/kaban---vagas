@@ -1,7 +1,7 @@
 import {
   COLUMN_LABELS, KNOWN_FACT_LABELS, type AlertDto, type AlertKind, type EmailKind, type JobMailMarks, type ReplyState,
 } from '@kv/shared/client';
-import { EMAIL_KIND_LABELS, type JobEmailsDto, type MailMessageDto, type MailReplyDto } from '@kv/shared/client';
+import { DRAFT_PLACEHOLDER, EMAIL_KIND_LABELS, type JobEmailsDto, type MailMessageDto, type MailReplyDto } from '@kv/shared/client';
 
 /** Funções puras do e-mail (sem React): textos dos alertas, rótulos e a conferência da senha de app. */
 
@@ -150,4 +150,27 @@ export function emailConversation({ messages, replies }: JobEmailsDto): Conversa
 export function historyMailLine(mail: { kind: EmailKind | null; subject: string }): string {
   const subject = mail.subject.trim() || '(sem assunto)';
   return mail.kind ? `E-mail — ${EMAIL_KIND_LABELS[mail.kind]}: ${subject}` : `E-mail — ${subject}`;
+}
+
+/** O que a caixa de um rascunho permite agora: o texto da caixa é julgado contra o texto guardado no servidor. */
+export interface DraftGate {
+  /** Ainda há um trecho `[[...]]` para preencher. */
+  gap: boolean;
+  /** O texto da caixa não é o guardado: falta "Salvar edição". */
+  unsaved: boolean;
+  empty: boolean;
+  /** Só quando a caixa mostra exatamente o texto guardado, sem lacuna: o que se vê é o que sai. */
+  canApprove: boolean;
+  /** Por que "Aprovar e enviar" está desligado, ou null. */
+  hint: string | null;
+}
+
+export function draftGate(stored: string, text: string): DraftGate {
+  const gap = DRAFT_PLACEHOLDER.test(text);
+  const unsaved = text !== stored;
+  const empty = text.trim() === '';
+  const hint = empty
+    ? 'Escreva o texto da resposta.'
+    : gap ? 'Preencha os trechos entre colchetes duplos.' : unsaved ? 'Salve a edição antes de enviar.' : null;
+  return { gap, unsaved, empty, canApprove: !gap && !unsaved && !empty, hint };
 }
