@@ -46,7 +46,7 @@ export interface Transition {
   set?: Partial<
     Pick<
       ApplicationRow,
-      | 'mode' | 'gateScore' | 'resumeLang' | 'resumeFileName' | 'resumePdf' | 'answers' | 'pendingQuestions' | 'confirmation'
+      | 'mode' | 'gateScore' | 'finishedAt' | 'resumeLang' | 'resumeFileName' | 'resumePdf' | 'answers' | 'pendingQuestions' | 'confirmation'
       | 'contactEmail' | 'shots' | 'attempts' | 'cancelRequested' | 'waitingGate' | 'runAfter' | 'viewedAt' | 'formOpenedAt'
     >
   >;
@@ -97,7 +97,7 @@ export async function nextQueuedApplication(
 ): Promise<ApplicationRow | null> {
   const conditions = [
     eq(applications.status, 'queued'),
-    sql`(${applications.runAfter} is null or ${applications.runAfter} <= ${now})`,
+    sql`(${applications.runAfter} is null or ${applications.runAfter} <= ${sql.param(now, applications.runAfter)})`,
   ];
   if (opts.excludeSites.length > 0) conditions.push(sql`${applications.site} not in ${opts.excludeSites}`);
   const [row] = await db
@@ -182,8 +182,8 @@ export async function applyCountsSince(db: Db, since: number): Promise<ApplyCoun
   const rows = await db
     .select({
       site: applications.site,
-      forms: sql<number>`count(*) filter (where ${applications.formOpenedAt} >= ${since})::int`.mapWith(Number),
-      views: sql<number>`count(*) filter (where ${applications.viewedAt} >= ${since})::int`.mapWith(Number),
+      forms: sql<number>`count(*) filter (where ${applications.formOpenedAt} >= ${sql.param(since, applications.formOpenedAt)})::int`.mapWith(Number),
+      views: sql<number>`count(*) filter (where ${applications.viewedAt} >= ${sql.param(since, applications.viewedAt)})::int`.mapWith(Number),
     })
     .from(applications)
     .groupBy(applications.site);
@@ -429,7 +429,7 @@ export async function retryApplication(db: Db, id: number, now: number = Date.no
       tx, row,
       {
         status: 'queued', message: 'O dono pediu para tentar de novo.',
-        set: { runAfter: null, attempts: 0, cancelRequested: false, waitingGate: null },
+        set: { runAfter: null, attempts: 0, cancelRequested: false, waitingGate: null, finishedAt: null },
       },
       now,
     );
@@ -487,7 +487,8 @@ export async function requeueQuestionWaits(db: Db, exceptId: number, now: number
     .from(applications)
     .where(and(eq(applications.status, 'needs_human'), eq(applications.reason, 'question'), sql`${applications.id} <> ${exceptId}`))
     .orderBy(asc(applications.id))
-    .for('update');
+    // Uma linha que outro PUT de respostas já travou é recolocada na fila por ele: pular evita o impasse entre os dois.
+    .for('update', { skipLocked: true });
   for (const row of rows) {
     await writeTransition(db, row, { status: 'queued', message: 'Uma resposta nova foi salva: voltou para a fila.', set: { runAfter: null } }, now);
   }

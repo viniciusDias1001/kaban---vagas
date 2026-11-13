@@ -1,7 +1,7 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import {
   ACTIVE_APPLICATION_STATUSES, APPLY_DEFAULTS, APPLY_TIMING, applyAvailability, isActiveApplication,
-  normalizeQuestionText, PendingAnswersBodySchema, ApplyAnswerInputSchema, type AnswerValue, type ApplicationStatus,
+  normalizeQuestionText, bankBoolean, bankList, bankText, SHOT_KINDS, PendingAnswersBodySchema, ApplyAnswerInputSchema, type AnswerValue, type ApplicationStatus,
   type PendingQuestion,
 } from './index';
 
@@ -40,6 +40,31 @@ describe('apply constants', () => {
     expect(APPLY_DEFAULTS.minScore).toBe(70);
     expect(APPLY_DEFAULTS.dailyCaps).toMatchObject({ linkedin: 10, greenhouse: 15, lever: 15, total: 30, linkedinViews: 30 });
     expect(APPLY_TIMING.humanWaitMs).toBe(600_000);
+  });
+});
+
+describe('saved answer encoding', () => {
+  it('writes values as text', () => {
+    expect(bankText(true)).toBe('Sim');
+    expect(bankText(false)).toBe('Não');
+    expect(bankText(['A', ' B ', ''])).toBe('A\nB');
+    expect(bankText('  x ')).toBe('x');
+    expect(bankText(null)).toBe('');
+  });
+  it('reads yes and no, and nothing else', () => {
+    for (const t of ['Sim', 'yes', 'TRUE', 'Verdadeiro', 's', 'Y', '1', ' sim ']) expect(bankBoolean(t)).toBe(true);
+    for (const t of ['Não', 'nao', 'No', 'false', 'FALSO', 'n', '0']) expect(bankBoolean(t)).toBe(false);
+    for (const t of ['talvez', '', '2', 'sim e não']) expect(bankBoolean(t)).toBeNull();
+    expect(bankBoolean(bankText(true))).toBe(true);
+    expect(bankBoolean(bankText(false))).toBe(false);
+  });
+  it('reads a list one option per line', () => {
+    expect(bankList('A, B\n\n C \r\nD')).toEqual(['A, B', 'C', 'D']);
+    expect(bankList('')).toEqual([]);
+    expect(bankList(bankText(['x', 'y']))).toEqual(['x', 'y']);
+  });
+  it('lists the shot kinds', () => {
+    expect(SHOT_KINDS).toEqual(['filled', 'confirmation', 'blocked']);
   });
 });
 

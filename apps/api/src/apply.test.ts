@@ -108,6 +108,7 @@ describe('the answer bank', () => {
     await db.update(applyAnswers).set({ aliases: [{ normalized: 'quanto quer', options: [], value: '1' }, { normalized: 'outra', options: [], value: '2' }] })
       .where(eq(applyAnswers.id, saved.id));
     expect((await app.inject({ method: 'DELETE', url: `/apply/answers/${saved.id}/aliases/quanto%20quer` })).statusCode).toBe(204);
+    expect((await app.inject({ method: 'DELETE', url: '/apply/answers/9999/aliases/x' })).statusCode).toBe(404);
     expect((await db.select().from(applyAnswers).where(eq(applyAnswers.id, saved.id)))[0].aliases).toEqual([{ normalized: 'outra', options: [], value: '2' }]);
     expect((await app.inject({ method: 'DELETE', url: `/apply/answers/${saved.id}` })).statusCode).toBe(204);
     expect((await app.inject({ method: 'DELETE', url: `/apply/answers/${saved.id}` })).statusCode).toBe(404);

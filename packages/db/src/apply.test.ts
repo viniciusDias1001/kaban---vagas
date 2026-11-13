@@ -428,3 +428,30 @@ describe('answering pending questions', () => {
     expect((await db.select().from(jobs).where(eq(jobs.id, job.id)))[0]).toMatchObject({ needsHuman: false, needsHumanReason: null });
   });
 });
+
+// O PGlite aceita um número no lugar de um timestamp; o Postgres de verdade recusa ("date/time field value out of range").
+// Então o teste confere o que seria enviado ao driver: todo valor de tempo dentro de um fragmento `sql` tem de passar pelo
+// mapeamento da coluna (ISO 8601), nunca ir como número.
+describe('time parameters in raw sql fragments', () => {
+  it('sends ISO strings, not numbers, for the time parameters of applyCountsSince and nextQueuedApplication', async () => {
+    const { drizzle } = await import('drizzle-orm/pglite');
+    const { PGlite } = await import('@electric-sql/pglite');
+    const { migrate } = await import('drizzle-orm/pglite/migrator');
+    const { MIGRATIONS_FOLDER } = await import('./migrate');
+    const schema = await import('./schema');
+    const seen: unknown[][] = [];
+    const logged = drizzle(new PGlite(), { schema, logger: { logQuery: (_query, params) => void seen.push(params) } });
+    try {
+      await migrate(logged, { migrationsFolder: MIGRATIONS_FOLDER });
+      seen.length = 0;
+      await applyCountsSince(logged, 1_700_000_000_000);
+      await nextQueuedApplication(logged, { excludeSites: [] }, 1_700_000_000_000);
+      const iso = new Date(1_700_000_000_000).toISOString();
+      expect(seen[0]).toEqual([iso, iso]);
+      expect(seen[1]).toContain(iso);
+      expect(seen.flat()).not.toContain(1_700_000_000_000);
+    } finally {
+      await closeDb(logged);
+    }
+  });
+});

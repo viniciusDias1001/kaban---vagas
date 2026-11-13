@@ -110,3 +110,35 @@ describe('answer bank matching against the stored answers', () => {
     expect(exactBankMatch(q('Precisa de patrocínio de visto?', ['Sim', 'Não']), await listApplyAnswers(db), ctx)?.value).toBe('Sim');
   });
 });
+
+describe('answer bank value by question type', () => {
+  const typed = (label: string, kind: Question['kind'], options: string[] = []): Question => ({ ...q(label, options), kind });
+  it('multiselect: one option per line, in the form spelling, no duplicates', () => {
+    const question = typed('Modelos?', 'multiselect', ['Remoto', 'Híbrido', 'Presencial']);
+    expect(exactBankMatch(question, [a('Modelos?', 'presencial\nremoto\nREMOTO')], ctx)?.value).toEqual(['Presencial', 'Remoto']);
+    expect(exactBankMatch(question, [a('Modelos?', 'Remoto\nTalvez')], ctx)).toBeNull();
+    expect(exactBankMatch(question, [a('Modelos?', 'Remoto, Híbrido')], ctx)).toBeNull();
+    expect(exactBankMatch(question, [a('Modelos?', ' \n ')], ctx)).toBeNull();
+  });
+  it('multiselect through a confirmed variation', () => {
+    const saved = a('Modelos de trabalho?', 'x', {
+      aliases: [{ normalized: 'work models', options: ['Remote', 'Hybrid'], value: 'Hybrid\nRemote' }],
+    });
+    expect(exactBankMatch(typed('Work models', 'multiselect', ['Remote', 'Hybrid']), [saved], ctx)?.value).toEqual(['Hybrid', 'Remote']);
+  });
+  it('boolean without options is a real boolean; anything unreadable is no match', () => {
+    const question = typed('Autorizado?', 'boolean');
+    expect(exactBankMatch(question, [a('Autorizado?', 'Sim')], ctx)?.value).toBe(true);
+    expect(exactBankMatch(question, [a('Autorizado?', 'Não')], ctx)?.value).toBe(false);
+    expect(exactBankMatch(question, [a('Autorizado?', 'false')], ctx)?.value).toBe(false);
+    expect(exactBankMatch(question, [a('Autorizado?', 'talvez')], ctx)).toBeNull();
+    const alias = a('Tem autorização?', 'Sim', { aliases: [{ normalized: 'authorized', options: [], value: 'No' }] });
+    expect(exactBankMatch(typed('Authorized', 'boolean'), [alias], ctx)?.value).toBe(false);
+  });
+  it('a boolean rendered as a list, a select and plain text keep returning a string', () => {
+    expect(exactBankMatch(typed('Autorizado?', 'boolean', ['Sim', 'Não']), [a('Autorizado?', 'sim')], ctx)?.value).toBe('Sim');
+    expect(exactBankMatch(typed('Nível?', 'select', ['Jr', 'Sr']), [a('Nível?', 'sr')], ctx)?.value).toBe('Sr');
+    expect(exactBankMatch(typed('Anos?', 'number'), [a('Anos?', '1.5')], ctx)?.value).toBe('1.5');
+    expect(exactBankMatch(typed('Sobre?', 'longtext'), [a('Sobre?', 'um texto')], ctx)?.value).toBe('um texto');
+  });
+});

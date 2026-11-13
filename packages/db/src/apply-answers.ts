@@ -38,6 +38,11 @@ export async function ensureSeedAnswers(db: Db, now: number = Date.now()): Promi
     .onConflictDoNothing();
 }
 
+export async function applyAnswerExists(db: Db, id: number): Promise<boolean> {
+  const rows = await db.select({ id: applyAnswers.id }).from(applyAnswers).where(eq(applyAnswers.id, id));
+  return rows.length > 0;
+}
+
 export async function listApplyAnswers(db: Db): Promise<ApplyAnswerRow[]> {
   return db.select().from(applyAnswers).orderBy(asc(applyAnswers.id));
 }
