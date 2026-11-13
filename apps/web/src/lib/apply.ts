@@ -93,9 +93,9 @@ export const ANSWER_SOURCE_LABELS: Record<AnswerSource, string> = {
   rule: 'regra', bank: 'sua resposta', profile: 'do perfil', written: 'escrita pela IA', blank: 'em branco',
 };
 
-/** Intervalo de releitura: 2 s com candidatura ativa ou espera ao vivo; 15 s caso contrário. */
+/** Intervalo de releitura: 2 s com candidatura na fila, em andamento ou com espera ao vivo; 15 s caso contrário. */
 export function applyPollMs(status: ApplyStatusDto | undefined): number {
-  return status && (status.queued > 0 || status.waiting !== null) ? 2_000 : 15_000;
+  return status && (status.queued > 0 || status.running > 0 || status.waiting !== null) ? 2_000 : 15_000;
 }
 
 export const AI_ANSWER_LABELS: Record<ApplyAiAnswers, { title: string; hint: string }> = {

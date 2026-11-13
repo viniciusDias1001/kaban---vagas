@@ -15,7 +15,7 @@ const items = [
 ];
 const idle: ApplyStatusDto = {
   available: true, unavailableReason: null, enabled: true, withinWindow: true, sites: [], totalToday: 0, totalCap: 30,
-  queued: 0, needsHuman: 0, waiting: null,
+  queued: 0, needsHuman: 0, running: 0, waiting: null,
 };
 
 describe('filters', () => {
@@ -85,6 +85,10 @@ describe('applyPollMs', () => {
     expect(applyPollMs({ ...idle, waiting: { applicationId: 1, jobId: 1, gate: 'captcha' } })).toBe(2_000);
     expect(applyPollMs(idle)).toBe(15_000);
     expect(applyPollMs(undefined)).toBe(15_000);
+  });
+
+  it('polls fast while an application is running', () => {
+    expect(applyPollMs({ ...idle, running: 1 })).toBe(2_000);
   });
 });
 
