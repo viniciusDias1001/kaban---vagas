@@ -2,7 +2,9 @@ import { useQuery } from '@tanstack/react-query';
 import { ArrowUpRight, CloudOff, Globe, Info, MapPin, RotateCw, X } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useId, useState, type CSSProperties, type ReactNode } from 'react';
-import { AI_TIER2_DESCRIPTION_CHARS, COLUMNS, COLUMN_LABELS, LIMITS, type Column, type JobDto } from '@kv/shared/client';
+import {
+  AI_TIER2_DESCRIPTION_CHARS, COLUMNS, COLUMN_LABELS, EMAIL_KIND_LABELS, LIMITS, type Column, type JobDto, type JobEventDto,
+} from '@kv/shared/client';
 import { ageLabel } from '../age';
 import { api } from '../api';
 import { drawerTitle } from '../lib/ai';
@@ -14,6 +16,7 @@ import { useJobNotes } from '../useJobNotes';
 import { useMoveJob } from '../useMoveJob';
 import { JobAiSection } from './JobAiSection';
 import { JobApplicationSection } from './JobApplicationSection';
+import { JobEmailSection } from './JobEmailSection';
 import { SourceMark, sourceInfo } from './SourceMark';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
@@ -26,6 +29,12 @@ const ACTOR_LABEL = { ia: 'IA', humano: 'Você', sistema: 'Sistema', email: 'E-m
 const EYEBROW = 'text-[11px] font-semibold uppercase tracking-[0.08em] text-faint';
 /** A partir de quanto do limite o contador de caracteres das notas aparece. */
 const NOTES_COUNTER_FROM = Math.floor(LIMITS.notes * 0.9);
+
+/** O e-mail que moveu o card, numa linha: "E-mail — Reprovação: Sua candidatura na Acme". */
+function mailLine(mail: NonNullable<JobEventDto['mail']>): string {
+  const subject = mail.subject.trim() || '(sem assunto)';
+  return mail.kind ? `E-mail — ${EMAIL_KIND_LABELS[mail.kind]}: ${subject}` : `E-mail — ${subject}`;
+}
 
 function CloseButton() {
   return (
@@ -296,6 +305,9 @@ function DrawerContent({ id, onOpenSettings }: { id: number; onOpenSettings: () 
         {/* Some quando a função está desligada e a vaga não tem candidatura: o painel fica como sempre foi. */}
         <JobApplicationSection job={job} index={order++} />
 
+        {/* Some quando a vaga não tem e-mail. */}
+        <JobEmailSection job={job} index={order++} />
+
         {hasStacks && (
           <Section title="Stacks" index={order++}>
             <ul aria-label="Stacks da vaga" className="flex flex-wrap gap-1.5">
@@ -322,9 +334,16 @@ function DrawerContent({ id, onOpenSettings }: { id: number; onOpenSettings: () 
                     {e.fromColumn ? `${COLUMN_LABELS[e.fromColumn]} → ` : ''}
                     {COLUMN_LABELS[e.toColumn]}
                   </p>
-                  <p className="text-xs tabular-nums text-muted">
-                    {new Date(e.createdAt).toLocaleString('pt-BR')} — {ACTOR_LABEL[e.actor]}
-                  </p>
+                  {e.actor === 'email' && e.mail ? (
+                    <>
+                      <p className="text-xs tabular-nums text-muted">{new Date(e.createdAt).toLocaleString('pt-BR')}</p>
+                      <p data-testid={`history-mail-${e.id}`} className="break-words text-[13px] leading-snug text-ink-2">{mailLine(e.mail)}</p>
+                    </>
+                  ) : (
+                    <p className="text-xs tabular-nums text-muted">
+                      {new Date(e.createdAt).toLocaleString('pt-BR')} — {ACTOR_LABEL[e.actor]}
+                    </p>
+                  )}
                 </div>
               </li>
             ))}
