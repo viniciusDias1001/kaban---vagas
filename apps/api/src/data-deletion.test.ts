@@ -6,8 +6,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { resolveTailored } from '@kv/ai';
 import { SAMPLE_PROFILE } from '@kv/ai/testing';
 import {
-  aiKeys, aiTasks, aiUsage, candidateProfiles, closeDb, enqueueAiTask, jobAi, jobs, recordUsage, resumes, saveProfile, tailoredResumes,
-  type Db,
+  aiKeys, aiTasks, aiUsage, alerts, appSecrets, candidateProfiles, closeDb, enqueueAiTask, jobAi, jobEvents, jobs, mailAccount, mailIgnored,
+  mailMessages, mailReplies, recordUsage, resumes, saveProfile, tailoredResumes, type Db,
 } from '@kv/db';
 import { createTestDb, resetTestDb } from '@kv/db/testing';
 import type { ResumeLang } from '@kv/shared';
@@ -165,6 +165,38 @@ describe('DELETE /ai/data', () => {
       spy.mockRestore();
       await rm(dataDir, { recursive: true, force: true });
     }
+  });
+
+  it('removes the stored mail, replies, ignored mail and alerts; keeps the mailbox, its password and the card history', async () => {
+    const { br } = await seedEverything();
+    await db.insert(mailAccount).values({ id: 1, address: 'maria@example.com', connectedAt: NOW });
+    await db.insert(appSecrets).values({ name: 'mail_password', sealed: Buffer.from('opaco'), updatedAt: NOW });
+    const [mail] = await db
+      .insert(mailMessages)
+      .values({
+        messageId: '<convite@acme.example>', threadKey: '<convite@acme.example>', direction: 'in', fromAddress: 'rh@acme.example',
+        fromName: 'RH Acme', toAddress: 'maria@example.com', subject: 'Convite', body: 'Olá Maria', sentAt: NOW, createdAt: NOW,
+        kind: 'entrevista', jobId: br.id,
+      })
+      .returning();
+    await db.insert(mailReplies).values({
+      messageId: mail.id, origin: 'ai', toAddress: 'rh@acme.example', subject: 'Re: Convite', body: 'Obrigada', state: 'rascunho', createdAt: NOW,
+    });
+    await db.insert(mailIgnored).values({
+      messageId: '<news@globex.example>', uid: 9, fromAddress: 'news@globex.example', fromName: 'Globex', subject: 'Novidades', company: 'Globex',
+      sentAt: NOW, createdAt: NOW,
+    });
+    await db.insert(alerts).values([
+      { kind: 'interview', jobId: br.id, mailMessageId: mail.id, createdAt: NOW },
+      { kind: 'mailbox_error', payload: { reason: 'Senha recusada' }, createdAt: NOW },
+    ]);
+    await db.insert(jobEvents).values({ jobId: br.id, fromColumn: 'aplicada', toColumn: 'entrevista', actor: 'email', mailMessageId: mail.id, createdAt: NOW });
+
+    expect((await del('/ai/data')).statusCode).toBe(204);
+    for (const table of [mailMessages, mailReplies, mailIgnored, alerts]) expect(await db.select().from(table)).toEqual([]);
+    expect(await db.select().from(mailAccount)).toHaveLength(1);
+    expect(await db.select().from(appSecrets)).toHaveLength(1);
+    expect(await db.select().from(jobEvents)).toEqual([expect.objectContaining({ actor: 'email', mailMessageId: null })]);
   });
 
   it('is behind the origin guard and is idempotent', async () => {
