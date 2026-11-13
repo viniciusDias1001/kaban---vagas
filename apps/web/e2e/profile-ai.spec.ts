@@ -156,6 +156,12 @@ test('settings from the screen, write-only key, resume upload, score, analysis, 
   await expect(editor.getByLabel('Nome')).toHaveValue('Maria Exemplo da Silva');
   await expect(page.getByTestId('profile-summary-pt-BR')).toHaveValue(/Pessoa fictícia para testes/);
   await expect(page.getByTestId('profile-origin-pt-BR')).toContainText('extraído');
+  await editor.getByLabel('Título profissional').fill('Desenvolvedora Front-end');
+  await editor.getByLabel('Grupo da habilidade 1').fill('Front-end');
+  await page.getByTestId('profile-save-pt-BR').click();
+  await expect(page.getByTestId('profile-origin-pt-BR')).toContainText('editado');
+  await expect(editor.getByLabel('Título profissional')).toHaveValue('Desenvolvedora Front-end');
+  await expect(page.getByTestId('profile-save-pt-BR')).toBeDisabled(); // salvo: nada pendente
   await snapshot(page, 'ai-profile.png');
 
   // --- Quadro: nota e idioma no card, sem nenhuma ação ---------------------------------------------

@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { EXPERIENCE_SECTIONS } from '@kv/shared/client';
 import { ProfileWireSchema, VIOLATION_CODES, withProfileDefaults, type CandidateProfile, type AiTaskDto, type JobAiSummaryDto, type Violation, type ViolationCode } from '@kv/shared';
 import {
   VIOLATION_LABELS, blankItem, cardTitle, drawerTitle, editableProfile, formatUsd, isPending, languageBadge, layerMessage, parsePdfFailure, pdfBlockers,
-  pollMs, profileDirty, rebaseDraft, resumeFileProblem, retryNote, scoreTone, scoringPauseText, sortByScore, taskErrorText, toScoreMap, violationPlace, violationView,
+  pollMs, profileDirty, rebaseDraft, resumeFileProblem, SECTION_OPTIONS, skillGroupOptions, retryNote, scoreTone, scoringPauseText, sortByScore, taskErrorText, toScoreMap, violationPlace, violationView,
 } from './ai';
 
 const summary = (jobId: number, score: number | null, titlePt: string | null = null): JobAiSummaryDto => ({
@@ -267,5 +268,12 @@ describe('rebaseDraft (the profile editor when the server version changes)', () 
   it('follows the server when nothing is pending, and asks when there are unsaved changes', () => {
     expect(rebaseDraft({ dirty: false, version: 7 }, 8)).toBe('adopt');
     expect(rebaseDraft({ dirty: true, version: 7 }, 8)).toBe('conflict');
+  });
+});
+
+describe('profile editor layout options', () => {
+  it('suggests the groups in use once, in order, skipping empty ones', () => {
+    expect(skillGroupOptions([{ group: 'Front-end' }, { group: '' }, { group: 'Dados' }, { group: 'Front-end' }, { group: ' Dados ' }])).toEqual(['Front-end', 'Dados']);
+    expect(SECTION_OPTIONS.map((o) => o.value)).toEqual([...EXPERIENCE_SECTIONS]);
   });
 });

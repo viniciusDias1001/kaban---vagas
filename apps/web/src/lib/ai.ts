@@ -1,5 +1,5 @@
 import {
-  LIMITS, withProfileDefaults, type AiStatusDto, type AiTaskDto, type JobAiListItemDto, type LayerState, type PdfWarningsDto, type ProfileWire, type Violation,
+  LIMITS, withProfileDefaults, type ExperienceSection, type AiStatusDto, type AiTaskDto, type JobAiListItemDto, type LayerState, type PdfWarningsDto, type ProfileWire, type Violation,
   type CandidateProfile, type ViolationCode,
 } from '@kv/shared/client';
 import { NETWORK_ERROR, errorMessage } from '../apiError';
@@ -325,4 +325,20 @@ export function editableProfile(data: CandidateProfile): ProfileWire {
 /** Há alteração não salva? Compara o rascunho com `editableProfile(server)`, nunca com o dado cru do servidor. */
 export function profileDirty(draft: ProfileWire, server: CandidateProfile): boolean {
   return JSON.stringify(draft) !== JSON.stringify(editableProfile(server));
+}
+
+/** As duas seções do currículo para a experiência, com o rótulo do editor. */
+export const SECTION_OPTIONS: readonly { value: ExperienceSection; label: string }[] = [
+  { value: 'principal', label: 'Principal' },
+  { value: 'complementar', label: 'Complementar' },
+];
+
+/** Grupos já usados, aparados, sem vazios e sem repetição, na ordem em que aparecem: as sugestões do campo de grupo. */
+export function skillGroupOptions(skills: readonly { group: string }[]): string[] {
+  const seen = new Set<string>();
+  for (const { group } of skills) {
+    const g = group.trim();
+    if (g) seen.add(g);
+  }
+  return [...seen];
 }
