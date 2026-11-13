@@ -343,6 +343,25 @@ describe('resolution order', () => {
     expect(deleted.pending).toEqual([expect.objectContaining({ kind: 'unanswered' })]);
   });
 
+  it('repeats an approved multiselect saved answer when the saved answer still gives the same option', async () => {
+    const approved = [record({ label: 'Linguagens', kind: 'multiselect', options: ['Python', 'Go', 'Rust'], value: ['Go'], source: 'bank',
+      category: 'unknown', bankAnswerId: 51 })];
+    const question = q('q1', 'Linguagens', true, { kind: 'multiselect', options: ['Python', 'Go', 'Rust'] });
+    const res = await resolveAnswers(input([question], [a({ id: 51, question: 'Linguagens', answer: 'Go' })], { approved }), deps);
+    expect(res.answers).toEqual([{ questionId: 'q1', value: ['Go'], source: 'bank', category: 'unknown', basis: [], bankAnswerId: 51 }]);
+    expect(deps.classify).not.toHaveBeenCalled();
+  });
+
+  it('checks consent against the job company: the name of another company is something more', async () => {
+    const label = "Please review and acknowledge Acme's Candidate Privacy Policy";
+    const atAcme = await resolveAnswers(input([q('q1', label, true, { kind: 'boolean' })], [], { aiAnswers: 'off' }), deps);
+    expect(atAcme.answers).toEqual([{ questionId: 'q1', value: true, source: 'rule', category: 'consent', basis: [], bankAnswerId: null }]);
+    const beta = { ...ctx, company: 'Beta', job: { ...ctx.job, company: 'Beta' } };
+    const atBeta = await resolveAnswers(input([q('q1', label, true, { kind: 'boolean' })], [], { ctx: beta, aiAnswers: 'off' }), deps);
+    expect(atBeta.answers).toEqual([]);
+    expect(atBeta.pending).toEqual([expect.objectContaining({ category: 'personal', kind: 'unanswered' })]);
+  });
+
   it('lists the bank answers it used', async () => {
     const bank = [a({ id: 11, question: 'Pretensão salarial', answer: '15000' }), a({ id: 12, question: 'Pronomes', answer: 'ela/dela' }),
       a({ id: 13, question: 'Nunca usada', answer: 'x' }), a({ id: 14, question: 'Aviso prévio', answer: '30 dias' })];

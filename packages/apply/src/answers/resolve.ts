@@ -42,6 +42,14 @@ const answer = (
   extra: { basis?: string[]; bankAnswerId?: number | null } = {},
 ): ResolvedAnswer => ({ questionId: q.id, value, source, category, basis: extra.basis ?? [], bankAnswerId: extra.bankAnswerId ?? null });
 
+/** Mesmo valor pelo conteúdo: uma lista (multiselect) vale o mesmo que a outra com os mesmos itens, ou que o item sozinho. */
+function sameValue(a: AnswerValue, b: AnswerValue): boolean {
+  if (typeof a !== 'string' && !Array.isArray(a)) return a === b;
+  if (typeof b !== 'string' && !Array.isArray(b)) return false;
+  const items = (v: string | string[]) => JSON.stringify((Array.isArray(v) ? [...v] : [v]).sort());
+  return items(a) === items(b);
+}
+
 /**
  * A resposta aprovada para a mesma pergunta, ajustada às opções de agora; null se a pergunta mudou ou se a resposta
  * salva de que ela veio foi apagada ou editada (aí a pergunta é resolvida de novo pelo banco atual).
@@ -63,7 +71,8 @@ function approvedAnswer(q: Question, approved: AnswerRecord[], bank: ApplyAnswer
   }
   if (prev.source === 'bank') {
     const row = bank.find((r) => r.id === prev.bankAnswerId);
-    if (!row || exactBankMatch(q, [row], ctx)?.value !== value) return null;
+    const current = row ? exactBankMatch(q, [row], ctx) : null;
+    if (!current || !sameValue(current.value, value)) return null;
   }
   return { questionId: q.id, value, source: prev.source, category: prev.category, basis: [...prev.basis], bankAnswerId: prev.bankAnswerId };
 }
@@ -96,7 +105,7 @@ export async function resolveAnswers(input: ResolveInput, deps: ResolveDeps): Pr
   // 2. Categoria: as regras primeiro (os padrões sensíveis antes de tudo); o modelo só vê o que sobrou.
   const unclassified: Question[] = [];
   for (const q of fresh) {
-    const byRule = classifyByRule(q);
+    const byRule = classifyByRule(q, ctx.job.company);
     if (byRule) category.set(q.id, byRule);
     else unclassified.push(q);
   }

@@ -11,8 +11,9 @@ import { optionFor } from './bank';
 export const SENSITIVE_PATTERNS: readonly { category: 'personal' | 'demographic'; pattern: RegExp }[] = [
   // Salário e ganhos, em qualquer forma.
   { category: 'personal', pattern: /\bsalar|\bremunera|\bpretens|\bcompensation\b|\bpay\b|\bwages?\b|\bincome\b|\bearn(ing|ings)?\b|\b(hourly|daily|monthly|day|hour|bill|billing|expected|desired|target) rate\b|\brate (expectation|per hour|per day)\b|\bganhar\b|\bganhos?\b|\bganha\b|\brenda\b|\bvalor (hora|por hora|mensal)\b|\bregime (de contratacao|pj|clt)\b|\bpj\b|\bclt\b/ },
+  { category: 'personal', pattern: /\b(expected|desired|annual|total|salary|compensation|remuneration|pay) package\b|\bquanto\b.*\breceber\b|\breceber (por|ao) (mes|hora|ano|dia)\b/ },
   // Visto, autorização e elegibilidade para trabalhar, cidadania e documentos.
-  { category: 'personal', pattern: /\bvistos?\b|\bvisas?\b|\bsponsor|\bautoriza\w*( \w+){0,3} trabalh|\bpermissao de trabalho\b/ },
+  { category: 'personal', pattern: /\bvistos?\b|\bvisas?\b|\bsponsor|\bautoriza\w*( \w+){0,3} trabalh|\bpermissao de trabalho\b|\bemployer support\b|\bsupport to work\b|\bimmigration\b|\bimigra/ },
   { category: 'personal', pattern: /\bauthori[sz]\w*( \w+){0,2} (to )?work\b|\bwork authori[sz]|\bwork permit|\bright to work\b|\beligib\w*( \w+){0,2} (to )?work\b|\blegally (able|allowed|eligible|permitted)\b/ },
   { category: 'personal', pattern: /\bcitizen|\bcidada|\bnacionalidade\b|\bnationality\b|\bpassports?\b|\bpassaportes?\b|\bgreen card\b|\bpermanent residen|\bresiden\w* permanente\b/ },
   // Antecedentes, prisões, crimes e declarações legais.
@@ -26,13 +27,14 @@ export const SENSITIVE_PATTERNS: readonly { category: 'personal' | 'demographic'
   { category: 'personal', pattern: /\bmudanca\b|\bmudar (de|para)\b|\bmudaria\b|\bse mudar\b|\brelocat|\bmov(e|ing) to\b/ },
   // Disponibilidade e início.
   { category: 'personal', pattern: /\bdisponibilidade\b|\bdisponivel\b|\bavailab|\baviso previo\b|\bnotice period\b|\bstart date\b|\bdata de inicio\b|\bcan you start\b|\bpode comecar\b|\bpoderia comecar\b|\bquando (voce )?(pode|poderia) (comecar|iniciar)\b|\bhow soon\b/ },
+  { category: 'personal', pattern: /\bem quanto tempo\b|\bassumir (a vaga|o cargo|a posicao|a funcao)\b|\b(weeks?|days?|months?|semanas|dias|meses) (of )?notice\b|\bgive notice\b|\bnotice (to give|do you need)\b/ },
   // Dados demográficos.
   { category: 'demographic', pattern: /\bgenero\b|\bgender\b|\bsexo\b|\bpronouns?\b|\bpronomes?\b/ },
-  { category: 'demographic', pattern: /\bracas?\b|\betnia|\betnic|\brace\b|\bethnic|\bhispanic|\blatin[oa]\b|\bautodeclar|\bnegr[oa]s?\b|\bpard[oa]s?\b|\bindigena|\bcor da pele\b/ },
+  { category: 'demographic', pattern: /\bracas?\b|\betnia|\betnic|\brace\b|\bethnic|\bhispanic|\blatin[oa]\b|\bautodeclar|\bnegr[oa]s?\b|\bpard[oa]s?\b|\bindigena|\bcor\b/ },
   { category: 'demographic', pattern: /\bdeficien|\bpcds?\b|\bdisabilit/ },
-  { category: 'demographic', pattern: /\bveteran/ },
+  { category: 'demographic', pattern: /\bveteran|\bforcas armadas\b|\barmed forces\b|\bservico militar\b|\bmilitary service\b/ },
   { category: 'demographic', pattern: /\borientacao sexual\b|\bsexual orientation\b/ },
-  { category: 'demographic', pattern: /\bidade\b|\bdata de nascimento\b|\bano de nascimento\b|\bdate of birth\b|\bbirth ?(date|year)\b|\byear of birth\b|\byears old\b|\bhow old\b|\bmaior de (18|21|idade)\b|\bmenor de idade\b|\b(over|at least) (18|21)\b|\b(18|21) years of age\b/ },
+  { category: 'demographic', pattern: /\bidade\b|\bdata de nascimento\b|\bano de nascimento\b|\bdate of birth\b|\bbirth ?(date|year)\b|\byear of birth\b|\byears old\b|\bhow old\b|\bmaior de (18|21|idade)\b|\bmenor de idade\b|\b(over|at least) (18|21)\b|\b(18|21) years of age\b|\bage\b|\bquantos anos (voce )?tem\b(?! (de|em|com) )|\b(mais|menos) de (18|21) anos\b|\b(18|21) (or|ou) (older|over|more|mais)\b|\b(18|21) anos ou mais\b/ },
 ];
 
 export interface RuleContext {
@@ -83,20 +85,96 @@ export function hasLastNameField(questions: Question[]): boolean {
 }
 
 const ORIGIN = /\bcomo (voce )?(soube|ficou sabendo|conheceu|encontrou)\b|\bonde (voce )?(soube|viu|encontrou)\b|\bhow did you (hear|find|learn|come across)\b|\bwhere did you (hear|find|see)\b/;
-/**
- * Os únicos objetos de consentimento que a regra aceita: privacidade, termos e a veracidade da própria candidatura.
- * Concordar, aceitar ou declarar qualquer outra coisa é um compromisso do dono: vai para `personal`.
+/*
+ * Consentimento por resto. Um rótulo é consentimento só quando, tirando dele as expressões de concordância, os objetos
+ * permitidos (privacidade, termos, tratamento dos dados para a candidatura, veracidade da candidatura), as palavras do
+ * nome da empresa da vaga e uma lista fixa de palavras de ligação, não sobra nada. Qualquer palavra que sobre diz algo
+ * mais, e esse algo mais seria um compromisso em nome do dono.
  */
-const CONSENT_OBJECT = new RegExp([
-  /\b(politica|aviso|declaracao) de privacidade\b|\bprivacy (policy|notice|statement)\b|\bcandidate privacy\b/.source,
-  /\btermos (de (uso|servico)|e condicoes)\b|\bterms (of (use|service)|and conditions)\b/.source,
-  /\blgpd\b|\bgdpr\b|\btratamento (de |dos )?(meus )?dados\b|\bdata processing\b|\bprocessing of (my )?personal data\b/.source,
-  /\binformac\w*\b.*\bverdadeir|\b(information|answers|details|statements)\b.*\b(true|accurate|complete|correct|truthful)\b|\bcertify\b.*\btrue\b/.source,
-].join('|'));
-/** Um segundo compromisso emendado ("... privacy policy and to work on-site"): deixa de ser só consentimento. */
-const COMPOUND = /\b(and|e) (to|a|o|as|os|em|que|i)\b/;
-/** Verbos de concordância, aceite ou declaração, em qualquer pessoa. */
-const AGREEMENT = /\b(agree|agrees|accept|accepts|consent|consents|acknowledge|acknowledges|certify|concordo|concorda|concordar|aceito|aceita|aceitar|consinto|declaro|certifico|autorizo|estou ciente)\b|\bi (confirm|declare|understand)\b|\bconfirmo que\b/;
+
+/** Concordância, aceite, ciência ou declaração, sobre o rótulo normalizado. */
+const AGREEMENT_SOURCE = [
+  'i (have |ve )?read', 'have read', 'i give (my )?consent', 'dou (o )?meu consentimento',
+  'agree', 'agrees', 'agreed', 'agreeing', 'accept', 'accepts', 'accepted', 'accepting', 'consent', 'consents', 'consented',
+  'consenting', 'acknowledge', 'acknowledges', 'acknowledged', 'acknowledging', 'certify', 'certifies', 'attest', 'affirm',
+  'understood', 'i (confirm|declare|understand)',
+  // "eu" só como sujeito da concordância: solto, sobraria (e "EU" pode ser a União Europeia).
+  '(eu )?(li|concordo|aceito|consinto|declaro|confirmo|certifico|atesto|autorizo)', 'lido', 'concorda', 'concordamos', 'concordar',
+  'aceita', 'aceitar', '(eu )?(estou |esta |fico |estamos )?cientes?', '(eu )?(estou|esta|fico|estamos) de acordo', 'compreendi',
+  'compreendo', 'entendi',
+].map((x) => `\\b${x}\\b`).join('|');
+const AGREEMENT = new RegExp(AGREEMENT_SOURCE);
+
+/** Sufixo que faz LGPD/GDPR contar: só junto de uma frase de tratamento de dados. */
+const UNDER_LAW = '( (under|in accordance with|according to|as per|per|pursuant to|in line with) (the )?(gdpr|lgpd)'
+  + '| (conforme|de acordo com|nos termos da|segundo|em conformidade com) (a )?(lgpd|lei geral de protecao de dados( pessoais)?))?';
+/** Objetos que a regra aceita, sem a veracidade (que é tratada à parte). Na ordem em que são tirados do rótulo. */
+const CONSENT_OBJECTS: readonly RegExp[] = [
+  // Tratamento dos dados para a candidatura; LGPD e GDPR só dentro dessa frase ou junto de "consent"/"consentimento".
+  new RegExp(`\\b((the )?processing (of )?(my )?(personal )?data|(personal )?data processing|tratamento (de |dos |da |das )?(meus |minhas )?(dados|informacoes)( pessoais)?)${UNDER_LAW}`, 'g'),
+  /\b(gdpr|lgpd) consent\b|\bconsent (under|per) (the )?(gdpr|lgpd)\b|\bconsentimento (lgpd|gdpr)\b|\bconsentimento (de acordo com|conforme) (a )?lgpd\b/g,
+  // Privacidade.
+  /\b((politicas?|avisos?|declaracao|termos?) de privacidade|(politica|aviso) de protecao de dados( pessoais)?|((candidate|applicant) )?privacy (policy|policies|notice|statement)|data protection (policy|notice)|candidate privacy)\b/g,
+  // Termos de uso ou serviço; "termos e condições" só quando não seguidos "de trabalho", "do contrato", "of employment"...
+  /\b(termos de (uso|servico|utilizacao)|terms of (use|service))\b/g,
+  /\b(termos (e )?condicoes( de uso)?|terms (and )?conditions( of (use|service))?)\b(?! (of|for|de|do|da|dos|das|para)\b)/g,
+];
+/** Veracidade: o que foi informado (substantivo) seguido de "verdadeiro", "correto"... */
+const TRUTH_NOUN = '(information|informacoes|informacao|answers|respostas|details|statements|declaracoes|dados|data|application|candidatura)';
+const TRUTH_ADJ = '(true|accurate|complete|correct|truthful|verdadeir[ao]s?|veridic[ao]s?|corret[ao]s?|complet[ao]s?|exat[ao]s?)';
+const TRUTH = new RegExp(`\\b${TRUTH_NOUN}\\b.*\\b${TRUTH_ADJ}\\b`);
+const TRUTH_WORDS = new RegExp(`\\b(${TRUTH_NOUN}|${TRUTH_ADJ})\\b`, 'g');
+
+/**
+ * Palavras de ligação que podem sobrar num consentimento com expressão de concordância. Lista fechada. Ficam de fora,
+ * de propósito, as que têm outro sentido: "no" (negação em inglês), "us" (EUA) e "eu" (União Europeia).
+ */
+const CONSENT_FILLER = new Set([
+  // Artigos, preposições, conjunções.
+  'the', 'a', 'an', 'o', 'os', 'as', 'um', 'uma', 'of', 'to', 'in', 'on', 'at', 'with', 'by', 'for', 'from', 'de', 'da', 'do',
+  'das', 'dos', 'em', 'na', 'nos', 'nas', 'ao', 'aos', 'com', 'por', 'pelo', 'pela', 'para', 'and', 'e', 'or', 'ou',
+  // Pronomes e "que", "this", "s" do possessivo ("Acme's" vira "acme s").
+  'i', 'me', 'my', 'you', 'your', 'we', 'our', 'it', 'its', 'meu', 'meus', 'minha', 'minhas', 'voce', 'seu', 'sua',
+  'seus', 'suas', 'nosso', 'nossa', 'that', 'que', 'this', 'these', 'este', 'esta', 'estes', 'estas', 'esse', 'essa', 's',
+  // Auxiliares sem conteúdo.
+  'is', 'are', 'sao', 'estao', 'have', 'has', 'been', 'hereby',
+  // O resto da lista do controlador e formas próximas.
+  'above', 'acima', 'linked', 'here', 'aqui', 'please', 'review', 'read', 'understand', 'submitting', 'submit', 'enviar',
+  'application', 'candidatura', 'purposes', 'fins', 'devidos', 'recruitment', 'recrutamento', 'selection', 'selecao', 'seletivo',
+  'process', 'processo', 'provided', 'fornecidas', 'fornecidos', 'prestadas', 'prestados', 'information', 'informacoes', 'all',
+  'todas', 'todos', 'data', 'dados', 'personal', 'pessoais', 'candidate', 'candidato', 'candidata', 'applicant', 'click', 'view',
+  'ter', 'required', 'obrigatorio', 'obrigatoria', 'accordance', 'according', 'conforme',
+]);
+/** Sem expressão de concordância, só o nome do objeto: "Privacy Policy", "Termos de uso e política de privacidade". */
+const BARE_FILLER = new Set(['the', 'a', 'o', 'os', 'as', 'of', 'de', 'da', 'do', 'das', 'dos', 'and', 'e', 'or', 'ou', 's',
+  'required', 'obrigatorio', 'obrigatoria']);
+
+/**
+ * `consent`: tirados concordância, objetos, nome da empresa e palavras de ligação, nada sobra (ou é só o nome do objeto).
+ * `agreement`: tem expressão de concordância mas diz algo mais; é compromisso do dono (`personal`).
+ * `none`: nem uma coisa nem outra; as outras regras ou o modelo decidem.
+ * Recebe o rótulo normalizado. É o único teste de consentimento: `classifyByRule` e `answerByRule` usam este.
+ */
+function consentVerdict(label: string, company: string): 'consent' | 'agreement' | 'none' {
+  const agreement = AGREEMENT.test(label);
+  let rest = label;
+  let object = false;
+  for (const pattern of CONSENT_OBJECTS) {
+    const stripped = rest.replace(pattern, ' ');
+    if (stripped !== rest) object = true;
+    rest = stripped;
+  }
+  if (TRUTH.test(rest)) {
+    object = true;
+    rest = rest.replace(TRUTH_WORDS, ' ');
+  }
+  rest = rest.replace(new RegExp(AGREEMENT_SOURCE, 'g'), ' ');
+  const companyWords = new Set(normalizeQuestionText(company).split(' '));
+  const filler = agreement ? CONSENT_FILLER : BARE_FILLER;
+  const left = rest.split(' ').filter((w) => w !== '' && !filler.has(w) && !companyWords.has(w));
+  if (object && left.length === 0) return 'consent';
+  return agreement ? 'agreement' : 'none';
+}
 const RESUME_FILE = /\bresume\b|\bcurriculo\b|\bcurriculum\b|\bcv\b/;
 const NOT_RESUME_FILE = /\bcover letter\b|\bcarta\b/;
 
@@ -122,19 +200,18 @@ function workedHerePattern(companies: string[]): RegExp {
 }
 const WORKED_HERE_GENERIC = workedHerePattern([]);
 
-/** Consentimento: um dos objetos permitidos, sem outro compromisso emendado. Recebe o rótulo normalizado. */
-function isConsent(label: string): boolean {
-  return CONSENT_OBJECT.test(label) && !COMPOUND.test(label);
-}
-
-/** A categoria que as regras conhecem, ou null. Os padrões sensíveis são conferidos primeiro, no rótulo, na ajuda e nas opções. */
-export function classifyByRule(q: Question): QuestionCategory | null {
+/**
+ * A categoria que as regras conhecem, ou null. Os padrões sensíveis são conferidos primeiro, no rótulo, na ajuda e nas opções.
+ * `company` é a empresa da vaga: o nome dela pode aparecer num consentimento sem que isso seja "algo mais".
+ */
+export function classifyByRule(q: Question, company = ''): QuestionCategory | null {
   const texts = [q.label, q.help, ...q.options].map(normalizeQuestionText);
   for (const { category, pattern } of SENSITIVE_PATTERNS) if (texts.some((t) => pattern.test(t))) return category;
   if (q.kind === 'file') return 'file';
   const label = normalizeQuestionText(q.label);
-  if (isConsent(label)) return 'consent';
-  if (AGREEMENT.test(label) || CONSENT_OBJECT.test(label)) return 'personal';
+  const consent = consentVerdict(label, company);
+  if (consent === 'consent') return 'consent';
+  if (consent === 'agreement') return 'personal';
   if (ORIGIN.test(label)) return 'origin';
   if (identityField(q)) return 'identity';
   if (WORKED_HERE_GENERIC.test(label)) return 'profile_fact';
@@ -240,8 +317,9 @@ export function isWorkedHereQuestion(q: Question, ctx: RuleContext): boolean {
 }
 
 const AGREE = /^(i agree|agree|i accept|accept|i consent|yes|sim|concordo|aceito|li e concordo|li e aceito)$/;
-function consentAnswer(q: Question): AnswerValue | undefined {
-  if (!q.required || !isConsent(normalizeQuestionText(q.label))) return undefined;
+/** Só para o que `classifyByRule` chamaria de `consent`: o mesmo `consentVerdict`, com a mesma empresa. */
+function consentAnswer(q: Question, company: string): AnswerValue | undefined {
+  if (!q.required || consentVerdict(normalizeQuestionText(q.label), company) !== 'consent') return undefined;
   if (q.kind === 'boolean') return true;
   if (q.kind !== 'select' || q.options.length === 0) return undefined;
   const hits = q.options.filter((o) => AGREE.test(normalizeQuestionText(o)));
@@ -267,7 +345,7 @@ export function answerByRule(q: Question, category: QuestionCategory, ctx: RuleC
     case 'origin':
       return ORIGIN.test(label) ? fit(ctx.sourceLabel, q) : undefined;
     case 'consent':
-      return consentAnswer(q);
+      return consentAnswer(q, ctx.job.company);
     case 'profile_fact':
       return workedHereAnswer(q, ctx);
     default:

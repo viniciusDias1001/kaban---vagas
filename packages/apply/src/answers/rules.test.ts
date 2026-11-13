@@ -257,6 +257,152 @@ describe('fix round 1: sensitive wordings', () => {
   });
 });
 
+describe('fix round 2: consent by remainder', () => {
+  const box = (label: string) => q(label, { kind: 'boolean' });
+  const at = (company: string): RuleContext => ({ ...ctx, job: { ...ctx.job, company } });
+  const isNotConsent = (label: string, expected: 'personal' | null, rc: RuleContext = ctx) => {
+    expect(classifyByRule(box(label), rc.job.company), label).toBe(expected);
+    expect(answerByRule(box(label), 'consent', rc), label).toBeUndefined();
+  };
+  const isConsent = (label: string, rc: RuleContext = ctx) => {
+    expect(classifyByRule(box(label), rc.job.company), label).toBe('consent');
+    expect(answerByRule(box(label), 'consent', rc), label).toBe(true);
+  };
+
+  it('a label without an agreement expression is not consent and is left to the model', () => {
+    for (const label of ['Do you have experience with GDPR compliance?', 'Você tem experiência com LGPD?',
+      'Have you implemented a privacy policy page?'])
+      isNotConsent(label, null);
+    expect(answerByRule(select('Do you have experience with GDPR compliance?', ['Yes', 'No']), 'consent', ctx)).toBeUndefined();
+    expect(answerByRule(select('Você tem experiência com LGPD?', ['Sim', 'Não']), 'consent', ctx)).toBeUndefined();
+  });
+
+  it('an allowed object joined to a second commitment is personal', () => {
+    for (const label of ['Li a política de privacidade e concordo em trabalhar aos sábados',
+      'I accept the privacy policy plus a 3-month trial period', 'I agree to the privacy policy; I will work on-site',
+      'I acknowledge the privacy notice. I agree to work on-site 5 days a week.',
+      'I acknowledge the privacy notice and that this role requires on-call shifts',
+      'Concordo com a política de privacidade bem como com a jornada de 6x1',
+      'I agree to the terms of use, including mandatory overtime',
+      'Concordo com os termos de uso, inclusive com a cláusula de exclusividade',
+      'I agree to data processing, and accept a 90-day probation',
+      'I agree to the privacy policy and consent to receive SMS marketing',
+      'Aceito a política de privacidade e autorizo o envio de mensagens pelo WhatsApp'])
+      isNotConsent(label, 'personal');
+  });
+
+  it('a loose object phrase is personal', () => {
+    for (const label of ['I agree to the terms and conditions of employment', 'Aceito os termos e condições do contrato de trabalho',
+      'I agree to share my data with third-party recruiters under the GDPR', 'I consent to video recording of my interview under the GDPR'])
+      isNotConsent(label, 'personal');
+  });
+
+  it('the terms of use together with the privacy policy is consent', () => {
+    isConsent('Li e concordo com os termos de uso e a política de privacidade');
+    isConsent('Li e concordo com os termos de uso e as políticas de privacidade');
+  });
+
+  it('each allowed object is consent in Portuguese and English, with and without the company name', () => {
+    for (const label of [
+      // Privacidade.
+      'I agree to the privacy policy', 'I have read and understood the Privacy Notice', 'I acknowledge the candidate privacy statement',
+      "Please review and acknowledge Acme's Candidate Privacy Policy", "I have read Acme's privacy policy",
+      'Li e concordo com a política de privacidade', 'Estou ciente do aviso de privacidade', 'Declaro que li a Política de Privacidade da Acme',
+      'Privacy Policy', 'Política de privacidade',
+      // Termos.
+      'I accept the terms of use', 'I agree to the Terms and Conditions', "I agree to Acme's Terms of Service", 'Termos de uso',
+      'Aceito os termos de uso', 'Concordo com os termos de serviço da Acme',
+      // Tratamento dos dados.
+      'I consent to the processing of my personal data', 'I consent to data processing under the GDPR',
+      'I consent to Acme processing my personal data for recruitment purposes',
+      'Autorizo o tratamento dos meus dados pessoais conforme a LGPD',
+      'Autorizo a Acme o tratamento dos meus dados pessoais para fins de recrutamento',
+      // Veracidade.
+      'I certify that the information provided is true and complete', 'I confirm that all information in this application is accurate',
+      'I certify to Acme that the information in my application is true', 'Declaro que as informações prestadas são verdadeiras',
+      'Confirmo que todas as informações fornecidas são verídicas e corretas',
+    ])
+      isConsent(label);
+  });
+
+  it('the name of another company is a remainder', () => {
+    isNotConsent("Please review and acknowledge Acme's Candidate Privacy Policy", 'personal', at('Beta'));
+    isNotConsent('Aceito os termos de uso da Beta', 'personal');
+    isConsent('Aceito os termos de uso da Beta', at('Beta Tecnologia Ltda'));
+  });
+
+  it('own probes: more consent wordings', () => {
+    for (const label of ['I have read and agree to the Terms of Service and Privacy Policy',
+      'By submitting this application, I agree to the Privacy Policy', 'Ao enviar esta candidatura, concordo com a Política de Privacidade',
+      'I acknowledge that I have read the Acme Applicant Privacy Notice', 'Do you agree to the privacy policy?',
+      'Você concorda com os termos de uso?', 'I hereby certify that all the information I have provided is true, accurate and complete',
+      'GDPR consent', 'Consentimento LGPD', 'Li e aceito os Termos e Condições', 'I agree to the Privacy Policy (required)',
+      'Declaro, para os devidos fins, que as informações prestadas são verdadeiras', 'Estou de acordo com a política de privacidade',
+      "I've read the privacy notice", 'Consinto com o tratamento de dados pessoais para fins de recrutamento',
+      'Termos de uso e política de privacidade', 'Eu li e concordo com a política de privacidade',
+      'I give my consent to the processing of my personal data for this application',
+      'I consent to the processing of my personal data in accordance with the Privacy Policy',
+      'I agree to the privacy policy and the terms of use'])
+      isConsent(label);
+  });
+
+  it('own probes: words with a second meaning are a remainder (the US, the EU, "no")', () => {
+    for (const label of ['I consent to the processing of my personal data in the US',
+      'I consent to the processing of my personal data in the EU', 'I consent to the processing of my personal data in Brazil',
+      'I agree to the privacy policy: no', 'Eu concordo em trabalhar presencialmente', 'I agree to the Privacy Policy and Cookie Policy',
+      'Concordo com o tratamento de dados sensíveis', 'I agree that Acme may contact me about future roles',
+      'I confirm that my answers are true and I am available to start', 'Li e concordo', 'Aceito os termos'])
+      isNotConsent(label, 'personal');
+  });
+
+  it('own probes: ordinary questions that only look like agreements are left alone', () => {
+    for (const label of ['Confirm your email', 'Are you AWS certified?', 'Have you read our privacy policy?'])
+      isNotConsent(label, null);
+  });
+
+  it('own probes: more labels that say something else', () => {
+    for (const label of ['I agree to the terms', 'I accept the terms of use and the code of conduct',
+      'Concordo com a política de privacidade e com o banco de talentos', 'I consent to Acme keeping my CV for future openings',
+      'I agree to the privacy policy of our partner Beta', 'I certify that I hold a valid driving licence',
+      'I confirm that the information is true and that I can start immediately',
+      'Declaro que as informações são verdadeiras e que possuo veículo próprio', 'I agree to the privacy policy, and to take a coding test',
+      'I understand this position is fully on-site', 'Estou de acordo com o modelo de trabalho presencial',
+      'I acknowledge receipt of the employee handbook', 'I accept the terms and conditions of the offer',
+      'Aceito os termos e condições de trabalho', 'I do not agree to the privacy policy', 'Não concordo com a política de privacidade',
+      'I agree to receive the privacy policy by mail', 'I agree to the processing of my biometric data',
+      'I agree to the processing of my personal data by third parties', 'I consent to the transfer of my personal data outside the EU'])
+      isNotConsent(label, 'personal');
+    for (const label of ['Read our privacy policy here', 'Link to the privacy policy of your last project', 'Have you worked with LGPD compliance?'])
+      isNotConsent(label, null);
+  });
+
+  it('answerByRule applies the same test whatever category the model gave', () => {
+    expect(answerByRule(select('Privacy Policy', ['I agree', 'I do not agree']), 'consent', ctx)).toBe('I agree');
+    expect(answerByRule(select('I agree to the privacy policy; I will work on-site', ['Yes', 'No']), 'consent', ctx)).toBeUndefined();
+    expect(answerByRule(select('Have you implemented a privacy policy page?', ['Yes', 'No']), 'consent', ctx)).toBeUndefined();
+  });
+});
+
+describe('fix round 2: sensitive wordings', () => {
+  it('catches pay, work authorisation, availability, race, veteran status and age', () => {
+    for (const label of ['What is your expected annual package?', 'Quanto você quer receber por mês?',
+      'Do you need employer support to work in Germany?', 'Em quanto tempo você pode assumir a vaga?',
+      'How many weeks notice do you need to give?'])
+      expect(classifyByRule(q(label)), label).toBe('personal');
+    for (const label of ['Como você se declara quanto à cor?', 'Já serviu às Forças Armadas?', 'What is your age?', 'Quantos anos você tem?',
+      'Você tem mais de 18 anos?', 'Are you 18 or older?'])
+      expect(classifyByRule(q(label)), label).toBe('demographic');
+  });
+
+  it('still leaves years of experience and a privacy notice alone', () => {
+    expect(classifyByRule(q('Quantos anos de experiência com React?'))).toBeNull();
+    expect(classifyByRule(q('Quantos anos você tem de experiência com Java?'))).toBeNull();
+    expect(classifyByRule(q('What is the average team size you managed?'))).toBeNull();
+    expect(classifyByRule(q('Do you have military experience?'))).toBeNull();
+    expect(classifyByRule(q('I have read the Privacy Notice', { kind: 'boolean' }))).toBe('consent');
+  });
+});
+
 describe('fix round 1: a bare name field', () => {
   it('is the first name when the step also asks for the last name, the full name otherwise', () => {
     expect(answerByRule(q('Nome'), 'identity', ctx)).toBe('Maria Exemplo da Silva');
