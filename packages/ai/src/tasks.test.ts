@@ -6,7 +6,7 @@ import { createProvider } from './provider';
 import {
   TIER1_EXCERPT_CHARS, TIER2_DESCRIPTION_CHARS, analyzeJob, extractProfile, scoreJobs, tailoredLangFor, testConnection, translateProfile,
 } from './tasks';
-import { SAMPLE_JOB, SAMPLE_PROFILE, SAMPLE_RESUME_TEXT, legacyProfile } from './testing';
+import { LAYOUT_PROFILE, SAMPLE_JOB, SAMPLE_PROFILE, SAMPLE_RESUME_TEXT, legacyProfile } from './testing';
 import type { AiProvider, AiRequest } from './types';
 
 const fake = createFakeProvider();
@@ -164,4 +164,8 @@ describe('tailoredLangFor', () => {
     // Sem idioma detectado, vale o país da vaga.
     expect([tailoredLangFor(null, 'BR'), tailoredLangFor('', 'INT'), tailoredLangFor('en', 'BR')]).toEqual(['pt-BR', 'en', 'en']);
   });
+});
+
+it('the fake provider marks the translated headline', async () => {
+  expect((await translateProfile(fake, LAYOUT_PROFILE, 'en')).data.headline).toBe('[en] Desenvolvedora Front-end Sênior');
 });

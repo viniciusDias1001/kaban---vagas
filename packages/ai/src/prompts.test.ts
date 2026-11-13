@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { LIMITS, type Violation } from '@kv/shared';
 import { DATA_GUARD, buildPrompt, toCorrections } from './prompts';
-import { SAMPLE_JOB, SAMPLE_PROFILE } from './testing';
+import { LAYOUT_PROFILE, SAMPLE_JOB, SAMPLE_PROFILE } from './testing';
 import { RESUME_TEXT_MAX_CHARS, resumeTextChars } from './tasks';
 
 /** O que o verificador confere (verify.ts) tem de estar escrito para o modelo, no prefixo estável. */
@@ -119,4 +119,12 @@ describe('resumeTextChars', () => {
     expect(resumeTextChars(`${'palavra '.repeat(RESUME_TEXT_MAX_CHARS)}`)).toBeGreaterThan(RESUME_TEXT_MAX_CHARS);
     expect(resumeTextChars('x'.repeat(RESUME_TEXT_MAX_CHARS))).toBe(RESUME_TEXT_MAX_CHARS);
   });
+});
+
+it('asks for the new fields when extracting and for one translation per group when translating', () => {
+  const extract = buildPrompt('profile_extract', null, { text: 'x' }).system;
+  for (const part of ['"headline"', '"group"', '"section"', '"note"', '"complementar"', '"principal"', 'idêntico em todas as competências']) expect(extract).toContain(part);
+  const translate = buildPrompt('profile_translate', null, { target: 'en', profile: LAYOUT_PROFILE }).system;
+  expect(translate).toContain('O mesmo "group" recebe sempre a mesma tradução');
+  expect(translate).toContain('Copie "section" sem alterar');
 });

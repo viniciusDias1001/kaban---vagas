@@ -44,7 +44,7 @@ export const TAILORED_RULES = [
 export const TRANSLATION_RULES =
   'Copie sem alterar: nomes de pessoas, empresas, instituições e tecnologias, siglas, e-mails, telefones, URLs, datas e ' +
   'TODOS os números (mesma grandeza e unidade; não converta nem escreva número por extenso). Traduza só a prosa: resumo, ' +
-  'cargos, realizações, cursos, níveis e rótulos. Não acrescente nem remova fatos, não ponha nível de cargo (sênior, ' +
+  'título profissional, cargos, notas, grupos, realizações, cursos, níveis e rótulos. Não acrescente nem remova fatos, não ponha nível de cargo (sênior, ' +
   'líder...) nem grau de formação (mestrado, MBA...) que o original não tem, e mantenha tamanho parecido com o do original. ' +
   'Texto simples, sem markdown.';
 
@@ -54,11 +54,17 @@ const INSTRUCTIONS: Record<PromptTask, string> = {
     'Copie os fatos como estão no currículo, no mesmo idioma; não traduza, não complete e não deduza nada que não esteja ' +
     'escrito. Campo sem informação fica como string vazia e lista sem itens fica vazia. Devolva "id" sempre como string ' +
     'vazia. Cada realização (achievement) é um item separado. Datas como aparecem no currículo, de preferência AAAA-MM; ' +
-    '"end" vazio quando o emprego é o atual.',
+    '"end" vazio quando o emprego é o atual. ' +
+    '"headline" é o título profissional escrito logo abaixo do nome. Em cada item de "skills", "group" é o rótulo do ' +
+    'grupo sob o qual a competência aparece no currículo, copiado como está e idêntico em todas as competências do ' +
+    'mesmo grupo. Em cada experiência, "section" é "complementar" quando ela está sob um título de experiências ' +
+    'complementares ou adicionais e "principal" nos demais casos; "note" é a linha, junto do período, que cita cargos ' +
+    'anteriores na mesma empresa (não é uma realização). O que o currículo não trouxer fica como string vazia.',
   profile_translate:
     'Você traduz um perfil profissional para o idioma indicado em "target" (pt-BR ou en). O perfil está em <dados>, no ' +
     'campo "profile". Devolva o mesmo perfil, com os MESMOS itens, na mesma ordem e com os mesmos valores de "id". ' +
-    'Traduza resumo, cargos, realizações, cursos, níveis e rótulos. Não acrescente nem remova nada.',
+    'Traduza resumo, cargos, realizações, cursos, níveis, rótulos, "headline", "note" e "group". O mesmo "group" ' +
+    'recebe sempre a mesma tradução, em todas as competências. Copie "section" sem alterar. Não acrescente nem remova nada.',
   tier1:
     'Você faz a triagem de vagas para o candidato descrito em <perfil>. Para CADA vaga de <dados> devolva um item em ' +
     '"results" com: "jobId" (o mesmo da vaga); "language" (código ISO 639-1 em minúsculas do idioma da vaga); "titlePt" ' +

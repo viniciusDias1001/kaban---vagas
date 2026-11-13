@@ -145,6 +145,7 @@ function translate(profile: ProfileWire, target: string): ProfileWire {
   const tag = (text: string) => (text ? `[${target}] ${text}` : text);
   return {
     ...profile,
+    headline: tag(profile.headline),
     summary: tag(profile.summary),
     experiences: profile.experiences.map((e) => ({
       ...e,
