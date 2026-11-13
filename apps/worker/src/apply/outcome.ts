@@ -1,7 +1,7 @@
 import { and, eq, isNull } from 'drizzle-orm';
 import type { EngineResult } from '@kv/apply';
 import {
-  applications, jobs, markAnswersUsed, siteState, transitionApplication, updateSiteState, type ApplicationRow, type Db,
+  applications, jobs, lockApplication, markAnswersUsed, siteState, transitionApplication, updateSiteState, type ApplicationRow, type Db,
   type Transition,
 } from '@kv/db';
 import { APPLY_TIMING, type ApplicationStatus, type ApplySiteId, type SitePauseReason } from '@kv/shared';
@@ -23,23 +23,29 @@ export async function cancelRequested(db: Db, id: number): Promise<boolean> {
  * Grava o fim de uma execução, sempre limpando o pedido de cancelamento e a espera ao vivo. Um cancelamento pedido
  * durante a execução vence qualquer desfecho, menos os que `keepOnCancel` protege (o clique pode ter acontecido).
  * Só grava a partir de um estado em andamento (ou de `from`). Devolve o estado gravado, ou null se nada foi gravado.
+ * A leitura do pedido e a gravação são uma transação com a linha travada: um cancelamento chega antes (e vence) ou
+ * depois (e encontra a linha já no desfecho), nunca no meio.
  */
 export async function settle(
   db: Db, id: number, t: Transition, now: number, opts: { keepOnCancel?: boolean } = {},
 ): Promise<ApplicationStatus | null> {
-  const cancelled = !opts.keepOnCancel && (await cancelRequested(db, id));
-  const final: Transition = cancelled ? { status: 'cancelled', message: CANCELLED_MESSAGE } : t;
-  const ok = await transitionApplication(
-    db, id,
-    { ...final, from: t.from ?? IN_PROGRESS, set: { ...final.set, cancelRequested: false, waitingGate: null } },
-    now,
-  );
-  return ok ? final.status : null;
+  return db.transaction(async (tx) => {
+    const row = await lockApplication(tx, id);
+    if (!row) return null;
+    const cancelled = !opts.keepOnCancel && row.cancelRequested;
+    const final: Transition = cancelled ? { status: 'cancelled', message: CANCELLED_MESSAGE } : t;
+    const ok = await transitionApplication(
+      tx, id,
+      { ...final, from: t.from ?? IN_PROGRESS, set: { ...final.set, cancelRequested: false, waitingGate: null } },
+      now,
+    );
+    return ok ? final.status : null;
+  });
 }
 
-/** De volta à fila para a próxima meia-noite do fuso, sem gastar tentativa. */
+/** De volta à fila para a próxima meia-noite do fuso, sem gastar tentativa. Só antes do clique de envio. */
 export function requeueTomorrow(db: Db, id: number, detail: string, now: number, timeZone: string): Promise<ApplicationStatus | null> {
-  return settle(db, id, { status: 'queued', detail, message: detail, set: { runAfter: nextMidnight(now, timeZone) } }, now);
+  return settle(db, id, { status: 'queued', detail, message: detail, from: BEFORE_CLICK, set: { runAfter: nextMidnight(now, timeZone) } }, now);
 }
 
 /** Para a candidatura no dono, com a marca "precisa de você" no card (só se ela de fato parou nele). */

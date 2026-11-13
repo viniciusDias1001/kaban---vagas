@@ -455,6 +455,41 @@ describe('answering pending questions', () => {
   });
 });
 
+describe('a stale cancel flag never follows a row back to the queue', () => {
+  const flag = (id: number) => db.update(applications).set({ cancelRequested: true }).where(eq(applications.id, id));
+  const answer = { questionId: 'q', value: 'x', source: 'bank' as const, category: 'profile_fact' as const, basis: [], bankAnswerId: null, label: 'q', help: '', kind: 'text' as const, options: [], required: true };
+
+  it('clears cancel_requested in every helper that puts a row back to queued', async () => {
+    const retried = await create();
+    const rehearsal = await create();
+    const allRehearsals = await create();
+    const waiting = await create();
+    const answered = await create();
+    const interrupted = await create();
+    const asked = await create();
+    await transitionApplication(db, retried.id, { status: 'failed' });
+    await transitionApplication(db, rehearsal.id, { status: 'dry_run_ready', set: { answers: [answer] } });
+    await transitionApplication(db, waiting.id, { status: 'needs_human', reason: 'question' });
+    await transitionApplication(db, answered.id, { status: 'needs_human', reason: 'question' });
+    await transitionApplication(db, interrupted.id, { status: 'filling' });
+    await transitionApplication(db, asked.id, { status: 'needs_human', reason: 'captcha' });
+    for (const r of [retried, rehearsal, allRehearsals, waiting, answered, interrupted]) await flag(r.id);
+
+    expect(await retryApplication(db, retried.id)).toBe('queued');
+    expect(await sendRehearsal(db, rehearsal.id)).toBe('queued');
+    await transitionApplication(db, allRehearsals.id, { status: 'dry_run_ready', set: { answers: [answer] } });
+    expect(await sendAllRehearsals(db)).toBe(1);
+    const answeredRow = (await applicationForJob(db, answered.job.id))!;
+    expect(await settlePendingQuestions(db, answeredRow, [])).toBe(true);
+    expect(await requeueQuestionWaits(db, asked.id)).toEqual([waiting.id]);
+    expect(await recoverApplications(db, 5000)).toEqual({ requeued: 1, unconfirmed: [] });
+
+    for (const r of [retried, rehearsal, allRehearsals, waiting, answered, interrupted]) {
+      expect(await applicationForJob(db, r.job.id)).toMatchObject({ status: 'queued', cancelRequested: false });
+    }
+  });
+});
+
 // O PGlite aceita um número no lugar de um timestamp; o Postgres de verdade recusa ("date/time field value out of range").
 // Então o teste confere o que seria enviado ao driver: todo valor de tempo dentro de um fragmento `sql` tem de passar pelo
 // mapeamento da coluna (ISO 8601), nunca ir como número.

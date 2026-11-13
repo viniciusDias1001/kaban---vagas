@@ -269,7 +269,7 @@ export async function recoverApplications(db: Db, now: number = Date.now()): Pro
     } else {
       const ok = await transitionApplication(
         db, id,
-        { status: 'queued', set: { waitingGate: null, runAfter: null }, message: 'O app foi reiniciado: voltou para a fila.' },
+        { status: 'queued', set: { waitingGate: null, runAfter: null, cancelRequested: false }, message: 'O app foi reiniciado: voltou para a fila.' },
         now,
       );
       if (ok) requeued += 1;
@@ -493,7 +493,7 @@ export async function requeueQuestionWaits(db: Db, exceptId: number, now: number
     // Uma linha que outro PUT de respostas já travou é recolocada na fila por ele: pular evita o impasse entre os dois.
     .for('update', { skipLocked: true });
   for (const row of rows) {
-    await writeTransition(db, row, { status: 'queued', message: 'Uma resposta nova foi salva: voltou para a fila.', set: { runAfter: null } }, now);
+    await writeTransition(db, row, { status: 'queued', message: 'Uma resposta nova foi salva: voltou para a fila.', set: { runAfter: null, cancelRequested: false } }, now);
   }
   if (rows.length > 0) {
     await db
@@ -521,7 +521,7 @@ export async function settlePendingQuestions(
   }
   await writeTransition(
     db, row,
-    { status: 'queued', message: 'O dono respondeu as perguntas.', set: { pendingQuestions: [], runAfter: null } },
+    { status: 'queued', message: 'O dono respondeu as perguntas.', set: { pendingQuestions: [], runAfter: null, cancelRequested: false } },
     now,
   );
   await db.update(jobs).set({ needsHuman: false, needsHumanReason: null }).where(eq(jobs.id, row.jobId));
