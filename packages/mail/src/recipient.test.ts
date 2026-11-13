@@ -68,4 +68,37 @@ describe('isTrustedRecipient', () => {
   it('has no company domain to trust when the card has no company', () => {
     expect(isTrustedRecipient('vagas@acme.com', { ...ctx, company: null })).toBe(false);
   });
+
+  it('trusts a company domain only when the company is the registrable label', () => {
+    const acme = { sender: 'joana@acme.com', company: 'Acme', threadAddresses: [] };
+    for (const a of ['rh@acme.com', 'rh@mail.acme.com', 'rh@acme.com.br']) expect(isTrustedRecipient(a, acme), a).toBe(true);
+    for (const a of ['x@acme.phish.io', 'x@acme.evil.com.br', 'x@acme-jobs.com', 'x@acmecorp.com', 'x@mail.acme.phish.io']) {
+      expect(isTrustedRecipient(a, acme), a).toBe(false);
+    }
+  });
+
+  it('never trusts a company name shorter than 3 characters by domain', () => {
+    const nu = { sender: 'joana@outro.example', company: 'Nu', threadAddresses: [] };
+    expect(isTrustedRecipient('rh@nu.com', nu)).toBe(false);
+    expect(isTrustedRecipient('rh@nu.com.br', nu)).toBe(false);
+  });
+
+  it('never trusts an address with characters outside a plain address', () => {
+    const acme = { sender: 'joana@acme.com', company: 'Acme', threadAddresses: [] };
+    for (const a of ['"x"@acme.com', 'x;y@acme.com', 'x:y@acme.com', '<x@acme.com>', 'x@acme.com>', 'x@acme', 'x@-.com.', 'x@acme..com']) {
+      expect(isTrustedRecipient(a, acme), a).toBe(false);
+    }
+  });
+});
+
+describe('chooseRecipient with odd characters', () => {
+  it('calls an address with ; : < > or quotes ambiguous', () => {
+    for (const a of ['"x"@acme.com', 'x;y@acme.com', 'x:y@acme.com', '<x@acme.com>', 'Joana <joana@acme.com>']) {
+      expect(chooseRecipient(rawMail({ replyTo: a })), a).toEqual({ ok: false, why: 'ambiguous' });
+    }
+  });
+
+  it('accepts a plain address with upper case and spaces around it', () => {
+    expect(chooseRecipient(rawMail({ replyTo: ' Joana.Silva+vagas@Acme.com.br ' }))).toEqual({ ok: true, address: 'Joana.Silva+vagas@Acme.com.br' });
+  });
 });

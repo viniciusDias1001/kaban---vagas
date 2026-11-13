@@ -147,7 +147,7 @@ describe('headers and messages', () => {
       text: 'Segue.', inReplyTo: 'b@x', references: ['a@x', 'b@x'], attachment: { fileName: 'curriculo.pdf', content: Buffer.from('%PDF') },
     });
     expect(opts).toEqual({
-      messageId: 'out-1@kv', from: { name: 'Maria Exemplo da Silva', address: 'maria@example.com' }, to: 'joana@acme.com', subject: 'Re: Vaga',
+      messageId: 'out-1@kv', from: { name: 'Maria Exemplo da Silva', address: 'maria@example.com' }, to: { name: '', address: 'joana@acme.com' }, subject: 'Re: Vaga',
       text: 'Segue.', inReplyTo: 'b@x', references: ['a@x', 'b@x'], attachments: [{ filename: 'curriculo.pdf', content: Buffer.from('%PDF') }],
     });
     expect(opts).not.toHaveProperty('html');

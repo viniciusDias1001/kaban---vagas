@@ -40,15 +40,32 @@ export function companyInText(company: string, text: string): boolean {
   return ` ${words(text, 'drop').join(' ')} `.includes(needle) || ` ${words(text, 'space').join(' ')} `.includes(needle);
 }
 
-/** Um rótulo do domínio (fora o sufixo público) é igual ao nome normalizado sem espaços. */
-export function companyInDomain(company: string, domain: string): boolean {
-  const name = normalizeCompany(company).replace(/ /g, '');
-  if (!name) return false;
+/** Os rótulos do domínio antes do sufixo público (`com`, `io`, `com.br`, `co.uk`…), em minúsculas. */
+function labelsBeforeSuffix(domain: string): string[] {
   const labels = domain.trim().toLowerCase().split('.').filter(Boolean);
   const last = labels[labels.length - 1];
   const second = labels[labels.length - 2];
   const suffix = last && second && /^[a-z]{2}$/.test(last) && SECOND_LEVEL.has(second) ? 2 : 1;
-  return labels.slice(0, Math.max(0, labels.length - suffix)).includes(name);
+  return labels.slice(0, Math.max(0, labels.length - suffix));
+}
+
+/** Um rótulo do domínio (fora o sufixo público) é igual ao nome normalizado sem espaços. Regra frouxa: só para o filtro e o casamento. */
+export function companyInDomain(company: string, domain: string): boolean {
+  const name = normalizeCompany(company).replace(/ /g, '');
+  if (!name) return false;
+  return labelsBeforeSuffix(domain).includes(name);
+}
+
+/**
+ * O domínio é da empresa: o rótulo registrável (o que vem logo antes do sufixo público) é o nome normalizado sem
+ * espaços. `acme.com`, `acme.com.br` e `mail.acme.com` são da Acme; `acme.phish.io`, `acme-jobs.com` e `acmecorp.com`
+ * não. Nome com menos de 3 letras nunca é da empresa pelo domínio. Regra estrita: é a da confiança no destinatário.
+ */
+export function domainIsCompanys(company: string, domain: string): boolean {
+  const name = normalizeCompany(company).replace(/ /g, '');
+  if (name.length < 3) return false;
+  const labels = labelsBeforeSuffix(domain);
+  return labels.length > 0 && labels[labels.length - 1] === name;
 }
 
 export function domainOf(address: string): string {

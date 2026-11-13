@@ -295,6 +295,16 @@ describe('actOnNext: replies', () => {
     expect((await openAlerts(db))[0]).toMatchObject({ kind: 'draft', payload: { recipient: 'dados@fora.example' } });
   });
 
+  it('never sends on its own to a look-alike company domain', async () => {
+    const messageId = await classified('pedido', { replyTo: 'x@acme.phish.io' }, { requests: [req('salary'), req('email'), req('resume')] });
+    expect(await actOnNext(deps)).toBe(true);
+    const reply = await replyForMessage(db, messageId);
+    expect(reply).toMatchObject({ state: 'rascunho', toAddress: 'x@acme.phish.io', approvedBy: null });
+    expect(await openAlerts(db)).toEqual([
+      expect.objectContaining({ kind: 'draft', replyId: reply!.id, payload: { recipient: 'x@acme.phish.io' } }),
+    ]);
+  });
+
   it('sends on its own to an address the owner already wrote to in the thread', async () => {
     await insertMailMessage(db, {
       messageId: 'antes@ats.example', threadKey: 'fio', direction: 'out', uid: null, fromAddress: OWNER_ADDRESS, fromName: 'Maria',

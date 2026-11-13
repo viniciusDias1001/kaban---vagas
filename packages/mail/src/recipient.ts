@@ -1,5 +1,5 @@
 import { ATS_TRUSTED_DOMAINS, isAtsAddress } from './ats';
-import { companyInDomain, domainOf } from './company';
+import { domainIsCompanys, domainOf } from './company';
 import type { RawMail } from './types';
 
 const NO_REPLY_PREFIX = /^(no-reply|noreply|no_reply|do-not-reply|donotreply|nao-responda|naoresponda|mailer-daemon|postmaster|bounce)/i;
@@ -13,9 +13,11 @@ export function isNoReply(address: string): boolean {
 
 export type Recipient = { ok: true; address: string } | { ok: false; why: 'no_reply' | 'list' | 'auto_submitted' | 'ambiguous' };
 
-/** Exatamente um endereço simples: sem vírgula nem espaço, um só `@`, com texto dos dois lados. */
+const PLAIN_ADDRESS = /^[a-z0-9._%+-]+@[a-z0-9-]+(\.[a-z0-9-]+)+$/;
+
+/** Exatamente um endereço simples (depois de minúsculas e sem espaço nas pontas): só letras, números e `._%+-` antes do `@`, rótulos de domínio separados por ponto. */
 function isSingleAddress(address: string): boolean {
-  return /^[^\s@,]+@[^\s@,]+$/.test(address);
+  return PLAIN_ADDRESS.test(address.trim().toLowerCase());
 }
 
 /** `Reply-To` se houver, senão o remetente. Lista ou `Auto-Submitted`: sem destinatário. Endereço escolhido que não é um só endereço simples: ambíguo. Endereço escolhido "no-reply": sem destinatário. */
@@ -37,6 +39,6 @@ export function isTrustedRecipient(
   if (!isSingleAddress(wanted)) return false;
   if (wanted === ctx.sender.trim().toLowerCase()) return true;
   if (ctx.threadAddresses.some((a) => a.trim().toLowerCase() === wanted)) return true;
-  if (ctx.company !== null && companyInDomain(ctx.company, domainOf(wanted))) return true;
+  if (ctx.company !== null && domainIsCompanys(ctx.company, domainOf(wanted))) return true;
   return isAtsAddress(wanted, ATS_TRUSTED_DOMAINS);
 }

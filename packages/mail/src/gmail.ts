@@ -84,7 +84,8 @@ export function sendOptions(mail: OutgoingMail) {
   return {
     messageId: mail.messageId,
     from: { name: mail.fromName, address: mail.from },
-    to: mail.to,
+    // Objeto, não texto: o nodemailer não reinterpreta o endereço (vírgula, aspas, sinais de menor e maior).
+    to: { name: '', address: mail.to },
     subject: mail.subject,
     text: mail.text,
     inReplyTo: mail.inReplyTo,
