@@ -44,7 +44,7 @@ export function baseResume(profile: CandidateProfile, lang: ResumeLang): Tailore
  * da camada 3), grava em `tailored_resumes` e registra o uso em `tier3`. Um currículo que o dono editou à mão
  * (`editedAt`) nunca é sobrescrito: se o perfil mudou, o rascunho dele é verificado de novo contra o perfil atual e usado
  * como está, sem gravar, ou, se já não bate (id inexistente ou repetido, limite de tamanho), volta `resume_blocked` pedindo a
- * revisão dele. Vaga sem descrição não tem o que adaptar: sai o currículo base, sem chamar o modelo e sem gravar.
+ * revisão dele. Vaga sem descrição não tem o que adaptar: vale primeiro o currículo guardado que serviria (em dia, ou o do dono), e sem ele sai o currículo base, sem chamar o modelo e sem gravar.
  * `base`: o perfil do idioma da vaga como está, sem chamar o modelo.
  *
  * QUEM CHAMA: busca a descrição da vaga ANTES (LinkedIn e Indeed a trazem vazia até a busca) e passa `mayCall`, que diz se o
@@ -70,7 +70,7 @@ export async function applicationResume(
   const context = { jobCompany: job.company, jobTitle: job.title, jobKeywords: keywordsOf(ai) };
 
   let resume: TailoredResume;
-  if (mode === 'base' || job.description.trim() === '') {
+  if (mode === 'base') {
     resume = baseResume(profile.data, lang);
   } else {
     const [stored] = await db.select().from(tailoredResumes).where(eq(tailoredResumes.jobId, job.id));
@@ -81,6 +81,9 @@ export async function applicationResume(
       const again = resolveTailored(draftOf(stored.content), profile.data, lang, context);
       if (stored.lang !== lang || again.violations.some((v) => isStructural(v) || v.code === 'limit')) return blocked(EDITED_STALE);
       resume = again.resume;
+    } else if (job.description.trim() === '') {
+      // Nada a adaptar e nenhum currículo guardado que sirva: sai o base.
+      resume = baseResume(profile.data, lang);
     } else {
       const draft = async (corrections?: TailoredCorrection[]) => {
         const res = await billing.billed('tier3', 'strong', () =>
