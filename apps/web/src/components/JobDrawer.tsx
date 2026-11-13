@@ -13,6 +13,7 @@ import { useAiStatus, useJobAi, useJobScores } from '../useAi';
 import { useJobNotes } from '../useJobNotes';
 import { useMoveJob } from '../useMoveJob';
 import { JobAiSection } from './JobAiSection';
+import { JobApplicationSection } from './JobApplicationSection';
 import { SourceMark, sourceInfo } from './SourceMark';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
@@ -291,6 +292,9 @@ function DrawerContent({ id, onOpenSettings }: { id: number; onOpenSettings: () 
         </div>
 
         <MoveTo job={job} index={order++} />
+
+        {/* Some quando a função está desligada e a vaga não tem candidatura: o painel fica como sempre foi. */}
+        <JobApplicationSection job={job} index={order++} />
 
         {hasStacks && (
           <Section title="Stacks" index={order++}>

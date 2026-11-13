@@ -1,0 +1,1 @@
+ALTER TABLE "applications" ADD COLUMN "approved_answers" jsonb DEFAULT '[]'::jsonb NOT NULL;

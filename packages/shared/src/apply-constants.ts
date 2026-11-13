@@ -28,7 +28,8 @@ export type ApplyResumeMode = 'tailored' | 'base';
  */
 export const APPLY_AI_ANSWER_MODES = ['off', 'review', 'auto'] as const;
 export type ApplyAiAnswers = (typeof APPLY_AI_ANSWER_MODES)[number];
-export type ShotKind = 'filled' | 'confirmation' | 'blocked';
+export const SHOT_KINDS = ['filled', 'confirmation', 'blocked'] as const;
+export type ShotKind = (typeof SHOT_KINDS)[number];
 export type SiteSession = 'unknown' | 'logged_in' | 'logged_out';
 export type SitePauseReason = 'brake' | 'restricted' | 'owner_away';
 
@@ -135,6 +136,8 @@ export interface ApplySiteStateDto {
 export interface ApplyStatusDto {
   available: boolean; unavailableReason: string | null; enabled: boolean; withinWindow: boolean;
   sites: ApplySiteStateDto[]; totalToday: number; totalCap: number; queued: number; needsHuman: number;
+  /** Candidaturas em `preparing`, `filling`, `waiting_human` ou `submitting`. */
+  running: number;
   /** Há uma espera ao vivo agora (captcha, código, login): a tela avisa o dono. */
   waiting: { applicationId: number; jobId: number; gate: string } | null;
 }
@@ -142,6 +145,30 @@ export interface ApplyAnswerDto {
   id: number; question: string; key: string | null; answer: string; kind: 'text' | 'number' | 'boolean' | 'choice';
   scope: AnswerScope; scopeValue: string | null; country: string | null;
   aliases: { normalized: string; options: string[]; value: string }[]; usedCount: number; updatedAt: number;
+}
+
+/** O texto com que um valor de formulário é guardado no banco de respostas: boolean vira 'Sim' ou 'Não'; lista vira uma opção por linha; texto fica aparado; null vira ''. */
+export function bankText(value: AnswerValue): string {
+  if (value === null) return '';
+  if (typeof value === 'boolean') return value ? 'Sim' : 'Não';
+  if (Array.isArray(value)) return value.map((v) => v.trim()).filter(Boolean).join('\n');
+  return value.trim();
+}
+
+const BANK_YES = ['sim', 'yes', 'true', 'verdadeiro', 's', 'y', '1'];
+const BANK_NO = ['nao', 'no', 'false', 'falso', 'n', '0'];
+
+/** Lê uma resposta salva como sim ou não: sim, yes, true, verdadeiro, s, y, 1 / não, nao, no, false, falso, n, 0 (sem diferenciar maiúsculas e acentos). Qualquer outra coisa: null. */
+export function bankBoolean(text: string): boolean | null {
+  const key = optionKey(text);
+  if (BANK_YES.includes(key)) return true;
+  if (BANK_NO.includes(key)) return false;
+  return null;
+}
+
+/** As linhas não vazias de uma resposta salva de múltipla escolha, aparadas. */
+export function bankList(text: string): string[] {
+  return text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
 }
 
 /** Chave estrita de uma opção de lista: sem espaços sobrando, minúscula, sem acentos; dígitos, pontuação e símbolos ficam. */

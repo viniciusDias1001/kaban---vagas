@@ -9,6 +9,8 @@ import { LIMITS } from '@kv/shared';
 import { createAiContext, type AiContextOptions } from './ai-context';
 import { resolveAllowedHosts } from './config';
 import { aiRoutes } from './routes/ai';
+import { applicationRoutes } from './routes/applications';
+import { applyRoutes } from './routes/apply';
 import { jobAiRoutes } from './routes/job-ai';
 import { settingsRoutes } from './routes/settings';
 import { tailoredRoutes } from './routes/tailored';
@@ -177,6 +179,8 @@ export function buildApp(db: Db, opts: AppOptions = {}) {
     jobAiRoutes(scope, db, ctx);
     tailoredRoutes(scope, db, ctx);
     settingsRoutes(scope, db, ctx);
+    applyRoutes(scope, db, ctx);
+    applicationRoutes(scope, db, ctx);
   };
   app.register(routes);
   app.register(routes, { prefix: API_PREFIX });

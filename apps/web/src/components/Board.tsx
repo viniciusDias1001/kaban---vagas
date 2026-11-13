@@ -8,7 +8,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowDownWideNarrow, CloudOff, LoaderCircle, RotateCw, Rows2, Rows4, Search, X } from 'lucide-react';
 import { motion, useReducedMotion } from 'motion/react';
 import { memo, useCallback, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { COLUMNS, COLUMN_LABELS, LIMITS, type Column, type JobListItemDto } from '@kv/shared/client';
+import { COLUMNS, COLUMN_LABELS, LIMITS, type ApplicationStatus, type Column, type JobListItemDto } from '@kv/shared/client';
 import { api } from '../api';
 import { scoringPauseText, type ColumnSort, type ScoreMap } from '../lib/ai';
 import { LAYOUT_ANIMATED, PAGE_SIZE, countJobs, displayColumn, filterByColumn, groupByColumn, normalizeText, remainingAfter, type ByColumn } from '../lib/board';
@@ -17,6 +17,7 @@ import { useDebouncedValue, useScrollEdges } from '../lib/hooks';
 import { spring, springSnap } from '../lib/motion';
 import { cn } from '../lib/utils';
 import { useAiStatus, useJobScores } from '../useAi';
+import { useApplications } from '../useApply';
 import { JOBS_KEY, MOVE_KEY, useMoveJob } from '../useMoveJob';
 import { JobCard, JobCardBody } from './JobCard';
 import { StatsBar } from './StatsBar';
@@ -27,6 +28,8 @@ import { Skeleton } from './ui/skeleton';
 import { Tooltip } from './ui/tooltip';
 
 const NO_JOBS: JobListItemDto[] = [];
+/** Estado da candidatura automática por vaga, para os selos dos cards. */
+type ApplicationStatusMap = ReadonlyMap<number, ApplicationStatus>;
 /** Espera depois da última tecla antes de filtrar o quadro. */
 const FILTER_DEBOUNCE_MS = 160;
 
@@ -117,9 +120,10 @@ interface ColumnProps {
   /** A IA está configurada e existe ao menos uma nota: o botão de ordenar aparece. */
   canSort: boolean;
   onToggleSort: (column: Column) => void;
+  applications: ApplicationStatusMap;
 }
 
-const ColumnView = memo(function ColumnView({ column, index, jobs, total, filtered, onOpen, compact, isTarget, scores, sort, canSort, onToggleSort }: ColumnProps) {
+const ColumnView = memo(function ColumnView({ column, index, jobs, total, filtered, onOpen, compact, isTarget, scores, sort, canSort, onToggleSort, applications }: ColumnProps) {
   const { setNodeRef } = useDroppable({ id: `col:${column}` });
   // Só uma "página" de cards vai para o DOM; o resto entra em passos com "Mostrar mais". Soltar um card na
   // coluna continua valendo o fim de verdade: a posição é calculada sobre a coluna completa (useMoveJob).
@@ -176,7 +180,7 @@ const ColumnView = memo(function ColumnView({ column, index, jobs, total, filter
         {visible.map((j, i) => (
           <JobCard
             key={j.id} job={j} onOpen={onOpen} order={i < LAYOUT_ANIMATED ? order : ''} index={i} compact={compact}
-            animateLayout={i < LAYOUT_ANIMATED} ai={scores.get(j.id)} insertable={!byScore}
+            animateLayout={i < LAYOUT_ANIMATED} ai={scores.get(j.id)} insertable={!byScore} applicationStatus={applications.get(j.id)}
           />
         ))}
         {remaining > 0 && (
@@ -241,7 +245,11 @@ function BoardSkeleton() {
   );
 }
 
-export const Board = memo(function Board({ onOpen }: { onOpen: (id: number) => void }) {
+export const Board = memo(function Board({ onOpen, onShowNeedsHuman }: {
+  onOpen: (id: number) => void;
+  /** O contador "Precisam de você" abre a aba Candidaturas nesse filtro. */
+  onShowNeedsHuman?: () => void;
+}) {
   const qc = useQueryClient();
   const reducedMotion = useReducedMotion();
   const [q, setQ] = useState('');
@@ -267,6 +275,17 @@ export const Board = memo(function Board({ onOpen }: { onOpen: (id: number) => v
   const scoringPause = aiConfigured && aiStatus?.scoringPause ? scoringPauseText(aiStatus.scoringPause) : null;
   const { scores } = useJobScores(aiConfigured);
   const canSort = aiConfigured && scores.size > 0;
+  // Candidaturas: uma consulta para o quadro todo, juntada às vagas pelo `jobId` (como as notas). O mapa só muda
+  // quando algum estado muda, para as colunas memoizadas não re-renderizarem a cada releitura.
+  const { data: applicationList } = useApplications();
+  const applicationSignature = (applicationList ?? []).map((a) => `${a.jobId}:${a.status}`).join(',');
+  const applications = useMemo<ApplicationStatusMap>(
+    () => new Map(applicationSignature === '' ? [] : applicationSignature.split(',').map((p) => {
+      const [jobId, status] = p.split(':');
+      return [Number(jobId), status as ApplicationStatus] as const;
+    })),
+    [applicationSignature],
+  );
   const [sort, setSort] = useState<SortByColumn>(readSort);
   const toggleSort = useCallback((column: Column) => {
     setSort((prev) => {
@@ -389,7 +408,7 @@ export const Board = memo(function Board({ onOpen }: { onOpen: (id: number) => v
         initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} transition={spring}
         className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3"
       >
-        <StatsBar />
+        <StatsBar onShowNeedsHuman={onShowNeedsHuman} />
         <div className="flex min-w-64 flex-1 items-center justify-end gap-2.5">
           {hasFilter && !filtering && isSuccess && (
             <span aria-live="polite" className="whitespace-nowrap text-xs tabular-nums text-muted">
@@ -492,7 +511,7 @@ export const Board = memo(function Board({ onOpen }: { onOpen: (id: number) => v
                 <ColumnView
                   key={c} column={c} index={i} jobs={matched[c]} total={byColumn[c].length} filtered={hasFilter}
                   onOpen={onOpen} compact={compact} isTarget={overColumn === c}
-                  scores={scores} sort={sort[c]} canSort={canSort} onToggleSort={toggleSort}
+                  scores={scores} sort={sort[c]} canSort={canSort} onToggleSort={toggleSort} applications={applications}
                 />
               ))}
             </motion.div>
@@ -509,7 +528,7 @@ export const Board = memo(function Board({ onOpen }: { onOpen: (id: number) => v
                 transition={springSnap}
                 className="job-card job-card--lifted"
               >
-                <JobCardBody job={active} compact={compact} ai={scores.get(active.id)} />
+                <JobCardBody job={active} compact={compact} ai={scores.get(active.id)} applicationStatus={applications.get(active.id)} />
               </motion.article>
             )}
           </DragOverlay>

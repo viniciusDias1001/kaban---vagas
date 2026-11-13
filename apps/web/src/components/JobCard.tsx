@@ -1,9 +1,11 @@
 import { useDraggable, useDroppable } from '@dnd-kit/core';
+import { Bot, FlaskConical, Hand } from 'lucide-react';
 import { motion } from 'motion/react';
 import { memo, useCallback, useMemo, type KeyboardEvent } from 'react';
-import type { JobAiListItemDto, JobListItemDto } from '@kv/shared/client';
+import type { ApplicationStatus, JobAiListItemDto, JobListItemDto } from '@kv/shared/client';
 import { ageLabel } from '../age';
 import { cardTitle } from '../lib/ai';
+import { cardBadge } from '../lib/apply';
 import { spring } from '../lib/motion';
 import { cn } from '../lib/utils';
 import { LanguageBadge, ScoreBadge } from './ScoreBadge';
@@ -22,6 +24,34 @@ function Age({ postedAt }: { postedAt: number | null }) {
   );
 }
 
+type CardBadgeKind = NonNullable<ReturnType<typeof cardBadge>>;
+const CARD_BADGES: Record<CardBadgeKind, { label: string; tone: 'warn' | 'accent' | 'ok' | 'neutral' }> = {
+  needs_human: { label: 'precisa de você', tone: 'warn' },
+  applying: { label: 'IA aplicando', tone: 'accent' },
+  rehearsal: { label: 'ensaio pronto', tone: 'neutral' },
+  applied_by_ai: { label: 'aplicada pela IA', tone: 'ok' },
+};
+
+/** O selo da candidatura automática: a marca da vaga manda, depois o estado da candidatura (`cardBadge`). */
+function ApplyBadge({ job, status, className }: { job: JobListItemDto; status: ApplicationStatus | undefined; className?: string }) {
+  const kind = cardBadge(job, status);
+  if (!kind) return null;
+  const { label, tone } = CARD_BADGES[kind];
+  return (
+    <Badge tone={tone} data-testid={`job-badge-${kind}`} className={cn('gap-1', className)}>
+      {kind === 'applying' ? (
+        <span aria-hidden className="relative flex size-1.5">
+          <span className="absolute inset-0 animate-pulse-dot rounded-full bg-current" />
+          <span className="relative size-1.5 rounded-full bg-current" />
+        </span>
+      ) : kind === 'needs_human' ? <Hand aria-hidden className="size-3" />
+        : kind === 'rehearsal' ? <FlaskConical aria-hidden className="size-3 text-accent" />
+        : <Bot aria-hidden className="size-3" />}
+      {label}
+    </Badge>
+  );
+}
+
 /**
  * Hierarquia do card: título (o que se lê primeiro) → fonte + empresa + local → nível/stacks e idade.
  * No modo compacto ficam só as duas primeiras linhas, com a idade na segunda.
@@ -29,7 +59,11 @@ function Age({ postedAt }: { postedAt: number | null }) {
  * Com `ai` (a vaga já tem nota) entram a nota ao lado do título, o idioma original e o título traduzido,
  * com o original na dica. Sem `ai` o card fica exatamente como sempre foi: nada é reservado.
  */
-export function JobCardBody({ job, compact = false, ai }: { job: JobListItemDto; compact?: boolean; ai?: JobAiListItemDto }) {
+export function JobCardBody({ job, compact = false, ai, applicationStatus }: {
+  job: JobListItemDto; compact?: boolean; ai?: JobAiListItemDto;
+  /** Estado da candidatura automática desta vaga (o quadro junta por `jobId`); ausente sem candidatura. */
+  applicationStatus?: ApplicationStatus;
+}) {
   const shown = cardTitle(job.title, ai);
   const scored = ai !== undefined && ai.score !== null;
   const heading = (
@@ -65,12 +99,12 @@ export function JobCardBody({ job, compact = false, ai }: { job: JobListItemDto;
             {job.stacks.slice(0, 3).map((s) => (
               <Badge key={s} className="max-w-full truncate">{s}</Badge>
             ))}
-            {job.needsHuman && <Badge tone="warn">precisa de você</Badge>}
+            <ApplyBadge job={job} status={applicationStatus} />
           </div>
           <span className="flex h-5 shrink-0 items-center"><Age postedAt={job.postedAt} /></span>
         </div>
       )}
-      {compact && job.needsHuman && <Badge tone="warn" className="mt-1.5">precisa de você</Badge>}
+      {compact && <ApplyBadge job={job} status={applicationStatus} className="mt-1.5" />}
     </div>
   );
 }
@@ -89,6 +123,8 @@ interface JobCardProps {
   compact: boolean;
   /** Nota, idioma e título traduzido desta vaga; ausente quando a IA ainda não a avaliou. */
   ai?: JobAiListItemDto;
+  /** Estado da candidatura automática desta vaga, se houver. */
+  applicationStatus?: ApplicationStatus;
   /** false na coluna ordenada por nota: soltar sobre o card não o coloca "antes dele", então sem linha de inserção. */
   insertable?: boolean;
 }
@@ -144,7 +180,7 @@ const CardView = memo(function CardView(p: CardViewProps) {
       {...p.listeners}
       {...p.attributes}
     >
-      <JobCardBody job={job} compact={p.compact} ai={p.ai} />
+      <JobCardBody job={job} compact={p.compact} ai={p.ai} applicationStatus={p.applicationStatus} />
     </motion.article>
   );
 });
