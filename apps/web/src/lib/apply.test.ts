@@ -203,6 +203,7 @@ describe('answer bank rows', () => {
     expect(scopeLabel('job', 'x')).toBe('só nesta vaga');
     expect(countryLabel('BR')).toBe('vagas no Brasil');
     expect(countryLabel('US')).toBe('vagas em US');
+    expect(countryLabel('INT')).toBe('vagas fora do Brasil');
     expect(countryLabel(null)).toBeNull();
     expect([0, 1, 3].map(usedLabel)).toEqual(['ainda não usada', 'usada 1 vez', 'usada 3 vezes']);
   });

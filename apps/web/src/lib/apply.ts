@@ -506,7 +506,10 @@ export function scopeLabel(scope: AnswerScope, scopeValue: string | null): strin
 /** O país a que a resposta se limita; null quando vale em qualquer um. */
 export function countryLabel(country: string | null): string | null {
   if (!country) return null;
-  return country === 'BR' ? 'vagas no Brasil' : `vagas em ${country}`;
+  if (country === 'BR') return 'vagas no Brasil';
+  // Resposta pessoal aprendida numa vaga de fora do Brasil (o país da vaga é BR ou INT).
+  if (country === 'INT') return 'vagas fora do Brasil';
+  return `vagas em ${country}`;
 }
 
 export function usedLabel(count: number): string {
