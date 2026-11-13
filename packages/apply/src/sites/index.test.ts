@@ -11,6 +11,7 @@ describe('site registry', () => {
   it('uses only the fake site when FAKE_APPLY_SITE=1', () => {
     expect(applySites({ FAKE_APPLY_SITE: '1' }).map((s) => s.id)).toEqual(['fake']);
     expect(applySites({}).some((s) => s.id === 'fake')).toBe(false);
+    expect(applySites({}).map((s) => s.id)).toContain('greenhouse');
   });
   it('matches a job to the first site that accepts it', () => {
     const fake = createFakeSite();
