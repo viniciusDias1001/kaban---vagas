@@ -57,7 +57,8 @@ export function resolveFact(fact: KnownFact, src: FactSources): FactValue | null
       const unit = src.country === 'BR' ? 'brl_month' : 'usd_year';
       const a = savedAnswer(src, src.country === 'BR' ? 'salary_brl_month' : 'salary_usd_year');
       const n = a === null ? null : parseNumberAnswer(a);
-      return n === null ? null : { amount: Number(n), unit };
+      // Só valor inteiro: o texto da resposta mostra o valor sem centavos, e um valor arredondado não é o que o dono salvou.
+      return n === null || !Number.isInteger(Number(n)) ? null : { amount: Number(n), unit };
     }
     case 'visa_sponsorship': return answerFlag(src, 'visa_sponsorship');
     case 'work_authorization': return answerFlag(src, 'work_authorization');
