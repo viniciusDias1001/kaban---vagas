@@ -1,4 +1,4 @@
-import type { CandidateProfile, ProfileWire, Violation } from '@kv/shared';
+import { withProfileDefaults, type CandidateProfile, type ProfileWire, type Violation } from '@kv/shared';
 import { AiError, type AiErrorExtra } from './errors';
 import { buildTermIndex, foldedWords, hasControlChars, looseNumberId, novelTerms, numberIds } from './text';
 import { describeViolations, profileTexts } from './verify';
@@ -61,12 +61,15 @@ const EMPTY_INDEX = buildTermIndex([]);
  *   modelo devolveu nesses campos é ignorado);
  * - nomes de habilidade e de certificação só aceitam a tradução quando ela não muda nada verificável
  *   (números, termos técnicos, siglas, quantidade de itens); senão, vale o texto de origem, sem erro;
- * - resumo, realizações, cargos, cursos, idiomas, níveis, locais e rótulos vêm do modelo, e cada um é
+ * - o grupo de cada competência vem da tradução da primeira competência do grupo (mesma para todas), aceita só se
+ *   passar na conferência de rótulo; a seção é copiada;
+ * - resumo, título profissional, notas, realizações, cargos, cursos, idiomas, níveis, locais e rótulos vêm do modelo, e cada um é
  *   conferido contra o campo de origem: mesmos números, nenhum termo técnico/sigla/nome conhecido que não
  *   exista no perfil de origem, nenhum nível de cargo ou grau de formação novo, tamanho proporcional, sem
  *   caractere de controle. Campo traduzido vazio volta para o texto de origem.
  */
-export function mergeTranslation(source: CandidateProfile, translated: ProfileWire): { merged: ProfileWire; violations: Violation[] } {
+export function mergeTranslation(stored: CandidateProfile, translated: ProfileWire): { merged: ProfileWire; violations: Violation[] } {
+  const source = withProfileDefaults(stored);
   const violations: Violation[] = [];
   const index = buildTermIndex(profileTexts(source));
   const pick = <T extends { id: string }>(items: T[], id: string, where: string): T => {
@@ -121,13 +124,29 @@ export function mergeTranslation(source: CandidateProfile, translated: ProfileWi
     return out;
   }
 
+  /**
+   * Grupo de competências: vale a tradução da PRIMEIRA competência de cada grupo de origem, para todas as do grupo.
+   * Só é aceita se for igual à origem ou sem problema de rótulo; senão fica o rótulo de origem, sem violação.
+   * Não passa por name(): "Back-end & APIs" seria tratado como nome próprio e como lista.
+   */
+  const groups = new Map<string, string>();
+  for (const k of source.skills) {
+    const src = k.group.trim();
+    if (!src || groups.has(src)) continue;
+    const out = pick(translated.skills, k.id, 'skills').group.trim();
+    groups.set(src, !out || out === src || problems(src, out, 'label').length > 0 ? k.group : out);
+  }
+
   const merged: ProfileWire = {
     contact: { ...source.contact, location: field(source.contact.location, translated.contact.location, 'label', 'contact.location') },
+    headline: field(source.headline, translated.headline, 'rank', 'headline'),
     summary: field(source.summary, translated.summary, 'prose', 'summary'),
     experiences: source.experiences.map((e, i) => {
       const t = pick(translated.experiences, e.id, 'experiences');
       return {
         ...e,
+        section: e.section,
+        note: field(e.note, t.note, 'rank', `experiences[${i}].note`),
         title: field(e.title, t.title, 'rank', `experiences[${i}].title`),
         location: field(e.location, t.location, 'label', `experiences[${i}].location`),
         achievements: e.achievements.map((a, j) => ({
@@ -139,7 +158,7 @@ export function mergeTranslation(source: CandidateProfile, translated: ProfileWi
     education: source.education.map((e, i) => ({
       ...e, degree: field(e.degree, pick(translated.education, e.id, 'education').degree, 'rank', `education[${i}].degree`),
     })),
-    skills: source.skills.map((k) => ({ ...k, name: name(k.name, pick(translated.skills, k.id, 'skills').name) })),
+    skills: source.skills.map((k) => ({ ...k, group: groups.get(k.group.trim()) ?? k.group, name: name(k.name, pick(translated.skills, k.id, 'skills').name) })),
     languages: source.languages.map((l, i) => {
       const t = pick(translated.languages, l.id, 'languages');
       return { ...l, name: field(l.name, t.name, 'label', `languages[${i}].name`), level: field(l.level, t.level, 'label', `languages[${i}].level`) };

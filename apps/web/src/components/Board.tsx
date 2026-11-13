@@ -27,6 +27,7 @@ import { Skeleton } from './ui/skeleton';
 import { Tooltip } from './ui/tooltip';
 
 const NO_JOBS: JobListItemDto[] = [];
+/** Estado da candidatura automática por vaga, para os selos dos cards. */
 /** Espera depois da última tecla antes de filtrar o quadro. */
 const FILTER_DEBOUNCE_MS = 160;
 
@@ -241,7 +242,11 @@ function BoardSkeleton() {
   );
 }
 
-export const Board = memo(function Board({ onOpen }: { onOpen: (id: number) => void }) {
+export const Board = memo(function Board({ onOpen, onShowNeedsHuman }: {
+  onOpen: (id: number) => void;
+  /** O contador "Precisam de você" abre a aba Candidaturas nesse filtro. */
+  onShowNeedsHuman?: () => void;
+}) {
   const qc = useQueryClient();
   const reducedMotion = useReducedMotion();
   const [q, setQ] = useState('');
@@ -389,7 +394,7 @@ export const Board = memo(function Board({ onOpen }: { onOpen: (id: number) => v
         initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} transition={spring}
         className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3"
       >
-        <StatsBar />
+        <StatsBar onShowNeedsHuman={onShowNeedsHuman} />
         <div className="flex min-w-64 flex-1 items-center justify-end gap-2.5">
           {hasFilter && !filtering && isSuccess && (
             <span aria-live="polite" className="whitespace-nowrap text-xs tabular-nums text-muted">

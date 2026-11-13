@@ -14,6 +14,8 @@ import type { AiProvider } from './types';
  * - FAKE_AI_FIXABLE: igual a COMPROMISED, mas só na primeira tentativa: a nova tentativa (com `corrections` nos
  *   dados) vem limpa;
  * - FAKE_AI_EXTRA_FIELD: a camada 3 devolve um campo "company" a mais (quem barra é o schema).
+ * COMPROMISED também vale para a candidatura: a classificação devolve uma categoria inexistente e a resposta aberta
+ * ganha um número e uma empresa inventados.
  *
  * Formato de currículo que a extração falsa entende (o mesmo do arquivo de exemplo de @kv/resume/testing):
  *   linha 1: nome; linha 2: resumo; a linha com "@": contato, separado por " • " (e-mail e, por último, local);
@@ -71,6 +73,24 @@ function respond(task: string, data: Record<string, unknown>, profile: unknown):
       return analyze(data.job as FakeJob, skillNames(profile));
     case 'tier3':
       return tailor(profile as CandidateProfile, JSON.stringify(data), 'corrections' in data);
+    case 'apply_gate':
+      return { score: 80, reason: 'Aderência simulada pelo provedor falso.', eligible: true, ineligibleReason: '' };
+    case 'apply_classify': {
+      // FAKE_AI_COMPROMISED: categoria fora da lista (estrutura válida; quem barra é `classifyQuestions`).
+      const category = JSON.stringify(data).includes('FAKE_AI_COMPROMISED') ? 'astrology' : 'unknown';
+      return { items: (data.questions as { questionId: string }[]).map((qn) => ({ questionId: qn.questionId, category })) };
+    }
+    case 'apply_match':
+      return { items: [] };
+    case 'apply_facts':
+      return {
+        items: (data.questions as { questionId: string }[]).map((qn) => ({ questionId: qn.questionId, answer: '', basis: [], unknown: true })),
+      };
+    case 'apply_open': {
+      // FAKE_AI_COMPROMISED: o texto ganha um número e uma empresa inventados (quem barra é `verifyOpenAnswer`).
+      const summary = (profile as CandidateProfile).summary;
+      return { text: JSON.stringify(data).includes('FAKE_AI_COMPROMISED') ? `${summary} Trabalhei 10 anos na Empresa Inventada.` : summary };
+    }
     default:
       throw new AiError('other', `provedor falso: tarefa desconhecida "${task}"`);
   }
@@ -145,6 +165,7 @@ function translate(profile: ProfileWire, target: string): ProfileWire {
   const tag = (text: string) => (text ? `[${target}] ${text}` : text);
   return {
     ...profile,
+    headline: tag(profile.headline),
     summary: tag(profile.summary),
     experiences: profile.experiences.map((e) => ({
       ...e,
@@ -164,6 +185,7 @@ function extract(text: string): ProfileWire {
   const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
   const out: ProfileWire = {
     contact: { name: lines[0] ?? '', email: '', phone: '', location: '' },
+    headline: '',
     summary: lines[1] ?? '',
     experiences: [], education: [], skills: [], languages: [], certifications: [], links: [],
   };
@@ -180,13 +202,13 @@ function extract(text: string): ProfileWire {
       out.contact.email = parts.find((p) => p.includes('@')) ?? '';
       out.contact.location = parts.length > 1 ? parts[parts.length - 1] : '';
     } else if (section === 'experience' && cells.length === 4) {
-      out.experiences.push({ id: '', title: cells[0], company: cells[1], start: cells[2], end: cells[3], location: '', achievements: [] });
+      out.experiences.push({ id: '', title: cells[0], company: cells[1], start: cells[2], end: cells[3], location: '', section: 'principal', note: '', achievements: [] });
     } else if (section === 'experience' && line.startsWith('- ')) {
       out.experiences.at(-1)?.achievements.push({ id: '', text: line.slice(2) });
     } else if (section === 'education' && cells.length === 4) {
       out.education.push({ id: '', degree: cells[0], institution: cells[1], start: cells[2], end: cells[3] });
     } else if (section === 'skills') {
-      out.skills.push(...line.split(',').map((name) => ({ id: '', name: name.trim() })).filter((k) => k.name));
+      out.skills.push(...line.split(',').map((name) => ({ id: '', name: name.trim(), group: '' })).filter((k) => k.name));
     } else if (section === 'languages') {
       for (const item of line.split(',')) {
         const m = /^(.*?)\s*\((.*)\)$/.exec(item.trim());

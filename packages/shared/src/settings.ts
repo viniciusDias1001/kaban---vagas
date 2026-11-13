@@ -1,7 +1,8 @@
 import { z } from 'zod';
+import { APPLY_AI_ANSWER_MODES, APPLY_SITE_IDS } from './apply-constants';
 import { hasNul } from './constants';
 import {
-  AI_PROVIDER_IDS, API_KEY_PATTERN, COMPANY_SLUG_PATTERN, MODEL_ID_PATTERN, SETTINGS_LIMITS, type SettingKey,
+  AI_PROVIDER_IDS, APPLY_SETTINGS_LIMITS, API_KEY_PATTERN, COMPANY_SLUG_PATTERN, MODEL_ID_PATTERN, SETTINGS_LIMITS, type SettingKey,
   type SettingsPatch,
 } from './settings-constants';
 
@@ -23,6 +24,22 @@ const companies = z
   .max(SETTINGS_LIMITS.companies)
   .transform((list) => [...new Set(list)]);
 
+const applyMode = z.enum(['dry_run', 'real']);
+const applyCap = z.number().int().min(0).max(APPLY_SETTINGS_LIMITS.maxCap);
+const clock = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'use o formato HH:MM');
+const blockList = z
+  .array(z.string().trim().min(1).max(APPLY_SETTINGS_LIMITS.listItemLength))
+  .max(APPLY_SETTINGS_LIMITS.listItems)
+  .transform((list) => {
+    const seen = new Set<string>();
+    return list.filter((item) => {
+      const key = item.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  });
+
 /**
  * O schema de cada configuração. Usado duas vezes: para validar o PATCH e para reler o que está no banco
  * (uma linha que não passa aqui é ignorada, e vale o ambiente ou o padrão).
@@ -36,6 +53,21 @@ export const SETTING_SCHEMAS = {
   tier2Auto: z.boolean(),
   greenhouseBoards: companies,
   leverCompanies: companies,
+  applyEnabled: z.boolean(),
+  applyMinScore: z.number().int().min(0).max(100),
+  applySiteModes: z.strictObject(Object.fromEntries(APPLY_SITE_IDS.map((id) => [id, applyMode.optional()]))),
+  applyDailyCaps: z.strictObject({
+    linkedin: applyCap.optional(), greenhouse: applyCap.optional(), lever: applyCap.optional(),
+    fake: applyCap.optional(), total: applyCap.optional(), linkedinViews: applyCap.optional(),
+  }),
+  applyCompanyCap: z.number().int().min(1).max(APPLY_SETTINGS_LIMITS.maxCompanyCap),
+  applyWindow: z
+    .strictObject({ start: clock, end: clock })
+    .refine((w) => w.start < w.end, 'o início precisa ser antes do fim'),
+  applyResumeMode: z.enum(['tailored', 'base']),
+  applyAiAnswers: z.enum(APPLY_AI_ANSWER_MODES),
+  applyBlockedCompanies: blockList,
+  applyBlockedTerms: blockList,
 } satisfies Record<SettingKey, z.ZodType>;
 
 /** PATCH /settings: todos os campos opcionais; `null` apaga o valor gravado; campo desconhecido é recusado. */
@@ -49,6 +81,16 @@ export const SettingsPatchSchema: z.ZodType<SettingsPatch> = z
     tier2Auto: SETTING_SCHEMAS.tier2Auto.nullable(),
     greenhouseBoards: SETTING_SCHEMAS.greenhouseBoards.nullable(),
     leverCompanies: SETTING_SCHEMAS.leverCompanies.nullable(),
+    applyEnabled: SETTING_SCHEMAS.applyEnabled.nullable(),
+    applyMinScore: SETTING_SCHEMAS.applyMinScore.nullable(),
+    applySiteModes: SETTING_SCHEMAS.applySiteModes.nullable(),
+    applyDailyCaps: SETTING_SCHEMAS.applyDailyCaps.nullable(),
+    applyCompanyCap: SETTING_SCHEMAS.applyCompanyCap.nullable(),
+    applyWindow: SETTING_SCHEMAS.applyWindow.nullable(),
+    applyResumeMode: SETTING_SCHEMAS.applyResumeMode.nullable(),
+    applyAiAnswers: SETTING_SCHEMAS.applyAiAnswers.nullable(),
+    applyBlockedCompanies: SETTING_SCHEMAS.applyBlockedCompanies.nullable(),
+    applyBlockedTerms: SETTING_SCHEMAS.applyBlockedTerms.nullable(),
   })
   .partial();
 

@@ -4,6 +4,8 @@ import {
 } from '@kv/ai';
 import { aiKeys, settings as settingsTable, type Db } from '@kv/db';
 import {
+  APPLY_DEFAULTS, APPLY_SITE_IDS, type ApplyAiAnswers, type ApplyConfig, type ApplyDailyCaps, type ApplyMode, type ApplyResumeMode,
+  type ApplySiteId, type ApplyWindow,
   AI_KEY_ENV_VARS, AI_PROVIDER_IDS, AI_PROVIDER_LABELS, DEFAULT_GREENHOUSE_BOARDS, DEFAULT_LEVER_COMPANIES, SETTING_KEYS,
   SETTING_SCHEMAS, type AiKeyMetaDto, type AiProviderId, type SettingKey, type SettingSource, type SettingValue,
   type SettingsDto, type SettingsPatch,
@@ -42,6 +44,19 @@ export interface ResolvedSettings {
   tier2Auto: SettingValue<boolean>;
   greenhouseBoards: SettingValue<string[]>;
   leverCompanies: SettingValue<string[]>;
+  /** Modos e limites já completados com os padrões (a tela grava só o que mudou). */
+  apply: {
+    enabled: SettingValue<boolean>;
+    minScore: SettingValue<number>;
+    siteModes: SettingValue<Record<ApplySiteId, ApplyMode>>;
+    dailyCaps: SettingValue<ApplyDailyCaps>;
+    companyCap: SettingValue<number>;
+    window: SettingValue<ApplyWindow>;
+    resumeMode: SettingValue<ApplyResumeMode>;
+    aiAnswers: SettingValue<ApplyAiAnswers>;
+    blockedCompanies: SettingValue<string[]>;
+    blockedTerms: SettingValue<string[]>;
+  };
   budgetTimeZone: string;
 }
 
@@ -134,6 +149,8 @@ export function createSettingsService(db: Db, opts: SettingsServiceOptions = {})
     const envBudget = env.AI_DAILY_BUDGET_USD?.trim() ? Number(env.AI_DAILY_BUDGET_USD) : NaN;
     const envList = (name: string) => (splitList(env[name]).length > 0 ? splitList(env[name]) : undefined);
     const tz = env.AI_BUDGET_TZ?.trim();
+    const modes = pick<Partial<Record<ApplySiteId, ApplyMode>>>(stored.applySiteModes as Partial<Record<ApplySiteId, ApplyMode>> | undefined, undefined, {});
+    const caps = pick<Partial<ApplyDailyCaps>>(stored.applyDailyCaps as Partial<ApplyDailyCaps> | undefined, undefined, {});
     return {
       provider,
       modelFast: pick<string | null>(stored.modelFast as string | undefined, env.AI_MODEL_FAST?.trim() || undefined, defaults?.fast ?? null),
@@ -148,6 +165,22 @@ export function createSettingsService(db: Db, opts: SettingsServiceOptions = {})
       tier2Auto: pick(stored.tier2Auto as boolean | undefined, undefined, false),
       greenhouseBoards: pick(stored.greenhouseBoards as string[] | undefined, envList('GREENHOUSE_BOARDS'), [...DEFAULT_GREENHOUSE_BOARDS]),
       leverCompanies: pick(stored.leverCompanies as string[] | undefined, envList('LEVER_COMPANIES'), [...DEFAULT_LEVER_COMPANIES]),
+      apply: {
+        enabled: pick(stored.applyEnabled as boolean | undefined, undefined, false),
+        minScore: pick(stored.applyMinScore as number | undefined, undefined, APPLY_DEFAULTS.minScore),
+        siteModes: {
+          source: modes.source,
+          value: Object.fromEntries(APPLY_SITE_IDS.map((id) => [id, modes.value[id] ?? 'dry_run'])) as Record<ApplySiteId, ApplyMode>,
+        },
+        dailyCaps: { source: caps.source, value: { ...APPLY_DEFAULTS.dailyCaps, ...caps.value } },
+        companyCap: pick(stored.applyCompanyCap as number | undefined, undefined, APPLY_DEFAULTS.companyCap),
+        window: pick<ApplyWindow>(stored.applyWindow as ApplyWindow | undefined, undefined, { ...APPLY_DEFAULTS.window }),
+        resumeMode: pick<ApplyResumeMode>(stored.applyResumeMode as ApplyResumeMode | undefined, undefined, 'tailored'),
+        // Padrão `review`: nada que o modelo propõe vai ao formulário antes de o dono aprovar.
+        aiAnswers: pick<ApplyAiAnswers>(stored.applyAiAnswers as ApplyAiAnswers | undefined, undefined, 'review'),
+        blockedCompanies: pick<string[]>(stored.applyBlockedCompanies as string[] | undefined, undefined, []),
+        blockedTerms: pick<string[]>(stored.applyBlockedTerms as string[] | undefined, undefined, []),
+      },
       budgetTimeZone: tz && isTimeZone(tz) ? tz : DEFAULT_BUDGET_TIME_ZONE,
     };
   }
@@ -244,6 +277,15 @@ export function createSettingsService(db: Db, opts: SettingsServiceOptions = {})
       const resolved = resolve((await load()).stored);
       return { greenhouseBoards: resolved.greenhouseBoards.value, leverCompanies: resolved.leverCompanies.value };
     },
+    /** As configurações de candidatura automática em vigor, para a API e o worker. */
+    async applyConfig(): Promise<ApplyConfig> {
+      const { apply: a, budgetTimeZone } = resolve((await load()).stored);
+      return {
+        enabled: a.enabled.value, minScore: a.minScore.value, siteModes: a.siteModes.value, dailyCaps: a.dailyCaps.value,
+        companyCap: a.companyCap.value, window: a.window.value, resumeMode: a.resumeMode.value, aiAnswers: a.aiAnswers.value,
+        blockedCompanies: a.blockedCompanies.value, blockedTerms: a.blockedTerms.value, timeZone: budgetTimeZone,
+      };
+    },
     /** Descarta o cache: a próxima leitura vai ao banco. */
     invalidate(): void {
       snapshot = null;
@@ -261,10 +303,18 @@ export function createSettingsService(db: Db, opts: SettingsServiceOptions = {})
           if (value === undefined) continue;
           if (value === null) await tx.delete(settingsTable).where(eq(settingsTable.key, key));
           else {
+            let toStore: unknown = value;
+            // Modos por site e limites por site são parciais: mesclam com o que já está gravado, para que salvar um
+            // não desfaça os outros (e não afrouxe um limite apertado antes).
+            if (key === 'applySiteModes' || key === 'applyDailyCaps') {
+              const [row] = await tx.select().from(settingsTable).where(eq(settingsTable.key, key));
+              const prior = row ? SETTING_SCHEMAS[key].safeParse(row.value) : null;
+              toStore = { ...(prior?.success ? prior.data : {}), ...(value as object) };
+            }
             await tx
               .insert(settingsTable)
-              .values({ key, value, updatedAt: at })
-              .onConflictDoUpdate({ target: settingsTable.key, set: { value, updatedAt: at } });
+              .values({ key, value: toStore, updatedAt: at })
+              .onConflictDoUpdate({ target: settingsTable.key, set: { value: toStore, updatedAt: at } });
           }
         }
       });
@@ -314,6 +364,18 @@ export function createSettingsService(db: Db, opts: SettingsServiceOptions = {})
           configured: state.configured,
           problem: state.problem,
           budgetTimeZone: resolved.budgetTimeZone,
+        },
+        apply: {
+          enabled: src(resolved.apply.enabled),
+          minScore: src(resolved.apply.minScore),
+          siteModes: src(resolved.apply.siteModes),
+          dailyCaps: src(resolved.apply.dailyCaps),
+          companyCap: src(resolved.apply.companyCap),
+          window: src(resolved.apply.window),
+          resumeMode: src(resolved.apply.resumeMode),
+          aiAnswers: src(resolved.apply.aiAnswers),
+          blockedCompanies: src(resolved.apply.blockedCompanies),
+          blockedTerms: src(resolved.apply.blockedTerms),
         },
         sources: { greenhouseBoards: src(resolved.greenhouseBoards), leverCompanies: src(resolved.leverCompanies) },
         general: { nextRunAt },

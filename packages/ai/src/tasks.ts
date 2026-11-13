@@ -1,6 +1,6 @@
 import {
   AI_TIER2_DESCRIPTION_CHARS, CandidateProfileSchema, LIMITS, ProfileWireSchema, TailoredDraftSchema, Tier1BatchSchema, Tier2OutputSchema,
-  normalizeProfile, type AiTaskType, type CandidateProfile, type ItemKind, type JobAnalysis, type ResumeLang,
+  normalizeProfile, withProfileDefaults, type AiTaskType, type CandidateProfile, type ItemKind, type JobAnalysis, type ResumeLang,
   type TailoredDraft, type Tier1Result, type Tier2Output,
 } from '@kv/shared';
 import { z } from 'zod';
@@ -47,17 +47,21 @@ export const TIER3_OUTPUT_TOKENS = 6_000;
 export const JOB_FIELD_CHARS = 300;
 
 /** Teto de saída VISÍVEL da extração e da tradução de perfil. */
-export const PROFILE_OUTPUT_TOKENS = 8_000;
+export const PROFILE_OUTPUT_TOKENS = 9_000;
+/** Folga em caracteres de JSON para `group` em até 60 competências, `section` e `note` por experiência e `headline`. */
+export const PROFILE_LAYOUT_FIELDS_CHARS = 3_000;
 /**
  * Relação entre o teto de saída e o tamanho da entrada, para a resposta não ser cortada (e cobrada) à toa:
  * - 1 token ≈ 3 caracteres de JSON em português (estimativa conservadora; o usual fica entre 3,5 e 4);
- *   então 8 000 tokens comportam um perfil de até 24 000 caracteres de JSON;
- * - o perfil extraído repete o texto do currículo com ~25% a mais de chaves, aspas e ids.
- * Logo: perfil a traduzir ≤ 24 000 caracteres de JSON; texto de currículo ≤ 24 000 / 1,25 = 19 200
+ *   então 9 000 tokens comportam um perfil de até 27 000 caracteres de JSON;
+ * - o perfil extraído repete o texto do currículo com ~25% a mais de chaves, aspas e ids;
+ * - os quatro campos de layout (título profissional, grupo, seção, nota) ocupam até PROFILE_LAYOUT_FIELDS_CHARS desses
+ *   caracteres e não vêm do texto do currículo;
+ * Logo: perfil a traduzir ≤ 27 000 caracteres de JSON; texto de currículo ≤ (27 000 - 3 000) / 1,25 = 19 200
  * caracteres (umas 6 páginas cheias). Acima disso a chamada é recusada antes de ir ao modelo.
  */
 export const PROFILE_JSON_MAX_CHARS = PROFILE_OUTPUT_TOKENS * 3;
-export const RESUME_TEXT_MAX_CHARS = Math.floor(PROFILE_JSON_MAX_CHARS / 1.25);
+export const RESUME_TEXT_MAX_CHARS = Math.floor((PROFILE_JSON_MAX_CHARS - PROFILE_LAYOUT_FIELDS_CHARS) / 1.25);
 
 /** Entrada grande demais para caber na resposta do modelo: recusada antes da chamada (nada é cobrado). */
 export class InputTooLargeError extends AiError {
@@ -162,10 +166,11 @@ export async function extractProfile(
  */
 export async function translateProfile(
   provider: AiProvider,
-  source: CandidateProfile,
+  stored: CandidateProfile,
   target: ResumeLang,
   opts: { signal?: AbortSignal } = {},
 ): Promise<TaskResult<CandidateProfile>> {
+  const source = withProfileDefaults(stored);
   const size = JSON.stringify(source).length;
   if (size > PROFILE_JSON_MAX_CHARS) throw new InputTooLargeError('profile', size, PROFILE_JSON_MAX_CHARS);
   const res = await provider.generate({

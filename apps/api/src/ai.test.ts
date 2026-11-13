@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { SAMPLE_PROFILE, SAMPLE_RESUME_TEXT } from '@kv/ai/testing';
+import { SAMPLE_PROFILE, SAMPLE_RESUME_TEXT, legacyProfile } from '@kv/ai/testing';
 import { aiTasks, closeDb, recordUsage, resumes, saveProfile, searchProfiles, type Db } from '@kv/db';
 import { createTestDb, resetTestDb } from '@kv/db/testing';
 import { makeDocx, makeImageOnlyPdf, makePlainZip, makeTextPdf } from '@kv/resume/testing';
-import { LIMITS } from '@kv/shared';
+import { LIMITS, withProfileDefaults } from '@kv/shared';
 import { NO_AI_ENV, testAi, upload } from './ai-testing';
 import { buildApp } from './app';
 
@@ -41,7 +41,7 @@ describe('GET /ai/status and /ai/usage', () => {
       scoringPause: null,
     });
     const usageDto = (await app.inject({ method: 'GET', url: '/api/ai/usage' })).json();
-    expect(usageDto.today).toEqual({ profile: 0, tier1: 0.4, tier2: 0.7, tier3: 0, test: 0 });
+    expect(usageDto.today).toEqual({ profile: 0, tier1: 0.4, tier2: 0.7, tier3: 0, apply: 0, test: 0 });
     expect(usageDto.last30Days.tier3).toBe(5);
   });
 
@@ -158,15 +158,31 @@ describe('profile editing and translation', () => {
 
   it('saves an edit with a new version, keeping ids and creating ids for new items', async () => {
     const first = await saveProfile(db, 'pt-BR', SAMPLE_PROFILE, 'extraido');
-    const edited = { ...SAMPLE_PROFILE, summary: 'Resumo revisado.', skills: [...SAMPLE_PROFILE.skills, { id: '', name: 'Vitest' }] };
+    const edited = { ...SAMPLE_PROFILE, summary: 'Resumo revisado.', skills: [...SAMPLE_PROFILE.skills, { id: '', name: 'Vitest', group: '' }] };
     const res = await put('pt-BR', edited);
     expect(res.statusCode).toBe(200);
     const dto = res.json();
     expect(dto).toMatchObject({ lang: 'pt-BR', origin: 'editado', version: first.version + 1 });
     expect(dto.data.summary).toBe('Resumo revisado.');
     expect(dto.data.skills.slice(0, 3)).toEqual(SAMPLE_PROFILE.skills);
-    expect(dto.data.skills[3]).toEqual({ id: expect.stringMatching(/^skill_[a-z0-9]{8}$/), name: 'Vitest' });
+    expect(dto.data.skills[3]).toEqual({ id: expect.stringMatching(/^skill_[a-z0-9]{8}$/), name: 'Vitest', group: '' });
     expect(dto.data.experiences[0].id).toBe('exp_aaaaaaa1');
+  });
+
+  it('reads a profile stored before the layout fields as it is, and saves it complete', async () => {
+    await saveProfile(db, 'pt-BR', legacyProfile(SAMPLE_PROFILE), 'extraido');
+    const [before] = (await app.inject({ method: 'GET', url: '/ai/profile' })).json().profiles;
+    expect(before.data).not.toHaveProperty('headline'); // o banco não é reescrito na leitura
+    const res = await put('pt-BR', { ...withProfileDefaults(before.data), headline: 'Desenvolvedora Front-end' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data).toMatchObject({ headline: 'Desenvolvedora Front-end', skills: [{ group: '' }, { group: '' }, { group: '' }], experiences: [{ section: 'principal', note: '' }] });
+  });
+
+  it('refuses a body without the new fields and coerces an unknown section', async () => {
+    await saveProfile(db, 'pt-BR', SAMPLE_PROFILE, 'extraido');
+    expect((await put('pt-BR', legacyProfile(SAMPLE_PROFILE))).statusCode).toBe(400);
+    const odd = { ...SAMPLE_PROFILE, experiences: [{ ...SAMPLE_PROFILE.experiences[0], section: 'Complementar ' }] };
+    expect((await put('pt-BR', odd)).json().data.experiences[0].section).toBe('complementar');
   });
 
   it('rejects text above the limits, NUL characters and an unknown profile', async () => {

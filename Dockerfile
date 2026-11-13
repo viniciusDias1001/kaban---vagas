@@ -7,7 +7,7 @@
 #   -e APP_SECRET=...   (necessário para gravar chaves de API pela aba Configurações; 32 caracteres ou mais,
 #                        sempre o mesmo valor: trocá-lo invalida as chaves gravadas)
 #
-# A IA de perfil não precisa de mais nada na imagem: as fontes do PDF (@fontsource/noto-sans) e os leitores de
+# A IA de perfil não precisa de mais nada na imagem: as fontes do PDF (@fontsource/noto-serif) e os leitores de
 # PDF/DOCX são dependências de produção de @kv/resume, e a worker thread que lê os currículos
 # (packages/resume/src/extract-worker.ts) roda com o mesmo `--import tsx` do processo da API.
 #
@@ -30,6 +30,7 @@ COPY apps/api/package.json apps/api/
 COPY apps/web/package.json apps/web/
 COPY apps/worker/package.json apps/worker/
 COPY packages/ai/package.json packages/ai/
+COPY packages/apply/package.json packages/apply/
 COPY packages/connectors/package.json packages/connectors/
 COPY packages/db/package.json packages/db/
 COPY packages/resume/package.json packages/resume/

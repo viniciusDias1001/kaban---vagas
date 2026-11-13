@@ -74,6 +74,11 @@ jobs:
         run: pnpm --filter @kv/web exec playwright install --with-deps chromium
         timeout-minutes: 10
 
+      # Testes que abrem o Chromium do Playwright (sem janela, rede cortada) contra o site de teste local.
+      - name: Testes de navegador
+        run: pnpm test:browser
+        timeout-minutes: 10
+
       # Dois testes em sequência: o quadro e a IA de perfil. O servidor do e2e sobe com FAKE_CONNECTORS=1,
       # AI_ALLOW_FAKE=1, as variáveis de chave vazias e um APP_SECRET sorteado na hora, tudo definido em
       # apps/web/playwright.config.ts: nada disso precisa ser configurado aqui. O `pnpm ai:smoke` (provedores

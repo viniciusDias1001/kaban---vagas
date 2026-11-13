@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
   CandidateProfileSchema, ProfileWireSchema, TailoredDraftSchema, Tier1BatchSchema, Tier2OutputSchema, draftOf,
-  itemIdPattern, normalizeProfile, randomItemId, type ItemKind, type ProfileWire, type TailoredResume,
+  itemIdPattern, normalizeProfile, randomItemId, withProfileDefaults, type CandidateProfile, type ItemKind, type ProfileWire, type TailoredResume,
+  BankMatchWireSchema, ClassifyWireSchema, GateWireSchema, OpenAnswerWireSchema, ProfileFactWireSchema,
 } from './index';
 import { LIMITS } from './constants';
 
@@ -15,16 +16,17 @@ export function counterIds() {
 
 const wire: ProfileWire = {
   contact: { name: 'Maria Exemplo da Silva', email: 'maria@exemplo.test', phone: '', location: 'São Paulo, SP' },
+  headline: '',
   summary: 'Desenvolvedora front-end (pessoa fictícia).',
   experiences: [
     {
       id: '', company: 'Empresa Fictícia Ltda', title: 'Desenvolvedora Front-end', start: '2021-03', end: '2024-06',
-      location: 'Remoto',
+      location: 'Remoto', section: 'principal', note: '',
       achievements: [{ id: '', text: 'Reduzi o tempo de build em 40%' }, { id: '', text: 'Liderei 3 pessoas' }],
     },
   ],
   education: [{ id: '', institution: 'Universidade Exemplo', degree: 'Ciência da Computação', start: '2015', end: '2019' }],
-  skills: [{ id: '', name: 'React' }, { id: '', name: 'TypeScript' }],
+  skills: [{ id: '', name: 'React', group: '' }, { id: '', name: 'TypeScript', group: '' }],
   languages: [{ id: '', name: 'Inglês', level: 'avançado' }],
   certifications: [],
   links: [{ id: '', label: 'Portfólio', url: 'exemplo.test/maria' }, { id: '', label: 'lixo', url: 'não é url' }],
@@ -48,11 +50,23 @@ describe('normalizeProfile', () => {
     expect(profile.links).toEqual([{ id: expect.stringMatching(/^link_/), label: 'Portfólio', url: 'https://exemplo.test/maria' }]);
   });
 
+  it('always emits the four layout fields and coerces the section', () => {
+    const profile = normalizeProfile({
+      ...wire, headline: '  Tech Lead  ', skills: [{ id: '', name: 'React', group: 'Front-end' }],
+      experiences: [{ ...wire.experiences[0], section: 'Complementar ', note: 'Antes: Estagiária' }, { ...wire.experiences[0], section: 'qualquer', note: '' }],
+    }, { clamp: true, newId: counterIds() });
+    expect(profile.headline).toBe('Tech Lead');
+    expect(profile.experiences.map((e) => [e.section, e.note])).toEqual([['complementar', 'Antes: Estagiária'], ['principal', '']]);
+    expect(profile.skills[0].group).toBe('Front-end');
+    const { headline: _headline, ...old } = wire;
+    expect(ProfileWireSchema.safeParse(old).success).toBe(false); // o fio não aceita mais o perfil sem os campos
+  });
+
   it('keeps valid ids (stable across edits) and replaces duplicated or malformed ones', () => {
     const first = normalizeProfile(wire, { clamp: true, newId: counterIds() });
     const edited: ProfileWire = {
       ...first,
-      skills: [...first.skills, { id: first.skills[0].id, name: 'Duplicada' }, { id: 'skill_x', name: 'Nova' }],
+      skills: [...first.skills, { id: first.skills[0].id, name: 'Duplicada', group: '' }, { id: 'skill_x', name: 'Nova', group: '' }],
     };
     const second = normalizeProfile(edited, { clamp: false });
     expect(second.experiences[0].id).toBe(first.experiences[0].id);
@@ -95,6 +109,11 @@ describe('wire schemas are accepted by the three providers', () => {
     ['Tier1BatchSchema', Tier1BatchSchema],
     ['Tier2OutputSchema', Tier2OutputSchema],
     ['TailoredDraftSchema', TailoredDraftSchema],
+    ['GateWireSchema', GateWireSchema],
+    ['ClassifyWireSchema', ClassifyWireSchema],
+    ['BankMatchWireSchema', BankMatchWireSchema],
+    ['ProfileFactWireSchema', ProfileFactWireSchema],
+    ['OpenAnswerWireSchema', OpenAnswerWireSchema],
   ])('%s has only required fields, closed objects and no constraints', (_name, schema) => {
     expect(problems(z.toJSONSchema(schema))).toEqual([]);
   });
@@ -125,5 +144,30 @@ describe('TailoredDraftSchema', () => {
     expect(TailoredDraftSchema.safeParse(back).success).toBe(true);
     expect(back.experiences[0].achievements[0]).toEqual({ sourceId: 'ach_00000002', text: 'Reduzi o tempo de build em 40%' });
     expect(back.skillIds).toEqual(profile.skills.map((k) => k.id));
+  });
+});
+
+describe('layout fields on the stored profile', () => {
+  /** Como um perfil gravado antes desta mudança. */
+  const legacy: CandidateProfile = {
+    contact: { name: 'Maria Exemplo da Silva', email: 'maria@exemplo.test', phone: '', location: 'São Paulo, SP' }, summary: 'Pessoa fictícia.',
+    experiences: [{ id: 'exp_aaaaaaa1', company: 'Empresa Fictícia Ltda', title: 'Desenvolvedora', start: '2021-03', end: '', location: '', achievements: [] }],
+    education: [], skills: [{ id: 'skill_aaaaaaa1', name: 'React' }], languages: [], certifications: [], links: [],
+  };
+  it('keeps a profile stored before the change valid and stores the four fields', () => {
+    expect(CandidateProfileSchema.safeParse(legacy).success).toBe(true);
+    const full = { ...legacy, headline: 'Desenvolvedora Front-end', skills: [{ ...legacy.skills[0], group: 'Front-end' }],
+      experiences: [{ ...legacy.experiences[0], section: 'complementar', note: 'Antes: Estagiária' }] };
+    expect(CandidateProfileSchema.parse(full)).toEqual(full); // nada é descartado
+    expect(CandidateProfileSchema.safeParse({ ...full, experiences: [{ ...full.experiences[0], section: 'outra' }] }).success).toBe(false);
+  });
+  it('withProfileDefaults fills what is missing, keeps what is there and leaves its input alone', () => {
+    const before = structuredClone(legacy);
+    const filled = withProfileDefaults(legacy);
+    expect(filled).toMatchObject({ headline: '', skills: [{ group: '' }], experiences: [{ section: 'principal', note: '' }] });
+    expect(legacy).toEqual(before);
+    expect(withProfileDefaults({ ...filled, headline: 'Tech Lead' })).toEqual({ ...filled, headline: 'Tech Lead' });
+    const oldResume: TailoredResume = { ...legacy, lang: 'pt-BR', experiences: [] }; // currículo adaptado gravado antes da mudança
+    expect(withProfileDefaults(oldResume)).toMatchObject({ lang: 'pt-BR', headline: '', skills: [{ group: '' }] });
   });
 });

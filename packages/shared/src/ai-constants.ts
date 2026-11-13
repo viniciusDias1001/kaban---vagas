@@ -19,6 +19,9 @@ export const RESUME_LANGS = ['pt-BR', 'en'] as const;
 export type ResumeLang = (typeof RESUME_LANGS)[number];
 export const otherLang = (lang: ResumeLang): ResumeLang => (lang === 'pt-BR' ? 'en' : 'pt-BR');
 
+export const EXPERIENCE_SECTIONS = ['principal', 'complementar'] as const;
+export type ExperienceSection = (typeof EXPERIENCE_SECTIONS)[number];
+
 export type ProfileOrigin = 'extraido' | 'traduzido' | 'editado';
 
 /** Prefixo do identificador estável de cada tipo de item do perfil. */
@@ -55,6 +58,26 @@ export interface TailoredResume {
   languages: CandidateProfile['languages'];
   certifications: CandidateProfile['certifications'];
   links: CandidateProfile['links'];
+  /** Copiado do perfil; ausente nos currículos adaptados já gravados. */
+  headline?: string;
+}
+
+/** O que o modelo do currículo usa e o perfil antigo não tinha. */
+export interface LayoutFields { headline?: string; experiences: { section?: ExperienceSection; note?: string }[]; skills: { group?: string }[] }
+export type WithLayout<T extends LayoutFields> = Omit<T, 'headline' | 'experiences' | 'skills'> & {
+  headline: string;
+  experiences: (T['experiences'][number] & { section: ExperienceSection; note: string })[];
+  skills: (T['skills'][number] & { group: string })[];
+};
+
+/** Preenche o que falta (`''`; `section` vira `'principal'`). Não altera a entrada. Serve a perfil e a currículo adaptado. */
+export function withProfileDefaults<T extends LayoutFields>(value: T): WithLayout<T> {
+  return {
+    ...value,
+    headline: value.headline ?? '',
+    experiences: value.experiences.map((e) => ({ ...e, section: e.section ?? 'principal', note: e.note ?? '' })),
+    skills: value.skills.map((k) => ({ ...k, group: k.group ?? '' })),
+  } as WithLayout<T>;
 }
 
 /** O rascunho (referências + textos) equivalente a um currículo resolvido: é o que o editor envia de volta. */
@@ -99,7 +122,7 @@ export const AI_TASK_TYPES = ['profile_extract', 'profile_translate', 'tier1', '
 export type AiTaskType = (typeof AI_TASK_TYPES)[number];
 export type AiTaskStatus = 'queued' | 'running' | 'ok' | 'error' | 'blocked_budget';
 /** `test` = chamadas do botão "Testar conexão". */
-export const AI_LAYERS = ['profile', 'tier1', 'tier2', 'tier3', 'test'] as const;
+export const AI_LAYERS = ['profile', 'tier1', 'tier2', 'tier3', 'apply', 'test'] as const;
 export type AiLayer = (typeof AI_LAYERS)[number];
 
 /** Estado de uma camada para a interface. `stale` = existe resultado, mas de uma versão antiga do perfil. */

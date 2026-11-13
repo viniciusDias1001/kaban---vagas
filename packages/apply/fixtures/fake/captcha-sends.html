@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Vaga - verificação depois do envio (envia sozinha)</title>
+<style>body{font-family:sans-serif;max-width:640px;margin:2rem auto}.field{margin:.75rem 0}label{display:block;font-weight:600}#captcha-gate{position:fixed;inset:0;background:#fffe;display:flex;align-items:center;justify-content:center}</style>
+</head>
+<body data-clicks="0" data-sends="0">
+<h1>Desenvolvedor TypeScript</h1>
+<p>Acme Ltda. Vaga fictícia do site de teste.</p>
+<main>
+  <form data-fake-form novalidate>
+  <div class="step">
+    <div class="field"><label for="name">Nome completo</label><input id="name" name="name" type="text" required></div>
+    <div class="field"><label for="email">E-mail</label><input id="email" name="email" type="text" required></div>
+    <div class="field"><label for="phone">Telefone</label><input id="phone" name="phone" type="text"></div>
+    <div class="field"><label for="resume">Currículo</label><input id="resume" name="resume" type="file" required></div>
+    <div class="field"><label for="salary">Pretensão salarial mensal (R$)</label><input id="salary" name="salary" type="text" required></div>
+    <div class="field"><label for="years_ts">Anos de experiência com TypeScript</label><input id="years_ts" name="years_ts" type="number" required></div>
+    <div class="field"><label for="why">Por que você quer trabalhar aqui?</label><textarea id="why" name="why" maxlength="600"></textarea></div>
+    <div class="field"><label for="privacy">Li e aceito a política de privacidade</label><input id="privacy" name="privacy" type="checkbox" required></div>
+  </div>
+  <textarea name="g-recaptcha-response" hidden></textarea>
+  <button id="submit" type="submit">Enviar candidatura</button>
+  </form>
+</main>
+<script>
+  // O primeiro clique em Enviar abre uma verificação. data-clicks conta os cliques em Enviar; data-sends, as candidaturas
+  // que o site registrou (o teste confere que é uma só).
+  const body = document.body;
+  const submit = document.getElementById('submit');
+  let solved = false;
+  function send() {
+    body.dataset.sends = String(Number(body.dataset.sends) + 1);
+    document.querySelector('main').innerHTML = '<p id="confirmation">Candidatura recebida: nº ' + (1000 + Math.floor(Math.random() * 9000)) + '</p>';
+  }
+  submit.addEventListener('click', (e) => {
+    e.preventDefault();
+    body.dataset.clicks = String(Number(body.dataset.clicks) + 1);
+    if (solved) { send(); return; }
+    if (document.getElementById('captcha-gate')) return;
+    body.insertAdjacentHTML('beforeend', '<div id="captcha-gate"><div><p>Confirme que você é humano.</p><button type="button" id="solve">Não sou um robô</button></div></div>');
+    document.getElementById('solve').addEventListener('click', () => {
+      document.getElementById('captcha-gate').remove();
+      solved = true;
+      document.querySelector('textarea[name="g-recaptcha-response"]').value = 'token-de-teste';
+      // Como o retorno de um captcha invisível: o envio que o clique começou continua sozinho, um pouco depois.
+      if (!window.__hold) setTimeout(send, 1000);
+    });
+  });
+</script>
+</body>
+</html>

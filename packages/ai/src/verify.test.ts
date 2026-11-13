@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { draftOf, type TailoredDraft } from '@kv/shared';
+import { draftOf, TailoredDraftSchema, type CandidateProfile, type TailoredDraft } from '@kv/shared';
 import { createFakeProvider } from './fake';
 import { draftTailored } from './tasks';
-import { SAMPLE_JOB, SAMPLE_PROFILE } from './testing';
-import { describeViolations, isStructural, numbersIn, resolveTailored } from './verify';
+import { LAYOUT_PROFILE, legacyProfile, SAMPLE_JOB, SAMPLE_PROFILE } from './testing';
+import { describeViolations, fullDraftOf, isStructural, numbersIn, resolveTailored } from './verify';
 
 /** Rascunho honesto: tudo que está no perfil, com uma realização reescrita sem mudar os números. */
 const honest = (): TailoredDraft => ({
@@ -150,5 +150,54 @@ describe('prompt injection', () => {
     const { data } = await draftTailored(fake, SAMPLE_PROFILE, job('FAKE_AI_COMPROMISED'), 'pt-BR');
     const { violations } = resolveTailored(data, SAMPLE_PROFILE, 'pt-BR', { jobCompany: SAMPLE_JOB.company });
     expect(violations.map((v) => v.code).sort()).toEqual(['new_number', 'novel_term', 'unknown_id']);
+  });
+});
+
+const draftFor = (p: CandidateProfile): TailoredDraft => ({
+  summary: p.summary,
+  experiences: p.experiences.map((e) => ({ id: e.id, achievements: e.achievements.map((a) => ({ sourceId: a.id, text: a.text })) })),
+  educationIds: p.education.map((e) => e.id), skillIds: p.skills.map((k) => k.id), languageIds: p.languages.map((l) => l.id),
+  certificationIds: [], linkIds: p.links.map((l) => l.id),
+});
+
+describe('layout fields', () => {
+  it('copies headline, section, note and group from the profile, never from the draft', () => {
+    const { resume, violations } = resolveTailored(draftFor(LAYOUT_PROFILE), LAYOUT_PROFILE, 'pt-BR');
+    expect(violations).toEqual([]);
+    expect(resume.headline).toBe('Desenvolvedora Front-end Sênior');
+    expect(resume.experiences.map((e) => [e.section, e.note])).toEqual([['principal', 'Promovida após 18 meses'], ['complementar', '']]);
+    expect(resume.skills.map((k) => k.group)).toEqual(['Front-end', 'Front-end', 'Back-end & APIs', 'Banco de dados', 'Banco de dados', 'DevOps & Kubernetes']);
+    const smuggled = { ...draftFor(LAYOUT_PROFILE), headline: 'CTO' };
+    expect(TailoredDraftSchema.safeParse(smuggled).success).toBe(false);
+    expect(resolveTailored(smuggled as TailoredDraft, LAYOUT_PROFILE, 'pt-BR').resume.headline).toBe('Desenvolvedora Front-end Sênior');
+  });
+  it('emits an empty headline for a profile stored before the change', () => {
+    expect(resolveTailored(honest(), legacyProfile(SAMPLE_PROFILE), 'pt-BR')).toMatchObject({ violations: [], resume: { headline: '' } });
+  });
+  it('counts headline, groups and notes as profile vocabulary, for terms and for numbers', () => {
+    const draft = { ...draftFor(LAYOUT_PROFILE), summary: 'Desenvolvedora Front-end Sênior com Kubernetes. Promovida após 18 meses.' };
+    expect(resolveTailored(draft, LAYOUT_PROFILE, 'pt-BR').violations).toEqual([]);
+    const bare = { ...LAYOUT_PROFILE, headline: '', skills: LAYOUT_PROFILE.skills.map((k) => ({ ...k, group: '' })),
+      experiences: LAYOUT_PROFILE.experiences.map((e) => ({ ...e, note: '' })) };
+    const blocked = resolveTailored(draft, bare, 'pt-BR').violations.map((v) => `${v.code}:${v.detail}`).join(' ');
+    for (const expected of [/new_number:18/, /novel_term:s[eê]nior/i, /novel_term:kubernetes/i]) expect(blocked).toMatch(expected);
+  });
+});
+
+describe('fullDraftOf', () => {
+  it('references every item of the profile and resolves to the full résumé, with headline, groups, sections and notes', () => {
+    const { resume, violations } = resolveTailored(fullDraftOf(LAYOUT_PROFILE), LAYOUT_PROFILE, 'pt-BR');
+    expect(violations).toEqual([]);
+    expect(resume.headline).toBe(LAYOUT_PROFILE.headline);
+    expect(resume.summary).toBe(LAYOUT_PROFILE.summary);
+    expect(resume.experiences.map((e) => [e.id, e.section, e.note])).toEqual(LAYOUT_PROFILE.experiences.map((e) => [e.id, e.section, e.note]));
+    expect(resume.experiences.flatMap((e) => e.achievements.map((a) => a.text))).toEqual(
+      LAYOUT_PROFILE.experiences.flatMap((e) => e.achievements.map((a) => a.text)),
+    );
+    expect(resume.skills.map((k) => [k.id, k.group])).toEqual(LAYOUT_PROFILE.skills.map((k) => [k.id, k.group]));
+    expect(resume.education).toHaveLength(LAYOUT_PROFILE.education.length);
+    expect(resume.languages).toHaveLength(LAYOUT_PROFILE.languages.length);
+    expect(resume.certifications).toHaveLength(LAYOUT_PROFILE.certifications.length);
+    expect(resume.links).toHaveLength(LAYOUT_PROFILE.links.length);
   });
 });

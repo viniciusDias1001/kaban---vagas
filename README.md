@@ -8,9 +8,10 @@ O app guarda os dados em um Postgres (o do `docker-compose.yml` incluído ou um 
 
 **Opcional, com uma chave de API de um provedor de IA (Claude, OpenAI ou Gemini):** você envia o currículo em português e/ou inglês, o app extrai um perfil estruturado, dá nota e título traduzido a cada vaga, analisa as vagas que interessam (pontos fortes, lacunas, o que revisar para a entrevista) e gera, a pedido, um currículo adaptado em PDF, sem inventar nada. Sem chave, tudo o mais funciona igual. Veja [IA de perfil](#ia-de-perfil).
 
+**Opcional, desligada por padrão, só no seu computador:** candidatura automática. O app abre um navegador, preenche o formulário de candidatura da vaga com o seu currículo e as suas respostas e, se você deixar, envia em seu nome. Começa sempre em modo ensaio, que não envia nada. Leia [Candidatura automática](#candidatura-automática) antes de ligar.
+
 **Planejado (ainda não existe):**
 
-- candidatura automática, com contadores de "aplicadas pela IA" e "precisam de você";
 - Glassdoor e mais fontes internacionais;
 - contas de usuário e login.
 
@@ -46,7 +47,7 @@ Crie um projeto no Supabase, copie a connection string em *Project Settings > Da
 |---|---|---|
 | `web` | Interface React (Vite) | 5173 |
 | `api` | API Fastify; as rotas existem em `/` e espelhadas em `/api`. Serve o `apps/web/dist` quando ele existe | 3333 |
-| `worker` | Busca vagas, executa a fila de buscas e a fila de IA | nenhuma |
+| `worker` | Busca vagas, executa a fila de buscas, a fila de IA e a fila de candidaturas | nenhuma |
 
 No `pnpm dev` o Vite repassa `/api` para a API. O worker nunca é chamado por HTTP: a API grava os pedidos de busca na tabela `runs` e o worker os lê.
 
@@ -60,7 +61,7 @@ A API também confere o cabeçalho `Host` de **toda** requisição: só aceita `
 
 **Filtros do perfil.** Uma vaga passa se alguma das stacks aparece no título, nas stacks detectadas ou na descrição; o nível é lido do título (títulos sem nível aparente passam); região e idade máxima também são aplicados. Nas fontes que buscam por palavra-chave (Gupy, Himalayas, LinkedIn e Indeed), só as **três primeiras stacks** do perfil viram termos de busca; sem stacks, a busca usa "developer" ("desenvolvedor" no Gupy). As demais fontes baixam o feed inteiro e o filtro é local.
 
-**Colunas.** Descobertas, Selecionadas, Aplicada, Entrevista, Oferta e Arquivada. Todo movimento é manual (arrastar e soltar, ou os botões "Mover para" no painel da vaga, que funcionam pelo teclado) e fica no histórico da vaga. Mover um card para Aplicada conta como "aplicada por você". O card abre um painel lateral com a descrição, o link original, notas editáveis e o histórico. A barra do topo mostra o total de vagas e os contadores de aplicadas e de pendentes; os da IA ficam zerados enquanto a candidatura automática não existe.
+**Colunas.** Descobertas, Selecionadas, Aplicada, Entrevista, Oferta e Arquivada. Todo movimento é manual (arrastar e soltar, ou os botões "Mover para" no painel da vaga, que funcionam pelo teclado) e fica no histórico da vaga. Mover um card para Aplicada conta como "aplicada por você". O card abre um painel lateral com a descrição, o link original, notas editáveis e o histórico. A barra do topo mostra o total de vagas e os contadores de aplicadas (pela IA e por você) e de pendentes ("Precisam de você"); os da IA só saem do zero com a [candidatura automática](#candidatura-automática).
 
 **Saúde das fontes.** Mostra, por fonte, o último run: status (OK, Erro ou Nunca rodou), vagas encontradas, novas, horário e a mensagem de erro. Uma fonte com erro não impede as outras. Se nenhum run termina há mais de 2 horas, a interface avisa que o worker pode estar parado.
 
@@ -93,7 +94,7 @@ Preços por milhão de tokens, entrada / saída. **A saída cobrada inclui os to
 | Camada 1, lote de 10 vagas | 1 800 | 2 000 | 3 800 |
 | Camada 2 | 8 000 | 8 000 | 16 000 |
 | Camada 3 (cada chamada) | 6 000 | 8 000 | 14 000 |
-| Perfil (ler um currículo ou traduzir um perfil) | 8 000 | 8 000 | 16 000 |
+| Perfil (ler um currículo ou traduzir um perfil) | 9 000 | 8 000 | 17 000 |
 
 Com os modelos padrão, o custo **típico** e o **pior caso** de cada chamada:
 
@@ -103,17 +104,17 @@ Com os modelos padrão, o custo **típico** e o **pior caso** de cada chamada:
 | Camada 1, por vaga: pior caso | US$ 0,0003 | US$ 0,0003 | US$ 0,0012 |
 | Camada 2, vaga em inglês (com a tradução): típico | US$ 0,09 | US$ 0,045 | US$ 0,09 |
 | Camada 2, vaga em português: típico | US$ 0,065 | US$ 0,032 | US$ 0,065 |
-| Camada 2: pior caso | US$ 0,37 | US$ 0,19 | US$ 0,37 |
+| Camada 2: pior caso | US$ 0,38 | US$ 0,19 | US$ 0,38 |
 | Camada 3, por chamada: típico | US$ 0,07 | US$ 0,035 | US$ 0,07 |
-| Camada 3, por chamada: pior caso | US$ 0,34 | US$ 0,17 | US$ 0,34 |
+| Camada 3, por chamada: pior caso | US$ 0,35 | US$ 0,17 | US$ 0,35 |
 | Perfil, por currículo enviado ou tradução: típico | US$ 0,07 | US$ 0,035 | US$ 0,07 |
-| Perfil: pior caso | US$ 0,36 | US$ 0,18 | US$ 0,36 |
+| Perfil: pior caso | US$ 0,38 | US$ 0,19 | US$ 0,38 |
 
 Como a conta foi feita (os tetos vêm de `packages/ai/src/limits.ts` e `tasks.ts`; os preços, de `config.ts`):
 
 - **Típico:** perfil de uma página (cerca de 4 000 caracteres de JSON), descrição de vaga de 4 000 caracteres, 3,5 caracteres por token e **cerca de 2 000 tokens de raciocínio** por chamada do nível forte (500 por lote no nível rápido). O raciocínio é uma suposição, não uma medida: ele varia com a vaga e com o modelo, e é a maior parte do custo. Exemplo, camada 2 de uma vaga em inglês no Claude: 2 700 tokens de entrada × US$ 4 + (2 000 visíveis + 2 000 de raciocínio) × US$ 20, por milhão = US$ 0,011 + US$ 0,08.
-- **Pior caso:** a maior entrada que a chamada pode enviar (descrição no teto de 12 000 caracteres na camada 2 e 20 000 na camada 3, perfil de 24 000 caracteres, 3 caracteres por token) e a saída **no teto** da tabela acima. Exemplo, camada 2 no Claude: 13 300 × US$ 4 + 16 000 × US$ 20, por milhão = US$ 0,053 + US$ 0,32 = US$ 0,37.
-- A camada 3 pode fazer **duas** chamadas (veja "Não inventa"): o pior caso de um currículo adaptado é o dobro da linha da tabela (US$ 0,69 no Claude).
+- **Pior caso:** a maior entrada que a chamada pode enviar (descrição no teto de 12 000 caracteres na camada 2 e 20 000 na camada 3, perfil de 27 000 caracteres, 3 caracteres por token) e a saída **no teto** da tabela acima. Exemplo, camada 2 no Claude: 14 300 × US$ 4 + 16 000 × US$ 20, por milhão = US$ 0,057 + US$ 0,32 = US$ 0,38.
+- A camada 3 pode fazer **duas** chamadas (veja "Não inventa"): o pior caso de um currículo adaptado é o dobro da linha da tabela (US$ 0,70 no Claude).
 - O Gemini custa a metade do que está na tabela até 2026-11-30.
 - **Cache de prompt.** A estimativa cobra toda a entrada pelo preço cheio. Na Anthropic, gravar o prefixo em cache custa 1,25× o preço de entrada e ler custa 0,1×: a primeira chamada de uma sequência sai até uns 25% mais cara **na parte da entrada** do que o estimado (menos de um centavo por chamada do nível forte), e as seguintes, mais baratas. A estimativa **não** tende a errar para mais: o que domina é a saída, e ela é contada como o provedor a informa.
 - **Chamadas sem resposta.** Uma chamada abortada por tempo, ou interrompida porque o worker foi encerrado no meio dela, pode ter sido cobrada pelo provedor sem que ele informe o uso. Nesses casos o app grava uma linha **estimada pelo pior caso** (o modelo aparece com o sufixo "(estimativa)" em `ai_usage`), para o limite diário errar para o lado seguro.
@@ -142,7 +143,7 @@ Esses casos ficam com o prompt e com a revisão do usuário. **Leia sempre o cur
 
 ### Seus dados: o que fica guardado e como apagar
 
-Tudo fica no **seu** banco de dados (o do `DATABASE_URL`); o app não tem servidor próprio nem telemetria.
+Tudo fica no **seu** banco de dados (o do `DATABASE_URL`), com uma exceção: a candidatura automática também grava arquivos na pasta de dados do seu computador (últimas quatro linhas da tabela). O app não tem servidor próprio nem telemetria.
 
 | O que | Onde (tabela) | Como apagar |
 |---|---|---|
@@ -153,23 +154,29 @@ Tudo fica no **seu** banco de dados (o do `DATABASE_URL`); o app não tem servid
 | Fila de tarefas da IA (tipo, estado, mensagem de erro; nunca o texto do currículo) | `ai_tasks` | "Apagar todos os dados de IA"; as terminadas somem sozinhas depois de 30 dias |
 | Histórico de gasto: provedor, modelo, camada, tokens e custo estimado de cada chamada | `ai_usage` | não é apagado pela tela: não tem conteúdo pessoal e é o que mantém o limite diário valendo |
 | Chaves de API, cifradas | `ai_keys` | aba **Configurações**, "Remover" |
+| Candidaturas automáticas: estado, motivo e detalhe, respostas com a origem, perguntas pendentes, o PDF enviado, o e-mail usado, o texto de confirmação do site e os textos da linha do tempo | `applications`, `application_events` | "Apagar todos os dados de IA" apaga o conteúdo (respostas, perguntas pendentes, PDF, e-mail, confirmação, detalhe do motivo e os textos da linha do tempo) e **mantém** a linha com estado, motivo e datas, e as datas e estados da linha do tempo. As candidaturas que esperavam respostas suas viram "Cancelada" (as perguntas foram apagadas) e o card perde o selo "precisa de você" |
+| Suas respostas para formulários (banco de respostas) | `apply_answers` | "Apagar todos os dados de IA", ou uma a uma em **Meu perfil > Respostas para candidaturas** |
+| Fotos do formulário preenchido e da confirmação (têm dados pessoais) | arquivos em `shots/` na pasta de dados (`APPLY_DATA_DIR`), não no banco | "Apagar todos os dados de IA" apaga a pasta `shots/`; o app também remove as fotos com mais de 90 dias, mesmo com a função desligada |
+| PDF do currículo enquanto uma candidatura está sendo preenchida | arquivos em `resumes/` em `APPLY_DATA_DIR` | apagado ao fim de cada candidatura e quando o worker reinicia; "Apagar todos os dados de IA" apaga a pasta `resumes/` |
+| Fotos de página inteira de formulários reais e os PDFs gerados pelo `pnpm apply:smoke` | arquivos em `smoke/` em `APPLY_DATA_DIR` | nada apaga esta pasta: apague à mão quando não precisar mais |
+| Sessão dos sites (cookies) e o resto do perfil do navegador | pasta `browser/` em `APPLY_DATA_DIR`, nunca no banco | "Desconectar" em Configurações apaga os cookies do site; ou apague a pasta. "Apagar todos os dados de IA" não toca nela |
 
 - **Apagar um idioma** (`DELETE /api/ai/resumes/:lang`) remove o arquivo, o texto lido, o perfil daquele idioma, os currículos adaptados escritos nele e as leituras/traduções de perfil que estejam na fila. As notas e análises das vagas ficam, marcadas como desatualizadas.
-- **Apagar todos os dados de IA** (`DELETE /api/ai/data`) remove currículos, perfis, currículos adaptados, notas, títulos traduzidos, análises e a fila inteira. Ficam as vagas com as suas anotações, o histórico de gasto, as configurações e as chaves.
+- **Apagar todos os dados de IA** (`DELETE /api/ai/data`) remove currículos, perfis, currículos adaptados, notas, títulos traduzidos, análises, a fila inteira, o banco de respostas, o conteúdo das candidaturas automáticas e as pastas `shots/` e `resumes/` da pasta de dados (veja a tabela). Ficam as vagas com as suas anotações, o histórico de gasto, as configurações, as chaves, o perfil do navegador (`browser/`) e a pasta `smoke/`. Um arquivo que outro programa esteja usando naquele instante (uma foto aberta num visualizador, por exemplo) pode ficar para trás; apague-o à mão depois.
 - As duas ações pedem confirmação e **não têm volta**. Uma chamada de IA que esteja em andamento termina, mas o resultado dela é descartado.
-- O que já foi enviado ao provedor de IA não é apagado por aqui: vale a política de retenção do provedor.
+- O que já foi enviado ao provedor de IA não é apagado por aqui: vale a política de retenção do provedor. O mesmo vale para o que já foi enviado a uma empresa numa candidatura.
 - A descrição de uma vaga buscada sob demanda (LinkedIn, Indeed) fica na própria vaga e sai com ela.
 
 **Currículo enviado: limites.** PDF ou DOCX, até 5 MB; o tipo é conferido pelo conteúdo do arquivo, não pela extensão. O PDF precisa ter texto selecionável: um currículo escaneado (só imagem) é recusado na hora, com a sugestão de exportar de novo ou enviar um DOCX. Também são recusados: PDF com mais de 30 páginas, arquivo protegido por senha, arquivo que leva mais de 15 s para ser lido e texto com mais de cerca de 6 páginas (o que o modelo lê de uma vez com folga para devolver o perfil). A recusa aparece no próprio cartão do idioma e o currículo anterior continua valendo.
 
-**PDF gerado.** Uma coluna, texto selecionável, sem tabelas nem imagens, na fonte Noto Sans embutida. Ela desenha o alfabeto latino com todos os acentos (português, espanhol, francês, alemão, polonês, tcheco, turco...), vietnamita, cirílico e grego. Não desenha chinês, japonês, coreano, árabe, hebraico, devanágari, emoji nem símbolos como "✓": se o currículo tiver um desses caracteres, o editor avisa quais são e o download só é liberado depois de trocá-los, em vez de gerar um PDF com buracos no texto.
+**PDF gerado.** Segue o modelo de currículo do dono: A4 de uma coluna, texto selecionável, sem tabelas nem imagens, na fonte Noto Serif (Regular e Bold) embutida. O cabeçalho traz o nome em caixa alta, o título profissional, a linha de contato (e-mail, telefone, local e os endereços dos links) e um fio; depois vêm, nesta ordem e só as que tiverem conteúdo, Resumo profissional, Competências técnicas (em grupos, "Grupo: item, item"), Experiência profissional, Experiências complementares, Formação acadêmica, Idiomas e Certificações. Cada experiência mostra "Cargo - Empresa", período, local e nota, e as realizações com marcador e recuo. Toda página leva no rodapé o nome e o número da página. Um perfil gravado antes desse modelo continua gerando PDF, sem título, grupos nem nota; ele os ganha ao reenviar o currículo ou ao editar o perfil em "Meu perfil". Ela desenha o alfabeto latino com todos os acentos (português, espanhol, francês, alemão, polonês, tcheco, turco...), vietnamita, cirílico e grego. Não desenha chinês, japonês, coreano, árabe, hebraico, devanágari, emoji nem símbolos como "✓": se o currículo tiver um desses caracteres, o editor avisa quais são e o download só é liberado depois de trocá-los, em vez de gerar um PDF com buracos no texto.
 
 **Fila.** A IA roda no worker, em uma fila separada da busca de vagas: até 2 chamadas ao mesmo tempo, 3 tentativas com espera de 30 s e 120 s (o dobro em limite de taxa). Erro que repetir não resolve (resposta cortada, recusa do modelo, rascunho barrado pelo verificador, dado que falta) não é repetido. Lentidão ou falha do provedor não atrasa a busca. Nenhuma chamada de IA acontece dentro de uma requisição da API, exceto o "Testar conexão".
 
 - **Provedor indisponível não queima as vagas.** Se a triagem (camada 1) bate em chave recusada, conta sem crédito, modelo inexistente ou limite de taxa que não passa, nenhuma vaga é marcada com erro: as tarefas esperam (30 min; 15 min no limite de taxa) e são tentadas de novo sozinhas, e o quadro e a aba Configurações mostram o aviso "As notas automáticas estão em pausa" com o motivo. Gravar uma chave, trocar o provedor ou o modelo, ou um "Testar conexão" que funcione retoma na hora.
 - **Uma vaga problemática não derruba as vizinhas.** Quando um lote de 10 vagas falha inteiro por causa do conteúdo (o modelo recusou, cortou ou devolveu algo inválido), as vagas são refeitas uma a uma, respeitando o limite diário, e só a que falha sozinha fica com erro.
 - **Erro na nota não é para sempre.** Uma vaga cuja nota falhou volta para a fila sozinha depois de 6 horas, no máximo 3 vezes (4 falhas em 30 dias); pelo painel da vaga, "Tentar de novo" vale na hora.
-- **Tempo limite.** O SDK corta uma chamada do nível rápido em 120 s e uma do forte em 480 s (o teto de 16 000 tokens a 40 tokens por segundo, com folga); a fila corta um pouco depois (150 s na camada 1, 540 s na camada 2, 510 s no perfil, 1 020 s na camada 3, que pode fazer duas chamadas). No Claude, as chamadas do nível forte usam *streaming*, para uma geração longa não ficar em uma conexão sem tráfego; no OpenAI e no Gemini a resposta vem de uma vez. Uma chamada do nível forte que estoura o tempo ganha **uma** nova tentativa, não duas.
+- **Tempo limite.** O SDK corta uma chamada do nível rápido em 120 s e uma do forte em 480 s (o teto de 17 000 tokens a 40 tokens por segundo, com folga); a fila corta um pouco depois (150 s na camada 1, 540 s na camada 2, 510 s no perfil, 1 020 s na camada 3, que pode fazer duas chamadas). No Claude, as chamadas do nível forte usam *streaming*, para uma geração longa não ficar em uma conexão sem tráfego; no OpenAI e no Gemini a resposta vem de uma vez. Uma chamada do nível forte que estoura o tempo ganha **uma** nova tentativa, não duas.
 - **Reinício do worker.** Uma tarefa que estava em execução quando o worker foi encerrado conta a tentativa interrompida (uma tarefa que derruba o processo toda vez para na terceira) e grava o uso estimado da chamada perdida.
 - **Limpeza.** Tarefas terminadas há mais de 30 dias são apagadas da fila.
 
@@ -181,9 +188,185 @@ Tudo fica no **seu** banco de dados (o do `DATABASE_URL`); o app não tem servid
 
 **Conferir os provedores de verdade.** `pnpm ai:smoke -- --yes [anthropic|openai|gemini]` roda uma vez cada camada em cada provedor que tiver chave, com um currículo e uma vaga fictícios, e imprime a saída, os tokens e o custo estimado. **Ele faz chamadas reais e gasta dinheiro de verdade** (centavos de dólar por provedor); por isso se recusa a rodar sem `--yes` e sempre que a variável `CI` está definida, e não é chamado por nenhum teste. Usa a chave do ambiente ou a gravada pela tela (com `DATABASE_URL` e `APP_SECRET` definidos).
 
+## Candidatura automática
+
+Opcional e **desligada por padrão**. Ela depende da [IA de perfil](#ia-de-perfil) (precisa do provedor configurado e do seu perfil) e roda no worker, então o worker precisa estar ligado.
+
+> **Leia antes de ligar.**
+>
+> - **É em seu nome.** Com o site em modo Enviar, o app envia candidaturas reais, com os seus dados de identificação (nome, contato, cidade, links e também a empresa e o cargo atuais), o seu currículo e respostas que você não leu antes (as que a regra ou o modo Automático dão). Enviar não tem volta.
+> - **Sites de vagas costumam proibir automação.** Os termos do LinkedIn, por exemplo, proíbem. A conta usada pode ser limitada ou bloqueada, e o app não disfarça o navegador nem tenta parecer humano; só respeita limites e intervalos. Use por sua conta e risco.
+> - **O app não tem login.** Quem alcançar o app pode disparar candidaturas com as contas que estiverem abertas no navegador dele e ler as suas respostas. Por isso a função só liga quando o app está em endereço local (`HOST` ausente, `127.0.0.1`, `localhost` ou `::1`), e **não deve rodar em container nem atrás de um endereço público**. Em outro `HOST`, a tela de Configurações mostra o motivo e bloqueia as opções.
+> - **Quem confere é você.** As conferências do app são regras e verificadores em código, não uma pessoa; leia os ensaios antes de passar um site para Enviar.
+
+### O que faz
+
+1. **Escolhe as vagas.** A cada 5 minutos, dentro do horário, o worker procura vagas em **Descobertas** com nota da camada 1 igual ou acima do mínimo (padrão 70), descobertas há até 14 dias, de um site suportado e sem candidatura anterior. A de nota mais alta vem primeiro. Há também o botão **"Aplicar com IA"** no painel da vaga, para qualquer vaga de um site suportado que ainda não foi aplicada, seja qual for a nota. O botão só aparece quando a vaga pode mesmo receber a candidatura; numa vaga de site não suportado, já aplicada ou na lista de bloqueio, o painel fica como sempre foi.
+2. **Confere a vaga.** Busca a descrição se faltar (sem entrar em conta nenhuma), pede ao modelo rápido uma nota nova com a descrição inteira e um aviso de requisito que exclui você (país, visto, idioma). Nota abaixo do mínimo, requisito que exclui ou empresa na lista de bloqueio: a candidatura é **pulada**, com o motivo, e o card fica onde está. Passando, o card vai de Descobertas para Selecionadas.
+3. **Prepara o currículo.** Padrão "Adaptado à vaga": reaproveita ou gera o currículo adaptado da camada 3, com o mesmo verificador de não invenção; se o rascunho for barrado, a candidatura para em "precisa de você". A outra opção, "Currículo base", envia o perfil como está, sem chamar o modelo. O arquivo se chama `Curriculo_<Nome>_<Empresa>.pdf` (ou `Resume_...`, se a vaga é em inglês).
+4. **Abre o formulário e responde.** As respostas vêm das regras, das suas respostas salvas e, conforme a sua escolha, da IA (veja [Quem responde o quê](#quem-responde-o-quê)). Faltando resposta a uma pergunta **obrigatória**, nada é enviado: a candidatura para em "precisa de você". Pergunta opcional sem resposta fica em branco.
+5. **Ensaia ou envia**, conforme o modo do site (veja [Ensaio e Enviar](#ensaio-e-enviar)). Enviada e confirmada pelo site, o card vai para Aplicada, marcado "aplicada pela IA". A IA nunca move um card além de Aplicada.
+
+**Uma vaga já aplicada nunca recebe candidatura.** "Já aplicada" quer dizer: o card está em Aplicada ou numa coluna depois dela (Entrevista, Oferta, Arquivada), ou a vaga está marcada como aplicada (por você ou pela IA). Nesse caso não aparece "Aplicar com IA", "Tentar de novo" nem "Enviar de verdade", a API recusa os três, e o worker confere de novo antes de abrir qualquer formulário.
+
+Se você mover o card para Aplicada ou depois, a candidatura que estava na fila, esperando você ou com ensaio pronto termina como **"Aplicada por você"** e nunca é enviada; uma em andamento é parada no próximo ponto seguro. Mover o card para qualquer outra coluna cancela a candidatura da fila e para a que está em andamento no próximo ponto seguro. Uma vaga de site não suportado fica no quadro como sempre, sem candidatura nem selo.
+
+### Como ligar
+
+1. Configure a IA e envie o seu currículo (veja [IA de perfil](#ia-de-perfil)). Opcional, mas vale a pena: preencha em **Meu perfil** o bloco "Respostas para candidaturas" (pretensão salarial, visto, disponibilidade...).
+2. Tenha Chrome ou Edge instalado, ou aponte `APPLY_BROWSER` para outro navegador (`opera-gx` para o Opera GX; veja [Navegador e contas](#navegador-e-contas)).
+3. Em **Configurações > Candidatura automática**: ligue o interruptor, confira a nota mínima, os limites, o horário e a **lista de bloqueio** (o app sugere a sua empresa atual na primeira vez), escolha o currículo (adaptado ou base) e as "Respostas propostas pela IA". Cada site começa em **Ensaio**.
+4. Quando o LinkedIn estiver disponível (hoje nenhum site suportado usa login): abra a conta uma vez (veja [Navegador e contas](#navegador-e-contas)).
+5. Deixe tudo em Ensaio por alguns dias. Quando os ensaios estiverem certos, troque cada site para **Enviar**. A tela pede uma confirmação nessa troca.
+
+Com a função ligada, a aba **Candidaturas** lista tudo (em andamento, precisam de você, ensaios prontos, enviadas, não enviadas; cada filtro mostra as 200 mais recentes e diz quando há mais, e o número ao lado de cada filtro conta todas), os cards ganham os selos "IA aplicando", "ensaio pronto", "precisa de você" e "aplicada pela IA", e o contador **"Precisam de você"** da barra do topo abre a lista filtrada. O painel de cada vaga tem uma seção "Candidatura" com o estado, a linha do tempo, as perguntas com as respostas e a origem de cada uma, o PDF que vai (ou foi) junto e fotos do formulário.
+
+### Ensaio e Enviar
+
+- **Ensaio** (o padrão de todo site): o app faz tudo, fotografa o formulário preenchido, **não clica no envio** e fecha o formulário sem deixar rascunho. O resultado é "Ensaio pronto", com as respostas, o PDF e a foto no painel da vaga. **No Lever, o ensaio já envia o arquivo do currículo ao Lever**: o site lê o arquivo assim que ele é anexado, antes de qualquer clique de envio.
+- **Enviar:** o app clica no envio final.
+- **O modo do site é lido quando cada candidatura começa.** Voltar um site para Ensaio faz as que ainda estão na fila ensaiarem em vez de enviar. A exceção são as que você mesmo mandou com "Enviar de verdade": aquele clique foi uma decisão sua sobre aquela candidatura. Passar o site para Enviar **não** dispara os ensaios que já estavam prontos: cada um precisa do "Enviar de verdade", e a aba Candidaturas tem "Enviar todos os ensaios" (com confirmação). Esse botão envia exatamente os ensaios que a aba carregou (até os 200 mais recentes); um que deixou de estar pronto nesse meio-tempo, ou cuja vaga já foi aplicada, fica de fora, e a tela diz quantos.
+- **"Enviar de verdade" envia exatamente as respostas do ensaio que você viu**, com o mesmo PDF. Se o formulário ganhou uma pergunta obrigatória desde então, o app não envia: faz um ensaio novo para você ver.
+
+### Quem responde o quê
+
+Cada campo do formulário é classificado por regras de texto e, quando elas não decidem, pelo modelo rápido. Padrões sensíveis (salário, visto, antecedentes, deficiência, em português e em inglês) valem mais do que o que o modelo disser, e na dúvida a pergunta é tratada como pessoal.
+
+**Por regra, sem perguntar a você:**
+
+- os seus dados de identificação, do perfil: nome (inteiro, ou nome e sobrenome em campos separados), e-mail, telefone, cidade, país, os endereços do LinkedIn, do GitHub e do portfólio, e **a empresa atual e o cargo atual** (os da experiência sem data de fim). Repare nos dois últimos: eles vão para toda empresa que perguntar, sem você ver antes;
+- o arquivo do currículo;
+- "onde você viu a vaga?": o nome da fonte da vaga;
+- "já trabalhou nesta empresa?", **só** como "Não" e **só** quando nenhuma empresa do seu perfil tem uma palavra significativa em comum com a da vaga; do contrário a pergunta vai direto para você;
+- **consentimento, só para**: a política ou o aviso de privacidade, os termos de uso, o tratamento de dados pessoais para a candidatura e a veracidade das informações. Qualquer outro compromisso ("concordo em não me candidatar a outra vaga da empresa", por exemplo) vai para você;
+- perguntas demográficas (gênero, raça, deficiência, veterano): opcional fica em branco; obrigatória recebe "prefiro não informar" se a opção existir, e senão vai para as suas respostas salvas e, faltando, para você.
+
+**Sempre de você, nunca da IA, em qualquer modo:** as perguntas **pessoais** (pretensão salarial, visto e autorização de trabalho, disponibilidade, mudança de cidade, antecedentes, referências...) e as demográficas. Essas respostas vêm de **Meu perfil > Respostas para candidaturas** e do que você responder na aba Candidaturas. Quando uma candidatura para numa pergunta, você responde ali, escolhe o alcance (sempre, só nesta empresa ou só nesta vaga) e ela volta para a fila sozinha; a resposta fica salva e vale para as próximas. Uma resposta pessoal que você dá numa candidatura fica ligada ao lado da vaga em que foi dada (Brasil ou exterior) e só é usada em vagas do mesmo lado: a pretensão salarial ou o visto de uma vaga de fora não vai para uma vaga no Brasil. As respostas que você escreve em **Meu perfil** valem para qualquer vaga, a menos que marque "Só para vagas no Brasil".
+
+**Respostas propostas pela IA** (fatos do seu perfil, como "anos de experiência com TypeScript", e textos abertos, como "por que você quer trabalhar aqui?"). Em Configurações, "Respostas propostas pela IA" tem três modos:
+
+| Modo | O que acontece |
+|---|---|
+| Desligado | A IA não propõe resposta nenhuma. Respondem só as regras e as suas respostas salvas; o resto vai para você. (O modelo ainda pode ser usado para classificar uma pergunta e para sugerir que uma resposta salva serve a ela, e essa sugestão sempre volta a você para confirmar.) |
+| Com a sua aprovação (padrão) | A IA propõe e a candidatura para com a proposta na tela. Você aprova (ou edita) uma vez e a resposta é salva. Fato do perfil aprovado vale daí em diante para qualquer vaga; texto escrito vale só para aquela vaga. |
+| Automático | A proposta que passou na conferência é usada sem você ver antes. |
+
+Em qualquer modo, a IA só escreve resposta aberta para pergunta **obrigatória**; a opcional fica em branco. A proposta de que uma resposta que você já salvou "é a mesma pergunta" também sempre volta a você para confirmar uma vez; confirmada, aquele texto passa a casar sozinho.
+
+> **Limites do modo Automático.** A conferência de uma resposta da IA compara o **texto** dela com o seu perfil: ela pode deixar passar exageros e respostas fora de contexto. Alguns limites que o código impõe: anos de experiência são **arredondados para baixo** (5 anos e 4 meses viram 5) e não passam do tempo coberto pelas experiências citadas; a IA **nunca envia uma negação** ("não", "nenhum", zero), que vai para você; uma resposta de lista precisa ser uma das opções do formulário; um texto aberto passa pelo verificador de não invenção (números e nomes precisam estar no perfil ou na vaga) e respeita o tamanho do campo, com uma tentativa de correção. O que não passa vira pergunta para você. Prefira "Com a sua aprovação" até confiar no resultado.
+
+Os rótulos e as opções de um formulário são conteúdo de terceiros: vão ao modelo como dados, com a instrução de ignorar comandos escritos neles, e o modelo nunca decide navegação nem recebe endereço para visitar.
+
+### Limites, ritmo e horário
+
+| O quê | Padrão | Ajustável |
+|---|---|---|
+| Candidaturas por dia, LinkedIn | 10 | sim |
+| Vagas abertas na sessão do LinkedIn por dia | 30 | sim |
+| Candidaturas por dia, Greenhouse e Lever | 15 cada | sim |
+| Total por dia | 30 | sim |
+| Por empresa, a cada 30 dias | 2 | sim (o número) |
+| Horário | 08:00 às 21:00 | sim |
+| Nota mínima | 70 | sim |
+| Intervalo entre candidaturas, LinkedIn | 3 a 8 min, sorteado | não |
+| Intervalo nos demais sites | 1 a 3 min, sorteado | não |
+
+- O limite do dia conta **formulários abertos**, seja envio ou ensaio.
+- O botão "Aplicar com IA" dispensa a nota mínima, a conferência, a idade da vaga, o limite por empresa e o horário. Continuam valendo a lista de bloqueio, os limites diários do site, a regra de **um envio por vaga** e a de nunca aplicar a uma vaga já aplicada.
+- **Lista de bloqueio** (empresas e termos, em Configurações). A empresa é comparada por **palavras inteiras, nos dois sentidos**: bloqueia quando o nome da empresa da vaga contém uma entrada ou quando uma entrada contém o nome da empresa (sem diferença de maiúsculas e acento, e sem "Ltda", "S.A.", "Inc" e parecidos no fim). "Acme" bloqueia "Acme Pagamentos", e uma entrada "Banco Alfa" bloqueia uma empresa chamada só "Alfa". **Uma palavra curta e comum na lista bloqueia mais do que parece**: "Tech", "Group" ou "Brasil" pegam todas as empresas com essa palavra no nome. Os termos são procurados, também por palavras inteiras, no título e na descrição. Vale para candidaturas automáticas e para "Aplicar com IA".
+- **Limite diário de IA.** O limite de gasto da IA (veja [IA de perfil](#ia-de-perfil)) vale para toda candidatura, as manuais também. Atingido, a fila espera o dia seguinte; **não há "Executar mesmo assim"** aqui.
+- **Freio por site.** Três formulários não reconhecidos em seguida, três envios que o site não confirmou em seguida ou qualquer página de restrição, verificação de conta ou "atividade incomum" pausam aquele site até você clicar em **Retomar** em Configurações. Se você não aparecer em duas esperas seguidas por captcha ou código, o site fica em "aguardando você" e as candidaturas dele esperam, sem travar os outros sites.
+- Erro passageiro (rede, página lenta) tem duas novas tentativas, em 5 e em 30 minutos; depois a candidatura vira "falhou".
+
+### Estados e o que fazer
+
+| Estado | O que significa | O que você faz |
+|---|---|---|
+| Na fila, preparando, preenchendo | Em andamento | Nada |
+| Aguardando você | A janela do navegador está esperando um captcha, um código de verificação ou um login | Resolva na janela (veja abaixo) |
+| Ensaio pronto | Preenchida, não enviada | Confira e use "Enviar de verdade", ou cancele |
+| Precisa de você | Parou: pergunta sem resposta, resposta proposta a aprovar, correspondência a confirmar, currículo barrado, formulário que o app não reconhece, sessão que caiu... O motivo aparece no painel da vaga | Responda na aba Candidaturas ou resolva o que o motivo pede; "Tentar de novo" vale onde aparece |
+| **Confirme no site** | O app clicou no envio final e o site **não confirmou** (erro, captcha que apareceu depois do clique e não foi resolvido, cancelamento nesse momento, queda do worker, ou o app não teve certeza de que o primeiro clique não foi) | Veja no site ou no seu e-mail se a candidatura chegou. Se chegou, "Já apliquei por conta própria" marca a vaga como aplicada (o card vai para Aplicada, ou fica onde está se já estiver lá ou depois) e a candidatura vira "Aplicada por você"; se não, cancele |
+| Enviada | O site confirmou | Nada |
+| Aplicada por você | Você marcou a vaga como aplicada (pelo botão acima ou movendo o card para Aplicada ou depois), ou o worker viu que ela já estava aplicada antes de começar | Nada: a IA não envia esta vaga |
+| Pulada | Não era para aplicar; o motivo diz por quê (nota, requisito, bloqueio, vaga encerrada, site externo) | Nada |
+| Falhou, cancelada | Erro depois das tentativas, ou cancelada por você | "Tentar de novo", se quiser (não aparece em vaga já aplicada) |
+
+O painel da vaga mostra "Cancelamento pedido; vale no próximo ponto seguro" depois de você cancelar uma candidatura em andamento, até ela parar.
+
+**"Confirme no site" é o único estado parado sem "Tentar de novo".** Depois do clique final ninguém consegue saber com certeza se o site recebeu a candidatura. Por isso o app **nunca clica de novo, a não ser que tenha certeza de que o primeiro clique não foi**: se um captcha ou um código apareceu depois do clique e você o resolveu na janela, o app espera até 30 segundos o site terminar sozinho e só clica de novo se o formulário continua na tela, parado, sem sinal de que o primeiro envio está em andamento. **Na dúvida, ele para e pede que você confirme no site.** No máximo uma candidatura é enviada por vaga, mesmo que o worker caia no meio do envio.
+
+> **Resolveu um captcha na janela? Não clique você mesmo no botão de envio do site.** O app cuida disso; um clique seu pode mandar a candidatura duas vezes.
+
+**Esperas ao vivo.** Captcha, código de verificação e login o app **nunca** resolve. A janela do navegador vem para a frente, a aba Candidaturas avisa (e, se você permitir, o navegador também) e o app espera por até **10 minutos**. Resolvido, continua do ponto em que parou; estourado o prazo, a candidatura vira "precisa de você". Depois de "Abrir para fazer login", em Configurações, a janela também fica aberta por até 10 minutos. Enquanto ela está nessa espera, nenhuma candidatura começa naquele site.
+
+### Navegador e contas
+
+- O app usa um navegador **com janela**, no seu computador, com um perfil próprio guardado na pasta de dados (`APPLY_DATA_DIR`): `%LOCALAPPDATA%\kanban-vagas` no Windows, `~/Library/Application Support/kanban-vagas` no macOS e `${XDG_DATA_HOME:-~/.local/share}/kanban-vagas` nos demais. Ele **não** usa o perfil do seu navegador do dia a dia: as contas dos sites são abertas nesse perfil à parte.
+- **`APPLY_BROWSER`** escolhe o navegador: um canal instalado (`chrome` ou `msedge`), **`opera-gx`** ou o **caminho completo** do executável de outro navegador baseado em Chromium. Sem a variável, o app procura o Chrome e depois o Edge nos lugares padrão.
+- **Opera GX: use `APPLY_BROWSER=opera-gx`**, não o caminho. O Opera GX muda o executável de pasta a cada atualização (`%LOCALAPPDATA%\Programs\Opera GX\<versão>\opera.exe`); com `opera-gx`, o app procura a versão mais nova instalada toda vez que abre o navegador, e uma atualização não quebra nada. Se você usar um caminho completo e ele deixar de existir, o motivo mostrado na tela diz qual é a versão mais nova encontrada ao lado, para você corrigir.
+- **Sem navegador utilizável, nada começa, e a tela diz por quê.** Quem procura o navegador é o worker: ele escreve o motivo no log (ao iniciar e quando o motivo muda) e o publica para a tela. Configurações mostra o aviso "O worker não consegue se candidatar agora" com o motivo (as opções continuam editáveis); o cartão "Hoje" e a aba Candidaturas mostram o mesmo motivo; no painel da vaga, uma linha com esse motivo fica no lugar de "Aplicar com IA"; "Enviar todos os ensaios", "Enviar de verdade" e "Tentar de novo" ficam desligados, com o motivo como dica; e os botões de conta terminam com erro. O worker procura o navegador de novo a cada volta da fila: instalado o navegador (ou atualizado o Opera GX, com `opera-gx`), o aviso some sozinho. Mudou o `APPLY_BROWSER` no `.env`? Reinicie o worker, que só lê as variáveis ao iniciar.
+- Para os sites com login, **Configurações > Candidatura automática** mostra o estado da conta e os botões "Abrir para fazer login", "Verificar" e "Desconectar". **Você digita a senha na página do próprio site; o app nunca a lê nem a guarda.** A sessão fica só no perfil do navegador, no seu disco; nunca vai para o banco nem para o log. "Desconectar" remove os cookies daquele site desse perfil.
+- A janela fecha depois de 5 minutos sem uso.
+
+### Custo
+
+Estimativas com os modelos padrão do Claude, **a medir no uso real**; a fatura do provedor é a verdade. Todas as chamadas da candidatura entram no gasto em uma camada própria, "Candidatura", em Configurações.
+
+| Etapa | Modelo | Custo típico |
+|---|---|---|
+| Conferência da nota | rápido | menos de US$ 0,01 |
+| Classificar e responder perguntas | rápido | menos de US$ 0,01 |
+| Resposta aberta, quando há | forte | US$ 0,03 a 0,07 |
+| Currículo adaptado | forte | US$ 0,07 (até US$ 0,70 no pior caso, com a correção) |
+
+Uma candidatura típica custa perto de US$ 0,08; com o limite padrão de US$ 1,00 por dia, cabem cerca de 10 por dia. Com o "Currículo base", o custo cai para centavos. O limite diário é o da IA de perfil: ele soma tudo. As notas das vagas e as candidaturas dividem esse mesmo limite, sem reserva para nenhuma das duas: num dia com muitas vagas novas, as notas podem gastar o limite inteiro, e as candidaturas esperam o dia seguinte.
+
+### O que fica guardado
+
+Veja a tabela de [Seus dados](#seus-dados-o-que-fica-guardado-e-como-apagar). Em resumo: o banco guarda as candidaturas (estado, motivo, respostas com a origem, o PDF exato enviado, o e-mail usado, o texto de confirmação do site e a linha do tempo) e as suas respostas salvas; as **fotos** do formulário (que têm dados pessoais) ficam na pasta de dados do app e saem com "Apagar todos os dados de IA"; a sessão dos sites fica só no perfil do navegador.
+
+### Sites suportados
+
+| Site | Login | Como o app acha o formulário | Observações |
+| --- | --- | --- | --- |
+| Greenhouse | não | pelo endereço da vaga (`job-boards.greenhouse.io/<empresa>/jobs/<id>`) ou pelo `gh_jid` de uma vaga cuja fonte é o Greenhouse | o formulário é lido pela API pública do Greenhouse e preenchido na página |
+| Lever | não | pelo endereço `jobs.lever.co/<empresa>/<id>` | o formulário é lido e preenchido na página; `jobs.eu.lever.co` fica de fora |
+| LinkedIn | sim, pelo dono, na janela | pelo endereço da vaga no LinkedIn | previsto para esta versão, mas **ainda não disponível**: depende de uma gravação com a sua conta |
+
+- **Greenhouse:** vale o endereço no domínio do Greenhouse, ou uma vaga da fonte Greenhouse cujo endereço traz `gh_jid` igual ao número da vaga. Vaga do Greenhouse publicada no domínio da própria empresa, sem `gh_jid`, não é suportada.
+- **Lever:** vale só `jobs.lever.co/<empresa>/<id>`, com ou sem `/apply`. No ensaio o Lever recebe o arquivo do currículo.
+- **LinkedIn:** só a candidatura simplificada dentro do próprio LinkedIn; o link externo da vaga não é seguido. Cada candidatura envia um PDF novo, que fica na lista de currículos recentes da conta.
+- Captcha é detectado e nunca resolvido: a janela fica aberta esperando você.
+
+### Conferir um site de verdade
+
+```bash
+pnpm apply:smoke -- --site <linkedin|greenhouse|lever> --job <endereço da vaga> [--resume <pdf>] [--country BR|INT]
+```
+
+> **Este comando abre o formulário de uma empresa de verdade.** Ele digita os seus dados reais de identificação nos campos (nome, e-mail, telefone, cidade, país, os endereços do LinkedIn, do GitHub e do portfólio, a empresa atual e o cargo atual) e anexa o PDF do seu currículo, sem nunca enviar a candidatura. Mesmo sem o envio, **o Lever pode ler o arquivo anexado antes de qualquer clique de envio**. Use só numa vaga em que você aceita isso.
+
+**Pare o worker antes** (`pnpm dev` ou `pnpm start:prod`): o comando usa o mesmo perfil de navegador do worker, e com a janela do worker aberta ele não consegue abrir o navegador.
+
+`--country` diz se a vaga é no Brasil (`BR`) ou fora (`INT`, o padrão, porque o comando não descobre o país pelo endereço): decide quais das suas respostas pessoais salvas (salário, visto, disponibilidade) valem no ensaio.
+
+Ele abre a vaga com janela, preenche como o worker faria e fotografa a página inteira. Sempre roda em ensaio: não tem opção de envio e nunca clica em enviar. Recusa rodar na CI. Imprime as perguntas e as respostas, com a origem de cada uma, e grava a foto em `<pasta de dados>/smoke/`, fora do repositório.
+
+- **Com um provedor de IA configurado** (e o limite diário de IA ainda não atingido), o que a IA proporia aparece como **proposta que aguarda aprovação** e **não é digitado**; as chamadas são pagas e entram na camada "Candidatura". **Sem provedor** (ou com o limite atingido), só as regras e as respostas salvas respondem. A primeira linha impressa diz qual é o caso.
+- A vaga do ensaio é montada só pelo endereço. Num endereço do Greenhouse no domínio da empresa, o número vem do `gh_jid` e o nome da empresa é o melhor palpite (o nome do quadro ou do domínio): **respostas salvas só para uma empresa podem não valer num ensaio por endereço**.
+
+### Quando um site muda de layout
+
+A candidatura para em "formulário não reconhecido", com a foto. Grave de novo as páginas com `pnpm apply:fixtures` (veja [Páginas gravadas dos testes](#páginas-gravadas-dos-testes); no LinkedIn, você repete a gravação e a limpeza), corrija o roteiro do site e rode `pnpm test:browser` até voltar a passar.
+
+### Páginas gravadas dos testes
+
+Os testes dos roteiros de site usam páginas gravadas de formulários reais, servidas localmente; nenhum teste automatizado acessa um site real. Essas páginas gravadas **ficam só na sua máquina** (não vão para o repositório, porque podem trazer dados pessoais) e são gravadas de novo com `pnpm apply:fixtures`. Com `FAKE_APPLY_SITE=1` o app usa um site de teste local no lugar dos sites reais (é o que o `pnpm e2e` usa).
+
 ## A aba Configurações
 
-**O que tem.** IA: provedor, modelo rápido e modelo forte, chave de API por provedor, limite diário, liga/desliga da triagem automática (camada 1) e da análise automática (camada 2), "Testar conexão" e o gasto. Fontes: as empresas consultadas no Greenhouse e no Lever. Geral: estado do worker e horário da próxima busca. Com a triagem automática desligada, a nota só é calculada quando você abre a vaga; com a análise automática desligada, a análise só roda pelo botão "Analisar esta vaga".
+**O que tem.** IA: provedor, modelo rápido e modelo forte, chave de API por provedor, limite diário, liga/desliga da triagem automática (camada 1) e da análise automática (camada 2), "Testar conexão" e o gasto. Fontes: as empresas consultadas no Greenhouse e no Lever. Candidatura automática: interruptor, nota mínima, modo de cada site (Ensaio ou Enviar), limites, horário, currículo, respostas propostas pela IA, lista de bloqueio e contas dos sites (veja [Candidatura automática](#candidatura-automática)). Geral: estado do worker e horário da próxima busca. Com a triagem automática desligada, a nota só é calculada quando você abre a vaga; com a análise automática desligada, a análise só roda pelo botão "Analisar esta vaga".
 
 **Precedência.** Para cada configuração vale, nesta ordem: o que foi gravado pela tela, depois a variável de ambiente, depois o padrão do código. A tela mostra de onde vem cada valor ("definido aqui", "do ambiente", "padrão"). API e worker releem o banco com um cache de 5 segundos: uma mudança vale em instantes, nos dois processos, sem reiniciar.
 
@@ -256,7 +439,7 @@ As marcadas com (*) são só o **valor inicial**: podem ser trocadas na aba Conf
 | `PGSSLMODE` | nenhum | Modo de TLS da conexão, lido pelo driver do Postgres quando a URL não traz `sslmode`; definida, desliga o TLS automático para hosts não locais (veja "Usar o Supabase") |
 | `API_PORT` | `3333` | Porta da API. O proxy do Vite só enxerga a variável se ela estiver no ambiente do shell, não só no `.env` |
 | `PORT` | nenhum | Porta da API em plataformas que a injetam (Railway); tem precedência sobre `API_PORT` |
-| `HOST` | `127.0.0.1` | Endereço em que a API escuta; o container usa `0.0.0.0` |
+| `HOST` | `127.0.0.1` | Endereço em que a API escuta; o container usa `0.0.0.0`. A [candidatura automática](#candidatura-automática) só funciona com `HOST` ausente, `127.0.0.1`, `localhost` ou `::1` |
 | `ALLOWED_HOSTS` | nenhum | Nomes de host aceitos no cabeçalho `Host` além de `localhost`, `host.docker.internal` e de qualquer IP, separados por vírgula (`kanban.exemplo.com,outro.exemplo.com`; porta e esquema são ignorados). Qualquer outro `Host` recebe 403 (proteção contra DNS rebinding). No Railway, o domínio do serviço e `healthcheck.railway.app` entram sozinhos |
 | `WEB_DIST` | `apps/web/dist` | Diretório do web buildado que a API serve, quando tem `index.html` |
 | `GREENHOUSE_BOARDS` (*) | `gitlab,stripe,cloudflare,figma` | Boards do Greenhouse, separados por vírgula |
@@ -273,6 +456,9 @@ As marcadas com (*) são só o **valor inicial**: podem ser trocadas na aba Conf
 | `AI_DAILY_BUDGET_USD` (*) | `1.00` | Limite de gasto estimado por dia, em dólares |
 | `AI_BUDGET_TZ` | `America/Sao_Paulo` | Fuso que define o "dia" do limite. Só por variável de ambiente |
 | `AI_ALLOW_FAKE` | desligado | Só testes: `1` acrescenta o provedor falso (sem rede, sem custo) às opções da aba Configurações |
+| `APPLY_DATA_DIR` | `%LOCALAPPDATA%\kanban-vagas` (Windows), `~/Library/Application Support/kanban-vagas` (macOS), `${XDG_DATA_HOME:-~/.local/share}/kanban-vagas` (demais) | Pasta de dados da candidatura automática: perfil do navegador (`browser/`, com as sessões dos sites) e fotos dos formulários (`shots/`). Fica fora do repositório. Só por variável de ambiente |
+| `APPLY_BROWSER` | procura Chrome e depois Edge | Navegador da candidatura automática: `chrome`, `msedge`, `opera-gx` (a versão mais nova do Opera GX instalada) ou o caminho completo do executável de um navegador baseado em Chromium. Só por variável de ambiente |
+| `FAKE_APPLY_SITE` | desligado | `1` troca os sites de candidatura por um site de teste local e o navegador pelo Chromium do Playwright, sem janela (testes e e2e, sem rede) |
 | `E2E_DATABASE_URL` | `postgres://postgres:postgres@localhost:5433/kanban_e2e` | Só no `pnpm e2e`. O nome do banco precisa terminar em `_e2e` ou `_test` |
 | `E2E_SCREENSHOT_DIR` | desligado | Só no `pnpm e2e`: pasta onde o teste grava screenshots |
 | `CI` | desligado | No `pnpm e2e`: com `CI` definida, o Playwright gera relatório HTML e proíbe `test.only`. No `pnpm ai:smoke`: com `CI` definida, ele se recusa a rodar |
@@ -289,12 +475,14 @@ pnpm db:generate    # gera uma migration a partir de packages/db/src/schema.ts
 pnpm db:migrate     # aplica as migrations pendentes no DATABASE_URL
 pnpm start:prod     # migra e sobe api + worker como em produção (veja "Deploy")
 pnpm ai:smoke -- --yes [provedor]   # ATENÇÃO: chamadas reais aos provedores de IA, gasta dinheiro
+pnpm resume:preview   # gera o PDF do seu perfil em uma pasta fora do repositório
+pnpm apply:smoke -- --site <id> --job <url>   # ATENÇÃO: abre um formulário real, em ensaio; nunca envia
 ```
 
 - Os testes unitários não usam rede nem Docker: o banco é um Postgres em memória (PGlite) e as fontes são testadas contra fixtures gravadas.
 - **Nenhum teste automatizado chama um provedor de IA de verdade nem usa chave real:** os adaptadores dos três provedores são testados com uma camada HTTP falsa e respostas escritas à mão, e todo o resto (inclusive o e2e) usa o provedor falso, que não usa rede.
 - O `pnpm ai:smoke` é o único comando que fala com os provedores reais. Ele gasta dinheiro de verdade, nunca roda na CI nem em teste, e só roda com `--yes` (veja [IA de perfil](#ia-de-perfil)).
-- O `pnpm e2e` precisa do Postgres do compose no ar (`docker compose up -d`) e do Chromium do Playwright (`pnpm --filter @kv/web exec playwright install chromium`, uma vez). Ele cria o banco `kanban_e2e` se não existir, esvazia as tabelas a cada execução e sobe seu próprio `pnpm dev` com `FAKE_CONNECTORS=1`, `AI_ALLOW_FAKE=1` e um `APP_SECRET` sorteado na hora, então as portas 5173 e 3333 precisam estar livres (pare o seu `pnpm dev`). São dois testes, em sequência: o do quadro e o da IA de perfil, que configura o provedor falso pela aba Configurações, grava uma chave fictícia, envia um currículo fictício e baixa o PDF adaptado. O banco `kanban` de desenvolvimento não é tocado, e as chaves do seu `.env` são ignoradas.
+- O `pnpm e2e` precisa do Postgres do compose no ar (`docker compose up -d`) e do Chromium do Playwright (`pnpm --filter @kv/web exec playwright install chromium`, uma vez). Ele cria o banco `kanban_e2e` se não existir, esvazia as tabelas a cada execução e sobe seu próprio `pnpm dev` com `FAKE_CONNECTORS=1`, `AI_ALLOW_FAKE=1`, `FAKE_APPLY_SITE=1` e um `APP_SECRET` sorteado na hora, então as portas 5173 e 3333 precisam estar livres (pare o seu `pnpm dev`). São três testes, em sequência: o do quadro; o da IA de perfil, que configura o provedor falso pela aba Configurações, grava uma chave fictícia, envia um currículo fictício e baixa o PDF adaptado; e o da candidatura automática, que liga a função, responde as perguntas de uma candidatura parada, confere os ensaios e os envia de verdade ao site de teste local (num Chromium do Playwright sem janela e sem rede). O banco `kanban` de desenvolvimento não é tocado, as chaves do seu `.env` são ignoradas, e a pasta de dados da candidatura do e2e é uma pasta própria na pasta temporária do sistema, esvaziada a cada execução (nunca a sua `APPLY_DATA_DIR`). `E2E_SERVER_LOGS=1` mostra a saída da api, do worker e do web durante o teste.
 - Mudou o schema? Edite `packages/db/src/schema.ts`, rode `pnpm db:generate`, revise o SQL gerado em `packages/db/migrations` e aplique com `pnpm db:migrate`. Tabelas novas usam `.enableRLS()` para manter o RLS habilitado.
 
 Estrutura:
@@ -309,7 +497,7 @@ packages/shared       tipos e schemas Zod
 packages/ai           provedores de IA (Claude, OpenAI, Gemini e o falso), prompts, verificador de não invenção
 packages/resume       extração de texto de PDF/DOCX e geração do PDF do currículo adaptado
 packages/settings     configurações gravadas pela tela e cifra das chaves de API
-scripts/              start de produção, instalação do worker, gravação de fixtures, ai:smoke
+scripts/              start de produção, instalação do worker, gravação de fixtures, ai:smoke, prévia do currículo (resume:preview)
 .railway/             configuração do Railway (nunca aplicada, veja "Deploy")
 docs/superpowers/     spec e plano de implementação
 ```
@@ -342,7 +530,7 @@ O alvo é **um serviço** construído pelo `Dockerfile`. Um container roda a API
 - **Uma réplica só.** O worker e as migrations do start não foram feitos para rodar em paralelo; com mais de uma réplica as buscas e as chamadas de IA rodariam em dobro, duas réplicas poderiam migrar ao mesmo tempo, e o limite de frequência do "Testar conexão" (que é por processo) deixaria de valer.
 - Se a API ou o worker cair, o container sai com erro e o Railway o reinicia.
 - **Indeed não funciona no container:** a imagem não tem Chromium. A fonte falha com erro claro na tela de saúde das fontes, e a análise das vagas do Indeed usa só título, empresa e local.
-- **Imagem:** as fontes do PDF (Noto Sans, do pacote `@fontsource/noto-sans`) e os leitores de PDF e DOCX vão dentro dela como dependências de produção; nada é baixado em runtime.
+- **Imagem:** as fontes do PDF (Noto Serif, do pacote `@fontsource/noto-serif`) e os leitores de PDF e DOCX vão dentro dela como dependências de produção; nada é baixado em runtime.
 
 O arquivo `.railway/railway.ts` descreve esse serviço como infraestrutura como código. **Ele nunca foi aplicado nem validado contra o Railway.** O primeiro passo, que só lê e não altera nada, é `railway config plan`; ele exige o pacote `railway` instalado no repo como dependência de desenvolvimento (`pnpm add -D -w railway`). Revise o plano antes de qualquer `railway config apply`.
 
@@ -366,4 +554,4 @@ Sem Docker, `pnpm --filter @kv/web build && pnpm start:prod` faz o mesmo no host
 
 Apache License 2.0. Veja o arquivo [`LICENSE`](LICENSE).
 
-Dependências acrescentadas pela IA de perfil e suas licenças: `@anthropic-ai/sdk`, `openai` e `@google/genai` (Apache-2.0); `@fastify/multipart`, `unpdf`, `fflate`, `pdfkit` e `fontkit` (MIT); `mammoth` (BSD-2-Clause); fonte Noto Sans, de `@fontsource/noto-sans` (OFL-1.1), embutida nos PDFs gerados. A cifra das chaves usa só o `node:crypto`.
+Dependências acrescentadas pela IA de perfil e suas licenças: `@anthropic-ai/sdk`, `openai` e `@google/genai` (Apache-2.0); `@fastify/multipart`, `unpdf`, `fflate`, `pdfkit` e `fontkit` (MIT); `mammoth` (BSD-2-Clause); fonte Noto Serif, de `@fontsource/noto-serif` (OFL-1.1), embutida nos PDFs gerados. A cifra das chaves usa só o `node:crypto`.

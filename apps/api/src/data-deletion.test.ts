@@ -1,4 +1,8 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { existsSync } from 'node:fs';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resolveTailored } from '@kv/ai';
 import { SAMPLE_PROFILE } from '@kv/ai/testing';
 import {
@@ -9,6 +13,7 @@ import { createTestDb, resetTestDb } from '@kv/db/testing';
 import type { ResumeLang } from '@kv/shared';
 import { TEST_SECRET, seedJob, testAi } from './ai-testing';
 import { buildApp } from './app';
+import { removeApplyFiles } from './routes/ai';
 
 const NOW = Date.UTC(2026, 10, 11, 15, 0, 0);
 
@@ -119,6 +124,47 @@ describe('DELETE /ai/data', () => {
     expect(await db.select().from(jobs)).toHaveLength(2);
     expect((await app.inject({ method: 'GET', url: '/ai/profile' })).json()).toEqual({ resumes: [], profiles: [], tasks: [] });
     expect((await app.inject({ method: 'GET', url: '/jobs/ai' })).json()).toEqual([]);
+  });
+
+  it('removes the photo and résumé folders of the automatic application after the database, never the browser profile', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'kv-delete-'));
+    try {
+      app = buildApp(db, { ai: testAi({ env: { AI_PROVIDER: 'fake', APP_SECRET: TEST_SECRET }, dataDir }) });
+      const file = async (...parts: string[]) => {
+        await mkdir(join(dataDir, ...parts.slice(0, -1)), { recursive: true });
+        await writeFile(join(dataDir, ...parts), 'x');
+      };
+      await file('shots', '1', 'filled.jpg');
+      await file('resumes', '1', 'cv.pdf');
+      await file('browser', 'Default', 'Cookies');
+      expect((await del('/ai/data')).statusCode).toBe(204);
+      expect(existsSync(join(dataDir, 'shots'))).toBe(false);
+      expect(existsSync(join(dataDir, 'resumes'))).toBe(false);
+      expect(existsSync(join(dataDir, 'browser', 'Default', 'Cookies'))).toBe(true);
+      // Sem as pastas (já apagadas), o pedido continua dando certo.
+      expect((await del('/ai/data')).statusCode).toBe(204);
+    } finally {
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('tolerates a file in use while removing the folders', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'kv-delete-busy-'));
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const busy = Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' });
+      const removed: string[] = [];
+      await expect(removeApplyFiles(dataDir, async (path) => { removed.push(String(path)); throw busy; })).resolves.toBeUndefined();
+      // Tentou as duas pastas, mesmo com a primeira em uso.
+      expect(removed).toEqual([join(dataDir, 'shots'), join(dataDir, 'resumes')]);
+      expect(spy).toHaveBeenCalledWith(expect.stringContaining('EBUSY'));
+      // Outro erro (não "em uso") não é engolido.
+      const denied = Object.assign(new Error('boom'), { code: 'EIO' });
+      await expect(removeApplyFiles(dataDir, async () => { throw denied; })).rejects.toThrow('boom');
+    } finally {
+      spy.mockRestore();
+      await rm(dataDir, { recursive: true, force: true });
+    }
   });
 
   it('is behind the origin guard and is idempotent', async () => {

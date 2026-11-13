@@ -6,7 +6,7 @@ import { createProvider } from './provider';
 import {
   TIER1_EXCERPT_CHARS, TIER2_DESCRIPTION_CHARS, analyzeJob, extractProfile, scoreJobs, tailoredLangFor, testConnection, translateProfile,
 } from './tasks';
-import { SAMPLE_JOB, SAMPLE_PROFILE, SAMPLE_RESUME_TEXT } from './testing';
+import { LAYOUT_PROFILE, SAMPLE_JOB, SAMPLE_PROFILE, SAMPLE_RESUME_TEXT, legacyProfile } from './testing';
 import type { AiProvider, AiRequest } from './types';
 
 const fake = createFakeProvider();
@@ -45,6 +45,14 @@ describe('testConnection', () => {
 });
 
 describe('extractProfile', () => {
+  it('extracts the sample résumé with the four fields present', async () => {
+    const { data } = await extractProfile(fake, SAMPLE_RESUME_TEXT);
+    expect(data.headline).toBe('');
+    expect(data.experiences.every((e) => e.section === 'principal' && e.note === '')).toBe(true);
+    expect(data.skills.length).toBeGreaterThan(0);
+    expect(data.skills.every((k) => k.group === '')).toBe(true);
+  });
+
   it('returns a valid profile with stable ids, using the strong tier', async () => {
     const { data, usage, model } = await extractProfile(fake, SAMPLE_RESUME_TEXT);
     expect(CandidateProfileSchema.safeParse(data).success).toBe(true);
@@ -59,6 +67,11 @@ describe('extractProfile', () => {
 });
 
 describe('translateProfile', () => {
+  it('translates a profile stored before the layout fields and returns it complete', async () => {
+    const { data } = await translateProfile(fake, legacyProfile(SAMPLE_PROFILE), 'en');
+    expect(data).toMatchObject({ headline: '', skills: [{ group: '' }, { group: '' }, { group: '' }], experiences: [{ section: 'principal', note: '' }] });
+  });
+
   it('keeps ids and copies names, companies, dates and urls from the source', async () => {
     const { data } = await translateProfile(fake, SAMPLE_PROFILE, 'en');
     expect(data.summary).toBe(`[en] ${SAMPLE_PROFILE.summary}`);
@@ -151,4 +164,8 @@ describe('tailoredLangFor', () => {
     // Sem idioma detectado, vale o país da vaga.
     expect([tailoredLangFor(null, 'BR'), tailoredLangFor('', 'INT'), tailoredLangFor('en', 'BR')]).toEqual(['pt-BR', 'en', 'en']);
   });
+});
+
+it('the fake provider marks the translated headline', async () => {
+  expect((await translateProfile(fake, LAYOUT_PROFILE, 'en')).data.headline).toBe('[en] Desenvolvedora Front-end Sênior');
 });

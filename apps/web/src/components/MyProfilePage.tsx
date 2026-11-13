@@ -14,6 +14,7 @@ import {
   useAiStatus, useConfirmTask, useDeleteAiData, useDeleteResume, useProfileOverview, useTranslateProfile, useUploadResume,
 } from '../useAi';
 import { AiNotConfigured } from './AiNotConfigured';
+import { ApplyAnswersSection } from './ApplyAnswersSection';
 import { ProfileEditor, forgetProfileDraft } from './ProfileEditor';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
@@ -368,6 +369,8 @@ function Loaded({ overview, onOpenSettings }: { overview: ProfileOverviewDto; on
               ))}
             </div>
           </motion.section>
+
+          <ApplyAnswersSection />
 
           <section aria-labelledby={dataLabelId} className={cn(CARD, 'flex flex-wrap items-center gap-x-4 gap-y-3 px-5 py-4 sm:px-6')}>
             <div className="min-w-56 flex-1">

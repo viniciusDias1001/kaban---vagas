@@ -1,5 +1,6 @@
 import {
-  API_KEY_PATTERN, COMPANY_SLUG_PATTERN, MODEL_ID_PATTERN, SETTINGS_LIMITS, type AiKeyMetaDto, type SettingSource,
+  API_KEY_PATTERN, APPLY_SETTINGS_LIMITS, APPLY_SITE_IDS, COMPANY_SLUG_PATTERN, MODEL_ID_PATTERN, SETTINGS_LIMITS, type AiKeyMetaDto,
+  type ApplyAiAnswers, type ApplyDailyCaps, type ApplyMode, type ApplyResumeMode, type ApplySiteId, type SettingSource,
   type SettingsDto, type SettingsPatch, type TestConnectionOutcome,
 } from '@kv/shared/client';
 
@@ -21,7 +22,31 @@ export interface SettingsForm {
   greenhouseDraft: string;
   leverCompanies: string[];
   leverDraft: string;
+  applyEnabled: boolean;
+  /** Texto do campo, como digitado. */
+  applyMinScore: string;
+  applySiteModes: Record<ApplySiteId, ApplyMode>;
+  /** Texto de cada campo de limite diário. */
+  applyDailyCaps: Record<keyof ApplyDailyCaps, string>;
+  applyCompanyCap: string;
+  /** 'HH:MM' */
+  applyWindowStart: string;
+  applyWindowEnd: string;
+  applyResumeMode: ApplyResumeMode;
+  applyAiAnswers: ApplyAiAnswers;
+  applyBlockedCompanies: string[];
+  /** Digitado e ainda não confirmado; conta junto ao salvar. */
+  applyBlockedCompaniesDraft: string;
+  applyBlockedTerms: string[];
+  applyBlockedTermsDraft: string;
+  /**
+   * Sites em que o dono já confirmou a troca para "Enviar" nesta edição. Só da tela: nunca vai no PATCH e volta
+   * vazio quando o formulário é descartado ou relido, então o aviso reaparece se o modo não foi salvo.
+   */
+  applyRealConfirmed: ApplySiteId[];
 }
+
+export const APPLY_CAP_KEYS = ['linkedin', 'greenhouse', 'lever', 'fake', 'total', 'linkedinViews'] as const satisfies readonly (keyof ApplyDailyCaps)[];
 
 const budgetText = (value: number) => String(value).replace('.', ',');
 
@@ -38,6 +63,20 @@ export function formFromSettings(dto: SettingsDto): SettingsForm {
     greenhouseDraft: '',
     leverCompanies: [...dto.sources.leverCompanies.value],
     leverDraft: '',
+    applyEnabled: dto.apply.enabled.value,
+    applyMinScore: String(dto.apply.minScore.value),
+    applySiteModes: { ...dto.apply.siteModes.value },
+    applyDailyCaps: Object.fromEntries(APPLY_CAP_KEYS.map((k) => [k, String(dto.apply.dailyCaps.value[k])])) as Record<keyof ApplyDailyCaps, string>,
+    applyCompanyCap: String(dto.apply.companyCap.value),
+    applyWindowStart: dto.apply.window.value.start,
+    applyWindowEnd: dto.apply.window.value.end,
+    applyResumeMode: dto.apply.resumeMode.value,
+    applyAiAnswers: dto.apply.aiAnswers.value,
+    applyBlockedCompanies: [...dto.apply.blockedCompanies.value],
+    applyBlockedCompaniesDraft: '',
+    applyBlockedTerms: [...dto.apply.blockedTerms.value],
+    applyBlockedTermsDraft: '',
+    applyRealConfirmed: [],
   };
 }
 
@@ -53,6 +92,24 @@ export function collectCompanies(list: readonly string[], draft: string): string
   return [...new Set(all)];
 }
 
+/** Itens da lista de bloqueio: separados por vírgula ou quebra de linha (um termo pode ter espaços); sem vazios nem repetidos (sem diferenciar maiúsculas), na ordem. */
+export function collectBlockItems(list: readonly string[], draft: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of [...list, ...draft.split(/[,\n]+/)]) {
+    const item = raw.trim();
+    if (item === '' || seen.has(item.toLowerCase())) continue;
+    seen.add(item.toLowerCase());
+    out.push(item);
+  }
+  return out;
+}
+
+/** Inteiro sem sinal digitado ("70"); null quando não é. */
+const parseWhole = (text: string): number | null => (/^\d+$/.test(text.trim()) ? Number(text.trim()) : null);
+
+const CLOCK = /^([01]\d|2[0-3]):[0-5]\d$/;
+
 /** "1,5" ou "1.5" → 1.5; null quando não é um número. */
 export function parseBudget(text: string): number | null {
   const normalized = text.trim().replace(',', '.');
@@ -66,6 +123,18 @@ export interface SettingsFormErrors {
   dailyBudget?: string;
   greenhouseBoards?: string;
   leverCompanies?: string;
+  applyMinScore?: string;
+  applyDailyCaps?: string;
+  applyCompanyCap?: string;
+  applyWindow?: string;
+  applyBlockedCompanies?: string;
+  applyBlockedTerms?: string;
+}
+
+function blockListProblem(list: string[]): string | undefined {
+  if (list.length > APPLY_SETTINGS_LIMITS.listItems) return `No máximo ${APPLY_SETTINGS_LIMITS.listItems} itens.`;
+  if (list.some((i) => i.length > APPLY_SETTINGS_LIMITS.listItemLength)) return `Cada item pode ter no máximo ${APPLY_SETTINGS_LIMITS.listItemLength} caracteres.`;
+  return undefined;
 }
 
 function modelProblem(value: string, required: boolean): string | undefined {
@@ -83,6 +152,14 @@ function companiesProblem(list: string[]): string | undefined {
   return bad ? `"${bad}" não é um nome válido: use o nome da empresa como aparece na URL (letras, dígitos, - e _).` : undefined;
 }
 
+/** O primeiro limite diário inválido (é o campo que recebe o erro e o foco); undefined quando todos valem. */
+export function badDailyCap(form: SettingsForm): keyof ApplyDailyCaps | undefined {
+  return APPLY_CAP_KEYS.find((k) => {
+    const n = parseWhole(form.applyDailyCaps[k]);
+    return n === null || n > APPLY_SETTINGS_LIMITS.maxCap;
+  });
+}
+
 /** Erros por campo; objeto vazio = pode salvar. */
 export function validateSettings(form: SettingsForm): SettingsFormErrors {
   const errors: SettingsFormErrors = {};
@@ -98,6 +175,20 @@ export function validateSettings(form: SettingsForm): SettingsFormErrors {
   const lever = companiesProblem(collectCompanies(form.leverCompanies, form.leverDraft));
   if (greenhouse) errors.greenhouseBoards = greenhouse;
   if (lever) errors.leverCompanies = lever;
+
+  const score = parseWhole(form.applyMinScore);
+  if (score === null || score > 100) errors.applyMinScore = 'Informe uma nota de 0 a 100.';
+  if (badDailyCap(form)) errors.applyDailyCaps = `Cada limite diário vai de 0 a ${APPLY_SETTINGS_LIMITS.maxCap}.`;
+  const companyCap = parseWhole(form.applyCompanyCap);
+  if (companyCap === null || companyCap < 1 || companyCap > APPLY_SETTINGS_LIMITS.maxCompanyCap) {
+    errors.applyCompanyCap = `Informe de 1 a ${APPLY_SETTINGS_LIMITS.maxCompanyCap} candidaturas por empresa.`;
+  }
+  if (!CLOCK.test(form.applyWindowStart) || !CLOCK.test(form.applyWindowEnd)) errors.applyWindow = 'Use o formato HH:MM.';
+  else if (form.applyWindowStart >= form.applyWindowEnd) errors.applyWindow = 'O início precisa ser antes do fim.';
+  const companies = blockListProblem(collectBlockItems(form.applyBlockedCompanies, form.applyBlockedCompaniesDraft));
+  const terms = blockListProblem(collectBlockItems(form.applyBlockedTerms, form.applyBlockedTermsDraft));
+  if (companies) errors.applyBlockedCompanies = companies;
+  if (terms) errors.applyBlockedTerms = terms;
   return errors;
 }
 
@@ -124,7 +215,36 @@ export function toSettingsPatch(form: SettingsForm, dto: SettingsDto): SettingsP
   const lever = collectCompanies(form.leverCompanies, form.leverDraft);
   if (!sameList(greenhouse, dto.sources.greenhouseBoards.value)) patch.greenhouseBoards = greenhouse;
   if (!sameList(lever, dto.sources.leverCompanies.value)) patch.leverCompanies = lever;
+  addApplyChanges(form, dto, patch);
   return patch;
+}
+
+/** Os campos de candidatura que mudaram. Os mapas por site seguem parciais: a API mescla, então só vão os que mudaram. */
+function addApplyChanges(form: SettingsForm, dto: SettingsDto, patch: SettingsPatch): void {
+  const apply = dto.apply;
+  if (form.applyEnabled !== apply.enabled.value) patch.applyEnabled = form.applyEnabled;
+  const score = parseWhole(form.applyMinScore);
+  if (score !== null && score !== apply.minScore.value) patch.applyMinScore = score;
+  const modes: Partial<Record<ApplySiteId, ApplyMode>> = {};
+  for (const site of APPLY_SITE_IDS) if (form.applySiteModes[site] !== apply.siteModes.value[site]) modes[site] = form.applySiteModes[site];
+  if (Object.keys(modes).length > 0) patch.applySiteModes = modes;
+  const caps: Partial<ApplyDailyCaps> = {};
+  for (const key of APPLY_CAP_KEYS) {
+    const n = parseWhole(form.applyDailyCaps[key]);
+    if (n !== null && n !== apply.dailyCaps.value[key]) caps[key] = n;
+  }
+  if (Object.keys(caps).length > 0) patch.applyDailyCaps = caps;
+  const companyCap = parseWhole(form.applyCompanyCap);
+  if (companyCap !== null && companyCap !== apply.companyCap.value) patch.applyCompanyCap = companyCap;
+  if (form.applyWindowStart !== apply.window.value.start || form.applyWindowEnd !== apply.window.value.end) {
+    patch.applyWindow = { start: form.applyWindowStart, end: form.applyWindowEnd };
+  }
+  if (form.applyResumeMode !== apply.resumeMode.value) patch.applyResumeMode = form.applyResumeMode;
+  if (form.applyAiAnswers !== apply.aiAnswers.value) patch.applyAiAnswers = form.applyAiAnswers;
+  const companies = collectBlockItems(form.applyBlockedCompanies, form.applyBlockedCompaniesDraft);
+  const terms = collectBlockItems(form.applyBlockedTerms, form.applyBlockedTermsDraft);
+  if (!sameList(companies, apply.blockedCompanies.value)) patch.applyBlockedCompanies = companies;
+  if (!sameList(terms, apply.blockedTerms.value)) patch.applyBlockedTerms = terms;
 }
 
 export const isDirty = (form: SettingsForm, dto: SettingsDto): boolean => Object.keys(toSettingsPatch(form, dto)).length > 0;

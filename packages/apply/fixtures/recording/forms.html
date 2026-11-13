@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="pt-BR">
+<head><meta charset="utf-8"><title>Formularios de teste</title></head>
+<body>
+<main>
+  <div id="host"></div>
+  <form id="solo" method="post" action="https://form.test/enviar"><input id="campo" name="campo" type="text"></form>
+  <form id="outro" method="post" action="https://form.test/enviar"><input name="x" type="text"><button type="submit" id="salvar">Salvar</button></form>
+  <button type="button" id="gravar">Gravar por fetch</button>
+</main>
+<script>
+  window.formEnviado = false;
+  for (const id of ['solo', 'outro']) {
+    document.getElementById(id).addEventListener('submit', function () { window.formEnviado = true; });
+  }
+  document.getElementById('gravar').addEventListener('click', function () {
+    fetch('https://form.test/enviar', { method: 'POST' }).then(
+      function () { window.fetchResult = 'sent'; },
+      function () { window.fetchResult = 'blocked'; }
+    );
+  });
+  var root = document.getElementById('host').attachShadow({ mode: 'open' });
+  root.innerHTML = '<button type="button" id="sombra">Enviar candidatura</button>';
+  root.getElementById('sombra').addEventListener('click', function () { window.enviado = true; });
+</script>
+</body>
+</html>

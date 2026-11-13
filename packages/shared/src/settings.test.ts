@@ -54,3 +54,46 @@ describe('ApiKeyInputSchema', () => {
     expect(ApiKeyInputSchema.safeParse({ key: 'sk-test-abcdef123456', provider: 'openai' }).success).toBe(false);
   });
 });
+
+describe('apply settings', () => {
+  it('validates the apply settings', () => {
+    expect(SettingsPatchSchema.safeParse({ applyMinScore: 70 }).success).toBe(true);
+    expect(SettingsPatchSchema.safeParse({ applyMinScore: 101 }).success).toBe(false);
+    expect(SettingsPatchSchema.safeParse({ applyWindow: { start: '21:00', end: '08:00' } }).success).toBe(false);
+    expect(SettingsPatchSchema.safeParse({ applySiteModes: { linkedin: 'real' } }).success).toBe(true);
+    expect(SettingsPatchSchema.safeParse({ applySiteModes: { workday: 'real' } }).success).toBe(false);
+  });
+
+  it('bounds the caps, the company cap, the time format and the block lists', () => {
+    expect(ok({ applyMinScore: 70.5 })).toBe(false);
+    expect(ok({ applyDailyCaps: { linkedin: 201 } })).toBe(false);
+    expect(ok({ applyDailyCaps: { linkedin: 200, total: 0 } })).toBe(true);
+    expect(ok({ applyCompanyCap: 0 })).toBe(false);
+    expect(ok({ applyCompanyCap: 21 })).toBe(false);
+    expect(ok({ applyWindow: { start: '8:00', end: '21:00' } })).toBe(false);
+    expect(ok({ applyWindow: { start: '08:00', end: '24:00' } })).toBe(false);
+    expect(ok({ applyWindow: { start: '08:00', end: '08:00' } })).toBe(false);
+    expect(ok({ applyBlockedTerms: Array.from({ length: 100 }, (_, i) => `t${i}`) })).toBe(true);
+    expect(ok({ applyBlockedTerms: Array.from({ length: 101 }, (_, i) => `t${i}`) })).toBe(false);
+    expect(ok({ applyBlockedCompanies: ['x'.repeat(81)] })).toBe(false);
+    expect(ok({ applyBlockedCompanies: [] })).toBe(true);
+    expect(ok({ applyResumeMode: 'base', applyAiAnswers: 'off', applyEnabled: null })).toBe(true);
+    expect(ok({ applyResumeMode: 'other' })).toBe(false);
+  });
+
+  it('takes one of three modes for answers proposed by the model, and no longer the old switch', () => {
+    for (const mode of ['off', 'review', 'auto']) expect(ok({ applyAiAnswers: mode })).toBe(true);
+    expect(ok({ applyAiAnswers: null })).toBe(true);
+    expect(ok({ applyAiAnswers: true })).toBe(false);
+    expect(ok({ applyAiAnswers: 'always' })).toBe(false);
+    expect(ok({ applyOpenAnswers: false })).toBe(false);
+  });
+});
+
+describe('block lists', () => {
+  it('de-duplicates case-insensitively, keeping the first spelling', () => {
+    const parsed = SettingsPatchSchema.parse({ applyBlockedCompanies: ['Acme', 'acme', 'ACME', 'Beta'], applyBlockedTerms: ['Estágio', 'estágio'] });
+    expect(parsed.applyBlockedCompanies).toEqual(['Acme', 'Beta']);
+    expect(parsed.applyBlockedTerms).toEqual(['Estágio']);
+  });
+});

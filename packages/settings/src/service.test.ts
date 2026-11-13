@@ -35,6 +35,7 @@ describe('precedence: screen > environment > code default', () => {
       tier2Auto: { value: false, source: 'default' },
       greenhouseBoards: { value: ['gitlab', 'stripe', 'cloudflare', 'figma'], source: 'default' },
       leverCompanies: { value: ['palantir', 'spotify'], source: 'default' },
+      apply: expect.any(Object),
       budgetTimeZone: 'America/Sao_Paulo',
     });
   });
@@ -241,5 +242,83 @@ describe('dto', () => {
     expect(dto.general).toEqual({ nextRunAt: 123 });
     expect(JSON.stringify(dto)).not.toMatch(/sk-ant-env-7777|7777/);
     expect((await service({ AI_ALLOW_FAKE: '1' }).dto(0)).ai.providers).toContain('fake');
+  });
+});
+
+describe('automatic application settings', () => {
+  it('starts with automatic applications off and every site in rehearsal', async () => {
+    expect(await service().applyConfig()).toMatchObject({
+      enabled: false, minScore: 70, resumeMode: 'tailored', aiAnswers: 'review', companyCap: 2,
+      siteModes: { linkedin: 'dry_run', greenhouse: 'dry_run', lever: 'dry_run', fake: 'dry_run' },
+      dailyCaps: { linkedin: 10, greenhouse: 15, lever: 15, total: 30, linkedinViews: 30 },
+      window: { start: '08:00', end: '21:00' }, blockedCompanies: [], blockedTerms: [],
+      timeZone: 'America/Sao_Paulo',
+    });
+  });
+
+  it('applies a saved value at once and merges partial site modes with the defaults', async () => {
+    const svc = service();
+    await svc.applyConfig();
+    await svc.update({ applyEnabled: true, applySiteModes: { linkedin: 'real' }, applyDailyCaps: { total: 5 } });
+    expect(await svc.applyConfig()).toMatchObject({
+      enabled: true, siteModes: { linkedin: 'real', greenhouse: 'dry_run' }, dailyCaps: { total: 5, linkedin: 10 },
+    });
+  });
+
+  it('goes back to the default when a key is cleared', async () => {
+    const svc = service();
+    await svc.update({ applyMinScore: 90, applyBlockedTerms: ['estágio'] });
+    expect((await svc.applyConfig()).minScore).toBe(90);
+    await svc.update({ applyMinScore: null });
+    expect((await svc.applyConfig()).minScore).toBe(70);
+    expect((await svc.applyConfig()).blockedTerms).toEqual(['estágio']);
+  });
+
+  it('asks for the owner approval of model answers by default, and keeps the mode the owner saves', async () => {
+    const svc = service();
+    expect((await svc.applyConfig()).aiAnswers).toBe('review');
+    expect((await svc.dto(0)).apply.aiAnswers).toEqual({ value: 'review', source: 'default' });
+    await svc.update({ applyAiAnswers: 'off' });
+    expect((await svc.applyConfig()).aiAnswers).toBe('off');
+    expect((await svc.dto(0)).apply.aiAnswers).toEqual({ value: 'off', source: 'ui' });
+    await svc.update({ applyAiAnswers: 'auto' });
+    expect((await svc.applyConfig()).aiAnswers).toBe('auto');
+    await svc.update({ applyAiAnswers: null });
+    expect((await svc.applyConfig()).aiAnswers).toBe('review');
+  });
+
+  it('ignores a row left by the old boolean switch', async () => {
+    await db.insert(settings).values({ key: 'applyOpenAnswers', value: true, updatedAt: 0 });
+    const config = await service().applyConfig();
+    expect(config.aiAnswers).toBe('review');
+    expect(config).not.toHaveProperty('openAnswers');
+  });
+
+  it('uses the budget time zone and reports the apply values in the DTO', async () => {
+    const svc = service({ AI_BUDGET_TZ: 'UTC' });
+    expect((await svc.applyConfig()).timeZone).toBe('UTC');
+    const dto = await svc.dto(0);
+    expect(dto.apply.enabled).toEqual({ value: false, source: 'default' });
+    expect(dto.apply.minScore).toEqual({ value: 70, source: 'default' });
+  });
+});
+
+describe('partial apply settings merge with what is stored', () => {
+  it('keeps earlier site modes when another site is saved, and null returns all to default', async () => {
+    const svc = service();
+    await svc.update({ applySiteModes: { linkedin: 'real' } });
+    await svc.update({ applySiteModes: { greenhouse: 'real' } });
+    expect((await svc.applyConfig()).siteModes).toEqual({ linkedin: 'real', greenhouse: 'real', lever: 'dry_run', fake: 'dry_run' });
+    await svc.update({ applySiteModes: null });
+    expect((await svc.applyConfig()).siteModes).toEqual({ linkedin: 'dry_run', greenhouse: 'dry_run', lever: 'dry_run', fake: 'dry_run' });
+  });
+
+  it('keeps a tightened cap when another cap is saved, and null returns all to default', async () => {
+    const svc = service();
+    await svc.update({ applyDailyCaps: { linkedin: 5 } });
+    await svc.update({ applyDailyCaps: { greenhouse: 20 } });
+    expect((await svc.applyConfig()).dailyCaps).toEqual({ linkedin: 5, greenhouse: 20, lever: 15, fake: 15, total: 30, linkedinViews: 30 });
+    await svc.update({ applyDailyCaps: null });
+    expect((await svc.applyConfig()).dailyCaps).toEqual({ linkedin: 10, greenhouse: 15, lever: 15, fake: 15, total: 30, linkedinViews: 30 });
   });
 });
