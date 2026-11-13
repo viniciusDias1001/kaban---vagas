@@ -31,7 +31,9 @@ export function greenhouseTarget(job: ApplyJob): ApplyTarget | null {
   if (job.source !== 'greenhouse' || !url.searchParams.get('gh_jid')) return null;
   const cut = job.externalId.lastIndexOf('-');
   if (cut <= 0) return null;
-  return target(job.externalId.slice(0, cut), job.externalId.slice(cut + 1));
+  const jobId = job.externalId.slice(cut + 1);
+  if (jobId !== url.searchParams.get('gh_jid')) return null;
+  return target(job.externalId.slice(0, cut), jobId);
 }
 
 interface ApiField { name?: string; type?: string; values?: Array<{ label?: string }> }
@@ -126,9 +128,13 @@ function allFieldNames(api: unknown): Set<string> {
 /** O controle de uma pergunta: o elemento de `id` igual ao `name`; senão, o rótulo acessível; no arquivo, o grupo. */
 async function findControl(page: Page, question: Question): Promise<Locator | null> {
   const byId = page.locator(`[id=${JSON.stringify(question.id)}]`);
-  if (await byId.count()) return byId.first();
+  const ids = await byId.count();
+  if (ids > 1) throw new SiteLayoutError(`mais de um controle com o id "${question.id}" na página`);
+  if (ids === 1) return byId.first();
   const byLabel = page.getByLabel(question.label, { exact: true });
-  if (await byLabel.count()) return byLabel.first();
+  const labelled = await byLabel.count();
+  if (labelled > 1) throw new SiteLayoutError(`mais de um controle com o rótulo "${question.label}": não dá para escolher`);
+  if (labelled === 1) return byLabel.first();
   if (question.kind === 'file') {
     const group = page.locator(`[aria-labelledby=${JSON.stringify(`upload-label-${question.id}`)}]`);
     if (await group.count()) return group.first();
@@ -157,20 +163,27 @@ function consentBox(page: Page, id: string): Locator {
 
 const squash = (text: string): string => text.replace(/\s+/g, ' ').trim();
 
-/** Abre a lista, espera as opções e devolve o texto de cada uma. */
+function listContainer(control: Locator): Locator {
+  return control.locator('xpath=ancestor::div[contains(@class,"select__container")][1]');
+}
+
+/** As opções da lista aberta por este controle: a `listbox` de `aria-controls`/`aria-owns`; senão, a do contêiner dele. */
+async function optionsOf(page: Page, control: Locator): Promise<Locator> {
+  const owned = (await control.getAttribute('aria-controls')) ?? (await control.getAttribute('aria-owns'));
+  if (owned) return page.locator(`[id=${JSON.stringify(owned)}]`).getByRole('option');
+  return listContainer(control).getByRole('option');
+}
+
+/** Abre a lista deste controle, espera as opções e devolve o texto de cada uma. */
 async function openList(page: Page, control: Locator, waitMs: number): Promise<{ options: Locator; texts: string[] }> {
-  const options = page.getByRole('option');
-  if (!(await options.count())) await control.click({ timeout: waitMs });
+  if ((await control.getAttribute('aria-expanded')) !== 'true') await control.click({ timeout: waitMs });
+  const options = await optionsOf(page, control);
   try {
     await options.first().waitFor({ state: 'visible', timeout: waitMs });
   } catch {
     throw new SiteLayoutError('a lista de opções não abriu');
   }
   return { options, texts: (await options.allTextContents()).map(squash) };
-}
-
-function listContainer(control: Locator): Locator {
-  return control.locator('xpath=ancestor::div[contains(@class,"select__container")][1]');
 }
 
 /** O texto que a lista da pergunta mostra como escolhido. */
@@ -195,7 +208,7 @@ async function pickOne(page: Page, control: Locator, wanted: string, waitMs: num
 /** Campo de cidade com sugestões: digita, espera a lista por até 3 s e clica na que é igual ao valor ou começa por ele. */
 async function typeWithSuggestions(page: Page, control: Locator, value: string): Promise<void> {
   await control.fill(value);
-  const options = page.getByRole('option');
+  const options = await optionsOf(page, control);
   try {
     await options.first().waitFor({ state: 'visible', timeout: 3_000 });
   } catch {
@@ -208,15 +221,17 @@ async function typeWithSuggestions(page: Page, control: Locator, value: string):
   if (index >= 0) await options.nth(index).click();
 }
 
+/** Esvazia a lista; se alguma escolha resistir, é erro: nunca escolher por cima de uma seleção que ficou. */
 async function clearChoice(control: Locator): Promise<void> {
-  if (!(await shownChoice(control)).length) return;
+  const chosen = (await shownChoice(control)).length;
+  if (!chosen) return;
   const clear = listContainer(control).locator('.select__clear-indicator');
-  if (await clear.count()) {
-    await clear.first().click();
-    return;
+  if (await clear.count()) await clear.first().click();
+  else {
+    await control.focus();
+    for (let i = 0; i < chosen; i++) await control.press('Backspace');
   }
-  await control.focus();
-  await control.press('Backspace');
+  if ((await shownChoice(control)).length) throw new SiteLayoutError('não foi possível limpar a escolha anterior da lista');
 }
 
 async function fillOne(page: Page, question: Question, control: Locator, answer: ResolvedAnswer, resumePath: string, waitMs: number): Promise<void> {
@@ -235,6 +250,7 @@ async function fillOne(page: Page, question: Question, control: Locator, answer:
     case 'multiselect': {
       const wanted = empty ? [] : Array.isArray(value) ? value.map(String) : [String(value)];
       if (!wanted.length) return clearChoice(control);
+      await clearChoice(control);
       for (const option of wanted) await pickOne(page, control, option, waitMs);
       return;
     }
@@ -245,7 +261,10 @@ async function fillOne(page: Page, question: Question, control: Locator, answer:
   }
 }
 
+/** O texto de confirmação, só com o formulário fora da página: a mesma frase na descrição da vaga não vale. */
 async function confirmationText(page: Page): Promise<string | null> {
+  const button = submitButton(page);
+  if ((await button.count()) > 0 && (await button.first().isVisible())) return null;
   const thanks = page.getByText(THANKS).first();
   if ((await thanks.count()) && (await thanks.isVisible())) return squash((await thanks.textContent()) ?? '');
   if (!/confirmation/i.test(new URL(page.url()).pathname)) return null;
@@ -301,6 +320,7 @@ export function createGreenhouseSite(deps: Partial<GreenhouseDeps> = {}): ApplyS
       try {
         await submitButton(page).waitFor({ state: 'visible', timeout: stepMs });
       } catch {
+        if (await gate(page)) return { kind: 'form' }; // portão vence layout
         throw new SiteLayoutError('o botão "Submit application" não apareceu na página da Greenhouse');
       }
       // O botão vem no HTML do servidor; as listas só respondem depois que a página foi hidratada.
@@ -334,6 +354,9 @@ export function createGreenhouseSite(deps: Partial<GreenhouseDeps> = {}): ApplyS
         }
         const control = await findControl(page, question);
         if (control) await fillOne(page, question, control, answer, files.resumePath, stepMs);
+        else if (answer.value !== null && answer.value !== '') {
+          throw new SiteLayoutError(`a resposta para "${question.label}" não tem controle na página`);
+        }
       }
     },
 
@@ -353,6 +376,7 @@ export function createGreenhouseSite(deps: Partial<GreenhouseDeps> = {}): ApplyS
       const deadline = Date.now() + submitMs;
       while (Date.now() < deadline) {
         try {
+          if (await gate(page)) throw new SubmitRejectedError('apareceu um portão depois do clique no envio');
           const confirmation = await confirmationText(page);
           const onScreen = await formOnScreen(page);
           if (confirmation && !onScreen) return { confirmation };
@@ -360,7 +384,7 @@ export function createGreenhouseSite(deps: Partial<GreenhouseDeps> = {}): ApplyS
             throw new SiteLayoutError('a Greenhouse mostrou erro em um campo do formulário');
           }
         } catch (error) {
-          if (error instanceof SiteLayoutError) throw error;
+          if (error instanceof SiteLayoutError || error instanceof SubmitRejectedError) throw error;
           // A página está trocando de documento; tenta de novo no próximo ciclo.
         }
         await sleep(150);

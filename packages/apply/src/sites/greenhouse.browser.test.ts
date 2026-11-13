@@ -3,7 +3,7 @@ import { basename } from 'node:path';
 import type { Page } from 'playwright';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Question } from '@kv/shared';
-import { SiteLayoutError } from '../types';
+import { SiteLayoutError, SubmitRejectedError } from '../types';
 import { openFixture } from '../testing';
 import { ans, fakeResumePath, fixturePath, inject, job, linkSteps, replayRoutes, watchClicks, watchWrites } from './fixtures';
 import { createGreenhouseSite, greenhouseTarget, mapGreenhouseQuestions } from './greenhouse';
@@ -165,6 +165,77 @@ describe.skipIf(!recorded)('greenhouse site (needs the recorded form: run pnpm a
     expect(writes.length).toBe(before);
     await page.goto(formUrl);
     expect(await page.evaluate(() => localStorage.length)).toBe(0);
+  });
+
+  it('a challenge that renders after load beats layout in open', async () => {
+    const lateSite = createGreenhouseSite({ fetchJob: async () => api, stepMs: 1_500 });
+    // O botão de envio nunca aparece e um desafio entra na tela depois do carregamento.
+    await page.route(formUrl, (route) => route.fulfill({ contentType: 'text/html', body: '<html><body><main></main></body></html>' }));
+    await page.addInitScript((html) => { setTimeout(() => document.body.insertAdjacentHTML('afterbegin', html), 300); }, CHALLENGE);
+    expect(await lateSite.open(page, target)).toEqual({ kind: 'form' });
+    expect(await lateSite.humanGate(page)).toBe('captcha');
+  });
+
+  it('never drops an answer it cannot place: a value for a question without control is a layout error', async () => {
+    await site.open(page, target);
+    const missing = mapped.find((q) => !q.required && q.kind === 'select' && q.id === 'race')!;
+    await expect(site.fillStep(page, [ans(missing.id, missing.options[0])], files)).rejects.toBeInstanceOf(SiteLayoutError);
+    await expect(site.fillStep(page, [ans(missing.id, null)], files)).resolves.toBeUndefined();
+  });
+
+  it('does not guess between two controls with the same label', async () => {
+    const extra = { label: 'Dup', required: false, fields: [{ name: 'dup_q', type: 'input_text', values: [] }] };
+    const dup = createGreenhouseSite({ fetchJob: async () => ({ ...api, questions: [...api.questions, extra] }), stepMs: 5_000 });
+    await dup.open(page, target);
+    await inject(page, '<label>Dup <input></label><label>Dup <input></label>');
+    await expect(dup.fillStep(page, [ans('dup_q', 'x')], files)).rejects.toBeInstanceOf(SiteLayoutError);
+  });
+
+  it('surfaces a challenge that appears after the click as a rejection, not after the whole wait', async () => {
+    const patient = createGreenhouseSite({ fetchJob: async () => api, stepMs: 5_000, submitMs: 20_000 });
+    await patient.open(page, target);
+    await page.evaluate((html) => { document.addEventListener('click', () => document.body.insertAdjacentHTML('afterbegin', html), true); }, CHALLENGE);
+    const started = Date.now();
+    await expect(patient.submit(page)).rejects.toBeInstanceOf(SubmitRejectedError);
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  it('does not take the phrase in the job description for a confirmation while the form is on the page', async () => {
+    const clicks = await watchClicks(page);
+    await site.open(page, target);
+    await inject(page, '<p>Thank you for applying to our team, we read every application.</p>');
+    await expect(site.submit(page)).rejects.toBeInstanceOf(Error);
+    await page.waitForTimeout(300);
+    expect(clicks.filter((c) => /submit application/i.test(c))).toHaveLength(1);
+  });
+
+  it('clears earlier selections before picking in a multiselect', async () => {
+    const extra = { label: 'Langs', required: false, fields: [{ name: 'ms', type: 'multi_value_multi_select', values: ['A', 'B', 'C'].map((label, value) => ({ label, value })) }] };
+    const multiSite = createGreenhouseSite({ fetchJob: async () => ({ ...api, questions: [...api.questions, extra] }), stepMs: 5_000 });
+    await multiSite.open(page, target);
+    // Imita o componente de lista do formulário (mesmas classes e papéis): o menu abre dentro do contêiner.
+    await page.evaluate(() => {
+      const box = document.createElement('div');
+      box.className = 'select__container';
+      box.innerHTML = '<div class="select__multi-value__label">C</div><button type="button" class="select__clear-indicator">x</button><input id="ms" role="combobox" aria-expanded="false"><ul role="listbox" hidden></ul>';
+      document.body.prepend(box);
+      const input = box.querySelector('input')!;
+      const menu = box.querySelector('ul')!;
+      box.querySelector('button')!.addEventListener('click', () => box.querySelectorAll('.select__multi-value__label').forEach((e) => e.remove()));
+      input.addEventListener('click', () => {
+        menu.hidden = false;
+        input.setAttribute('aria-expanded', 'true');
+        menu.innerHTML = ['A', 'B', 'C'].map((o) => '<li role="option">' + o + '</li>').join('');
+      });
+      menu.addEventListener('click', (e) => {
+        const label = document.createElement('div');
+        label.className = 'select__multi-value__label';
+        label.textContent = (e.target as HTMLElement).textContent;
+        box.prepend(label);
+      });
+    });
+    await multiSite.fillStep(page, [ans('ms', ['A', 'B'])], files);
+    expect(await page.locator('.select__multi-value__label').allTextContents()).toEqual(['B', 'A']);
   });
 
   it('answers logged_in without navigating', async () => {

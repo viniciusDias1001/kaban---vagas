@@ -27,7 +27,38 @@ describe('greenhouseTarget', () => {
   });
 });
 
+describe('greenhouseTarget with gh_jid', () => {
+  it('does not recognise a gh_jid that differs from the id in the externalId', () => {
+    expect(greenhouseTarget(job({ url: 'https://careers.acme.com/open?gh_jid=999', externalId: 'acme-corp-4012345' }))).toBeNull();
+  });
+});
+
 describe('mapGreenhouseQuestions', () => {
+  // Nenhuma vaga dos boards padrão (stripe, cloudflare, figma, gitlab; 16 vagas consultadas) tem demographic_questions
+  // não nulo, então estes objetos são SINTÉTICOS, escritos à mão: valem o ramo defensivo, não a forma real.
+  const list = (name: string, labels: string[]) => ({ name, type: 'multi_value_single_select', values: labels.map((label, value) => ({ label, value })) });
+  const syntheticDemographic = (questions: unknown[]) => ({ questions: [], demographic_questions: { header: 'Sintético', questions } });
+
+  it('maps a synthetic demographic block with the same field shape, keeping the optional flag', () => {
+    const api = syntheticDemographic([
+      { label: 'Gender identity', required: false, fields: [list('demo_gender', ['Woman', 'Man'])] },
+      { label: 'Age range', required: true, fields: [list('demo_age', ['18-24', '25-34'])] },
+    ]);
+    expect(mapGreenhouseQuestions(api).map((q) => [q.id, q.kind, q.required, q.options])).toEqual([
+      ['demo_gender', 'select', false, ['Woman', 'Man']],
+      ['demo_age', 'select', true, ['18-24', '25-34']],
+    ]);
+  });
+
+  it('skips an optional demographic question of unknown shape and throws on a required one', () => {
+    const odd = { id: 1, label: 'Ethnicity', type: 'multi_value_single_select', answer_options: [{ id: 1, label: 'x' }] };
+    expect(mapGreenhouseQuestions(syntheticDemographic([{ ...odd, required: false }]))).toEqual([]);
+    expect(() => mapGreenhouseQuestions(syntheticDemographic([{ ...odd, required: true }]))).toThrow(SiteLayoutError);
+  });
+  it('tolerates a null demographic block', () => {
+    expect(mapGreenhouseQuestions({ questions: [], demographic_questions: null })).toEqual([]);
+  });
+
   it('maps field types, options and the optional demographic block', () => {
     const list = (name: string, type: string, labels: string[]) => ({ name, type, values: labels.map((label, value) => ({ label, value })) });
     const api = {
