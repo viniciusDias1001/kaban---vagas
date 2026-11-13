@@ -116,9 +116,12 @@ export function blocksOf(content: ResumeContent): Block[] {
         section.items.forEach((item, i) => {
           // Sem cargo ou sem período, o que vem depois herda a distância do que faltou.
           let gap: number = i === 0 ? GEOMETRY.sectionToFirst : GEOMETRY.experiences;
-          const role = add({ segments: [{ text: item.role, style: 'role' }], gapBefore: gap, lineGap: wrapped('role'), x: left, keepWithNext: true });
+          // O cargo fica com o período, e o período com a primeira realização; um item sem realizações termina
+          // num bloco comum, para que a sequência de itens assim não vire um bloco só que pula de página.
+          const hasAchievements = item.achievements.some((text) => text.trim());
+          const role = add({ segments: [{ text: item.role, style: 'role' }], gapBefore: gap, lineGap: wrapped('role'), x: left, ...(hasAchievements || item.meta.trim() ? { keepWithNext: true as const } : {}) });
           if (role) gap = GEOMETRY.roleToMeta;
-          const meta = add({ segments: [{ text: item.meta, style: 'meta' }], gapBefore: gap, lineGap: wrapped('meta'), x: left, keepWithNext: true });
+          const meta = add({ segments: [{ text: item.meta, style: 'meta' }], gapBefore: gap, lineGap: wrapped('meta'), x: left, ...(hasAchievements ? { keepWithNext: true as const } : {}) });
           if (role || meta) gap = GEOMETRY.metaToAchievement;
           for (const text of item.achievements) {
             if (add({ segments: [{ text, style: 'body' }], gapBefore: gap, lineGap: GEOMETRY.achievementLine, x: GEOMETRY.achievementX, bullet: true })) {

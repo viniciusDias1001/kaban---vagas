@@ -68,9 +68,27 @@ describe('pdf layout', () => {
         expect(textOf(page.footer)).toBe(`Maria Exemplo da Silva • ${i + 1}`);
         expect(page.footer.y).toBeCloseTo(PAGE.height - 38, 1);
         if (i > 0) expect(page.lines[0].y).toBeCloseTo(PAGE.margin + page.lines[0].runs[0].size, 1);
-        if (i < pages.length - 1) expect(page.lines.at(-1)!.runs[0].size, `página ${i + 1}, ${extra} linhas a mais`).toBe(8.5); // corpo: nunca título, cargo ou período
+        if (i < pages.length - 1) expect([8.5, 8], `página ${i + 1}, ${extra} linhas a mais`).toContain(page.lines.at(-1)!.runs[0].size); // corpo, ou o período que fecha um item sem realizações: nunca título nem cargo
       });
       expect(pages.flatMap((p) => p.lines).filter((l) => textOf(l) === 'Realização número 20')).toHaveLength(4);
+    }
+  });
+  it('does not chain experiences without achievements into one block that leaves a large blank at a page foot', () => {
+    const main = { ...SAMPLE_TAILORED.experiences[0], achievements: Array.from({ length: 22 }, (_, i) => ({ sourceId: 'ach_ccccccc1', text: `Realização número ${i + 1}` })) };
+    const bare = (i: number) => ({ ...SAMPLE_TAILORED.experiences[1], id: `exp_ddddddd${i}`, title: `Monitor ${i}`, section: 'complementar' as const, achievements: [] });
+    const limit = PAGE.height - PAGE.margin;
+    for (let extra = 0; extra < 60; extra++) {
+      const summary = Array.from({ length: extra + 1 }, () => 'linha').join('\n');
+      const pages = pagesOf({ ...SAMPLE_TAILORED, summary, experiences: [main, ...[1, 2, 3, 4, 5].map(bare)] }, narrow);
+      expect(pages.length).toBeGreaterThan(1);
+      pages.forEach((page, i) => {
+        const last = page.lines.at(-1)!;
+        expect(Math.max(...page.lines.map((l) => l.y))).toBeLessThanOrEqual(limit);
+        if (i === pages.length - 1) return;
+        const where = `página ${i + 1}, ${extra} linhas a mais`;
+        expect([8.5, 8], where).toContain(last.runs[0].size); // nem título de seção nem cargo no pé
+        expect(limit - last.y, where).toBeLessThan(80);
+      });
     }
   });
 });
