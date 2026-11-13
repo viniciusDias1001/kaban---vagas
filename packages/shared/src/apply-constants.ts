@@ -138,6 +138,8 @@ export interface ApplicationDto {
   resumeLang: 'pt-BR' | 'en' | null; resumeFileName: string | null; hasResume: boolean;
   answers: AnswerRecord[]; pendingQuestions: PendingQuestion[]; confirmation: string | null; shots: ShotKind[];
   attempts: number; createdAt: number; startedAt: number | null; submittedAt: number | null; finishedAt: number | null;
+  /** O dono pediu o cancelamento de uma candidatura em andamento; vale no próximo ponto seguro. */
+  cancelRequested: boolean;
   events: ApplicationEventDto[];
 }
 /** Por que "Aplicar com IA" não pode aparecer para uma vaga (a primeira checagem da rota que falha). */

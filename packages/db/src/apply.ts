@@ -210,7 +210,7 @@ export function toApplicationDto(row: ApplicationRow, events: ApplicationEventDt
     resumeFileName: row.resumeFileName, hasResume: row.resumePdf !== null, answers: row.answers,
     pendingQuestions: row.pendingQuestions, confirmation: row.confirmation,
     shots: Object.keys(row.shots) as ApplicationDto['shots'], attempts: row.attempts, createdAt: row.createdAt,
-    startedAt: row.startedAt, submittedAt: row.submittedAt, finishedAt: row.finishedAt, events,
+    startedAt: row.startedAt, submittedAt: row.submittedAt, finishedAt: row.finishedAt, cancelRequested: row.cancelRequested, events,
   };
 }
 

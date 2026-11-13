@@ -149,7 +149,8 @@ describe('queue reads', () => {
     expect(await listApplications(db, { status: 'needs_human' })).toHaveLength(1);
     const row = (await applicationForJob(db, b.job.id))!;
     const dto = toApplicationDto(row, await listApplicationEvents(db, b.id));
-    expect(dto).toMatchObject({ id: b.id, hasResume: true, resumeFileName: 'cv.pdf' });
+    expect(dto).toMatchObject({ id: b.id, hasResume: true, resumeFileName: 'cv.pdf', cancelRequested: false });
+    expect(toApplicationDto({ ...row, cancelRequested: true }, []).cancelRequested).toBe(true);
     expect(JSON.stringify(dto)).not.toContain('resumePdf');
     expect(dto.events).toHaveLength(2);
   });
