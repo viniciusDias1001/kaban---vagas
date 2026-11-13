@@ -11,6 +11,8 @@ import { resolveAllowedHosts } from './config';
 import { aiRoutes } from './routes/ai';
 import { applicationRoutes } from './routes/applications';
 import { applyRoutes } from './routes/apply';
+import { emailRoutes } from './routes/email';
+import { emailAccountRoutes } from './routes/email-account';
 import { jobAiRoutes } from './routes/job-ai';
 import { settingsRoutes } from './routes/settings';
 import { tailoredRoutes } from './routes/tailored';
@@ -181,6 +183,8 @@ export function buildApp(db: Db, opts: AppOptions = {}) {
     settingsRoutes(scope, db, ctx);
     applyRoutes(scope, db, ctx);
     applicationRoutes(scope, db, ctx);
+    emailAccountRoutes(scope, db, ctx);
+    emailRoutes(scope, db, ctx);
   };
   app.register(routes);
   app.register(routes, { prefix: API_PREFIX });
