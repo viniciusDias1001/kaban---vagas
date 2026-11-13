@@ -56,7 +56,9 @@ export async function classifyNext(deps: MailWorkDeps): Promise<'done' | 'none' 
   } catch (e) {
     if (e instanceof MailBudgetError) return waitForBudget(db, now());
     if (!(e instanceof AiError)) throw e;
-    if (!isContentFailure(e)) {
+    // `other` (um 400 do provedor, por exemplo) pode vir desta mensagem só: conta como falha de conteúdo, para uma
+    // mensagem que sempre provoca o erro não travar a classificação para sempre.
+    if (!isContentFailure(e) && e.kind !== 'other') {
       deps.log(`[mail] a IA não está disponível agora; a classificação fica para a próxima rodada: ${e.message}`);
       return 'off';
     }

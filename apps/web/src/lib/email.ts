@@ -1,6 +1,7 @@
 import {
-  COLUMN_LABELS, KNOWN_FACT_LABELS, type AlertDto, type AlertKind, type EmailKind, type JobMailMarks, type MailMessageDto, type ReplyState,
+  COLUMN_LABELS, KNOWN_FACT_LABELS, type AlertDto, type AlertKind, type EmailKind, type JobMailMarks, type ReplyState,
 } from '@kv/shared/client';
+import { DRAFT_PLACEHOLDER, EMAIL_KIND_LABELS, type JobEmailsDto, type MailMessageDto, type MailReplyDto } from '@kv/shared/client';
 
 /** Funções puras do e-mail (sem React): textos dos alertas, rótulos e a conferência da senha de app. */
 
@@ -119,4 +120,70 @@ export function mailActions(m: MailMessageDto): string[] {
   else if (m.alerted && m.replyState === null) out.push('alertou você');
   if (m.corrected) out.push('classificação corrigida');
   return out;
+}
+
+/** Um item da conversa da vaga: o e-mail e, conforme o caso, a resposta mostrada sob ele ou a resposta que ele é. */
+export interface ConversationItem {
+  message: MailMessageDto;
+  /** A resposta preparada para este e-mail recebido, mostrada logo abaixo dele (null quando já aparece como cópia enviada). */
+  reply: MailReplyDto | null;
+  /** Este e-mail de saída é a cópia guardada desta resposta enviada pelo app. */
+  sentReply: MailReplyDto | null;
+  /** O e-mail recebido a que `sentReply` responde (dele vem quem aprovou o envio). */
+  origin: MailMessageDto | null;
+}
+
+/**
+ * A conversa em ordem, cada coisa uma vez só. Ao enviar, o worker guarda a resposta também como e-mail de saída com o
+ * Message-ID dela: a cópia é ligada à resposta só por `outMessageId === messageId`, nunca pelo texto. A resposta com cópia
+ * aparece no lugar da cópia; sem cópia guardada (ainda), sob o e-mail recebido.
+ */
+export function emailConversation({ messages, replies }: JobEmailsDto): ConversationItem[] {
+  const byId = new Map(messages.map((m) => [m.id, m]));
+  const byOutId = new Map(replies.flatMap((r) => (r.outMessageId ? [[r.outMessageId, r] as const] : [])));
+  const copies = new Map<number, MailReplyDto>();
+  for (const m of messages) {
+    const r = m.direction === 'out' ? byOutId.get(m.messageId) : undefined;
+    if (r) copies.set(m.id, r);
+  }
+  const shownAsCopy = new Set([...copies.values()].map((r) => r.id));
+  const below = new Map(replies.filter((r) => !shownAsCopy.has(r.id)).map((r) => [r.messageId, r]));
+  return messages.map((m) => {
+    const sentReply = copies.get(m.id) ?? null;
+    return {
+      message: m,
+      reply: m.direction === 'in' ? (below.get(m.id) ?? null) : null,
+      sentReply,
+      origin: sentReply ? (byId.get(sentReply.messageId) ?? null) : null,
+    };
+  });
+}
+
+/** O e-mail que moveu o card, numa linha do histórico: "E-mail — Reprovação: Sua candidatura na Acme". */
+export function historyMailLine(mail: { kind: EmailKind | null; subject: string }): string {
+  const subject = mail.subject.trim() || '(sem assunto)';
+  return mail.kind ? `E-mail — ${EMAIL_KIND_LABELS[mail.kind]}: ${subject}` : `E-mail — ${subject}`;
+}
+
+/** O que a caixa de um rascunho permite agora: o texto da caixa é julgado contra o texto guardado no servidor. */
+export interface DraftGate {
+  /** Ainda há um trecho `[[...]]` para preencher. */
+  gap: boolean;
+  /** O texto da caixa não é o guardado: falta "Salvar edição". */
+  unsaved: boolean;
+  empty: boolean;
+  /** Só quando a caixa mostra exatamente o texto guardado, sem lacuna: o que se vê é o que sai. */
+  canApprove: boolean;
+  /** Por que "Aprovar e enviar" está desligado, ou null. */
+  hint: string | null;
+}
+
+export function draftGate(stored: string, text: string): DraftGate {
+  const gap = DRAFT_PLACEHOLDER.test(text);
+  const unsaved = text !== stored;
+  const empty = text.trim() === '';
+  const hint = empty
+    ? 'Escreva o texto da resposta.'
+    : gap ? 'Preencha os trechos entre colchetes duplos.' : unsaved ? 'Salve a edição antes de enviar.' : null;
+  return { gap, unsaved, empty, canApprove: !gap && !unsaved && !empty, hint };
 }

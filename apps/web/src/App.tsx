@@ -4,6 +4,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { Suspense, lazy, useCallback, useEffect, useState } from 'react';
 import type { ApplicationFilter } from '@kv/shared/client';
 import { api } from './api';
+import { AlertBell } from './components/AlertBell';
 import { Board } from './components/Board';
 import { Tooltip } from './components/ui/tooltip';
 import { useMediaQuery } from './lib/hooks';
@@ -37,11 +38,16 @@ const VIEWS: { id: View; label: string; icon: typeof Columns3 }[] = [
 /**
  * Abaixo desta largura as sete seções (e o sino) não cabem com o rótulo inteiro: as não ativas mostram só o ícone. O
  * rótulo continua no botão (escondido só da vista), então o nome acessível não muda, e aparece na dica.
- * O mesmo limite está nas classes `max-[1399px]:` dos botões abaixo.
+ * O mesmo limite está nas classes `max-[1240px]:` dos botões abaixo (no Tailwind 4 elas valem para `width < 1240px`).
+ * Medido com o sino: os rótulos inteiros pedem cerca de 1190 px; 1240 deixa folga (em 1366 cabem com 200 px de sobra).
  */
-const COMPACT_NAV = '(max-width: 1399px)';
+const COMPACT_NAV = '(width < 1240px)';
 /** De quanto em quanto tempo o aviso do worker é recalculado numa aba parada. */
 const STALE_CHECK_MS = 60_000;
+/** O bloco "Respostas para candidaturas" de Meu perfil, aberto por um alerta de dado que falta. */
+const ANSWERS_SECTION = '[data-testid="apply-answers-section"]';
+/** Por quanto tempo esperar o bloco aparecer (a página é baixada à parte) antes de desistir de rolar até ele. */
+const ANSWERS_WAIT_MS = 3_000;
 
 export function App() {
   const [view, setView] = useState<View>('quadro');
@@ -50,6 +56,30 @@ export function App() {
   const bottomBar = useBottomBarHeight();
   const compactNav = useMediaQuery(COMPACT_NAV);
   const openSettings = useCallback(() => setView('config'), []);
+  // "Abrir Respostas para candidaturas" (alerta de dado que falta): vai a Meu perfil e rola até o bloco quando ele aparece.
+  const [answersPending, setAnswersPending] = useState(false);
+  const openAnswers = useCallback(() => {
+    setAnswersPending(true);
+    setView('perfil');
+  }, []);
+  useEffect(() => {
+    if (!answersPending || view !== 'perfil') return;
+    const until = Date.now() + ANSWERS_WAIT_MS;
+    let frame = 0;
+    const look = () => {
+      const el = document.querySelector<HTMLElement>(ANSWERS_SECTION);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        setAnswersPending(false);
+      } else if (Date.now() < until) {
+        frame = requestAnimationFrame(look);
+      } else {
+        setAnswersPending(false);
+      }
+    };
+    frame = requestAnimationFrame(look);
+    return () => cancelAnimationFrame(frame);
+  }, [answersPending, view]);
   // A aba Candidaturas abre no filtro pedido (o contador do quadro pede "Precisam de você"); pela navegação, no padrão dela.
   const [applicationsFilter, setApplicationsFilter] = useState<ApplicationFilter | undefined>(undefined);
   const showNeedsHuman = useCallback(() => {
@@ -106,7 +136,7 @@ export function App() {
                   aria-current={active ? 'page' : undefined}
                   className={cn(
                     'relative flex h-8 cursor-pointer items-center gap-1.5 rounded-full px-3.5 text-[13px] font-medium transition-colors duration-150 active:scale-[0.97]',
-                    active ? 'text-ink' : 'text-muted hover:text-ink max-[1399px]:px-2.5',
+                    active ? 'text-ink' : 'text-muted hover:text-ink max-[1240px]:px-2.5',
                   )}
                 >
                   {active && (
@@ -116,8 +146,8 @@ export function App() {
                       className="absolute inset-0 rounded-full bg-accent/18 shadow-[inset_0_1px_0_rgb(255_255_255/0.08)] ring-1 ring-inset ring-accent/35"
                     />
                   )}
-                  <v.icon aria-hidden className={cn('relative transition-colors', active ? 'size-3.5 text-accent' : 'size-3.5 text-faint max-[1399px]:size-4')} />
-                  <span className={cn('relative whitespace-nowrap', !active && 'max-[1399px]:sr-only')}>{v.label}</span>
+                  <v.icon aria-hidden className={cn('relative transition-colors', active ? 'size-3.5 text-accent' : 'size-3.5 text-faint max-[1240px]:size-4')} />
+                  <span className={cn('relative whitespace-nowrap', !active && 'max-[1240px]:sr-only')}>{v.label}</span>
                   {v.id === 'candidaturas' && applyWaiting && (
                     <span data-testid="nav-applications-waiting" className="absolute right-1 top-1 flex size-2">
                       <span aria-hidden className="absolute inset-0 animate-pulse-dot rounded-full bg-warn" />
@@ -130,6 +160,9 @@ export function App() {
               return compactNav && !active ? <Tooltip key={v.id} label={v.label}>{button}</Tooltip> : button;
             })}
           </nav>
+          <div className="ml-auto flex shrink-0 items-center">
+            <AlertBell onOpenJob={setOpenJob} onOpenSettings={openSettings} onOpenAnswers={openAnswers} />
+          </div>
         </div>
       </header>
 

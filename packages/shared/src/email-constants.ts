@@ -66,7 +66,8 @@ export interface MailAccountDto {
   canStore: boolean; secretProblem: string | null; profileEmail: string | null; differsFromProfile: boolean;
 }
 export interface MailMessageDto {
-  id: number; threadKey: string; direction: 'in' | 'out'; fromAddress: string; fromName: string; toAddress: string;
+  /** `messageId` é o Message-ID do e-mail (RFC 5322), o mesmo que `MailReplyDto.outMessageId` da resposta que o app enviou. */
+  id: number; messageId: string; threadKey: string; direction: 'in' | 'out'; fromAddress: string; fromName: string; toAddress: string;
   subject: string; sentAt: number; body: string; kind: EmailKind | null; summary: string | null; lang: EmailLang | null;
   requests: EmailRequest[]; jobId: number | null; company: string | null; jobTitle: string | null;
   linkedBy: 'auto' | 'owner' | null; corrected: boolean; backfill: boolean;
@@ -78,6 +79,8 @@ export interface MailMessageDto {
 export interface MailReplyDto {
   id: number; messageId: number; origin: ReplyOrigin; items: KnownFact[]; toAddress: string; subject: string; body: string;
   attachResume: boolean; state: ReplyState; note: string | null; createdAt: number; sentAt: number | null;
+  /** O Message-ID com que a resposta saiu (ou vai sair); null antes do envio começar. */
+  outMessageId: string | null;
 }
 export interface JobEmailsDto { messages: MailMessageDto[]; replies: MailReplyDto[] }
 export interface MailIgnoredDto { id: number; fromAddress: string; fromName: string; subject: string; sentAt: number; company: string; promoted: boolean }

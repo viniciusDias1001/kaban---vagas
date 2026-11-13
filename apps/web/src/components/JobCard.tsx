@@ -1,11 +1,12 @@
 import { useDraggable, useDroppable } from '@dnd-kit/core';
-import { Bot, FlaskConical, Hand } from 'lucide-react';
+import { Bot, FlaskConical, Hand, Mail, MailCheck } from 'lucide-react';
 import { motion } from 'motion/react';
 import { memo, useCallback, useMemo, type KeyboardEvent } from 'react';
 import type { JobAiListItemDto, JobListItemDto } from '@kv/shared/client';
 import { ageLabel } from '../age';
 import { cardTitle } from '../lib/ai';
 import { cardBadge } from '../lib/apply';
+import { mailBadgeLabel } from '../lib/email';
 import { spring } from '../lib/motion';
 import { cn } from '../lib/utils';
 import { LanguageBadge, ScoreBadge } from './ScoreBadge';
@@ -49,6 +50,31 @@ function ApplyBadge({ job, className }: { job: JobListItemDto; className?: strin
         : <Bot aria-hidden className="size-3" />}
       {label}
     </Badge>
+  );
+}
+
+const MAIL_BADGE_TONE: Record<NonNullable<JobListItemDto['mail']['badge']>, 'accent' | 'ok' | 'warn'> = {
+  entrevista: 'accent', oferta: 'ok', pedido: 'warn',
+};
+
+/** As marcas dos e-mails da vaga: o selo do e-mail novo ("entrevista", "oferta", "pediu informação") e "empresa confirmou". */
+function MailMarks({ job }: { job: JobListItemDto }) {
+  const { badge, confirmed } = job.mail;
+  return (
+    <>
+      {badge && (
+        <Badge tone={MAIL_BADGE_TONE[badge]} data-testid={`card-mail-badge-${job.id}`} className="gap-1">
+          <Mail aria-hidden className="size-3" />
+          <span className="sr-only">E-mail: </span>{mailBadgeLabel(badge)}
+        </Badge>
+      )}
+      {confirmed && (
+        <Badge tone="neutral" data-testid={`card-mail-confirmed-${job.id}`} className="gap-1">
+          <MailCheck aria-hidden className="size-3 text-ok" />
+          empresa confirmou
+        </Badge>
+      )}
+    </>
   );
 }
 
@@ -98,11 +124,17 @@ export function JobCardBody({ job, compact = false, ai }: {
               <Badge key={s} className="max-w-full truncate">{s}</Badge>
             ))}
             <ApplyBadge job={job} />
+            <MailMarks job={job} />
           </div>
           <span className="flex h-5 shrink-0 items-center"><Age postedAt={job.postedAt} /></span>
         </div>
       )}
-      {compact && <ApplyBadge job={job} className="mt-1.5" />}
+      {compact && (cardBadge(job) || job.mail.badge || job.mail.confirmed) && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-1">
+          <ApplyBadge job={job} />
+          <MailMarks job={job} />
+        </div>
+      )}
     </div>
   );
 }
