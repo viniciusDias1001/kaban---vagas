@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import {
-  RESUME_LANGS, itemIdPattern, randomItemId, type ItemKind,
+  EXPERIENCE_SECTIONS, RESUME_LANGS, itemIdPattern, randomItemId, type ItemKind,
 } from './ai-constants';
 import { LIMITS, hasNul } from './constants';
 
@@ -26,9 +26,13 @@ const ExperienceSchema = z.object({
   end: short,
   location: short,
   achievements: z.array(AchievementSchema).max(LIMITS.achievements),
+  /** Ausente em perfil gravado antes do modelo de currículo: vale `principal`. */
+  section: z.enum(EXPERIENCE_SECTIONS).optional(),
+  /** Linha curta sob o cargo no currículo ("Antes: Estagiária"). Ausente = vazio. */
+  note: short.optional(),
 });
 const EducationSchema = z.object({ id: id('education'), institution: short, degree: short, start: short, end: short });
-const SkillSchema = z.object({ id: id('skill'), name: short });
+const SkillSchema = z.object({ id: id('skill'), name: short, /** Rótulo do grupo no currículo; ausente = vazio. */ group: short.optional() });
 const LanguageSchema = z.object({ id: id('language'), name: short, level: short });
 const CertificationSchema = z.object({ id: id('certification'), name: short, issuer: short, date: short });
 const LinkSchema = z.object({
@@ -40,6 +44,8 @@ const LinkSchema = z.object({
 /** O perfil estruturado gravado no banco: a fonte da verdade de tudo que a IA escreve. */
 export const CandidateProfileSchema = z.object({
   contact: ContactSchema,
+  /** Título profissional sob o nome; ausente = vazio. */
+  headline: short.optional(),
   summary: long,
   experiences: list(ExperienceSchema),
   education: list(EducationSchema),

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
   CandidateProfileSchema, ProfileWireSchema, TailoredDraftSchema, Tier1BatchSchema, Tier2OutputSchema, draftOf,
-  itemIdPattern, normalizeProfile, randomItemId, type ItemKind, type ProfileWire, type TailoredResume,
+  itemIdPattern, normalizeProfile, randomItemId, withProfileDefaults, type CandidateProfile, type ItemKind, type ProfileWire, type TailoredResume,
 } from './index';
 import { LIMITS } from './constants';
 
@@ -125,5 +125,30 @@ describe('TailoredDraftSchema', () => {
     expect(TailoredDraftSchema.safeParse(back).success).toBe(true);
     expect(back.experiences[0].achievements[0]).toEqual({ sourceId: 'ach_00000002', text: 'Reduzi o tempo de build em 40%' });
     expect(back.skillIds).toEqual(profile.skills.map((k) => k.id));
+  });
+});
+
+describe('layout fields on the stored profile', () => {
+  /** Como um perfil gravado antes desta mudança. */
+  const legacy: CandidateProfile = {
+    contact: { name: 'Maria Exemplo da Silva', email: 'maria@exemplo.test', phone: '', location: 'São Paulo, SP' }, summary: 'Pessoa fictícia.',
+    experiences: [{ id: 'exp_aaaaaaa1', company: 'Empresa Fictícia Ltda', title: 'Desenvolvedora', start: '2021-03', end: '', location: '', achievements: [] }],
+    education: [], skills: [{ id: 'skill_aaaaaaa1', name: 'React' }], languages: [], certifications: [], links: [],
+  };
+  it('keeps a profile stored before the change valid and stores the four fields', () => {
+    expect(CandidateProfileSchema.safeParse(legacy).success).toBe(true);
+    const full = { ...legacy, headline: 'Desenvolvedora Front-end', skills: [{ ...legacy.skills[0], group: 'Front-end' }],
+      experiences: [{ ...legacy.experiences[0], section: 'complementar', note: 'Antes: Estagiária' }] };
+    expect(CandidateProfileSchema.parse(full)).toEqual(full); // nada é descartado
+    expect(CandidateProfileSchema.safeParse({ ...full, experiences: [{ ...full.experiences[0], section: 'outra' }] }).success).toBe(false);
+  });
+  it('withProfileDefaults fills what is missing, keeps what is there and leaves its input alone', () => {
+    const before = structuredClone(legacy);
+    const filled = withProfileDefaults(legacy);
+    expect(filled).toMatchObject({ headline: '', skills: [{ group: '' }], experiences: [{ section: 'principal', note: '' }] });
+    expect(legacy).toEqual(before);
+    expect(withProfileDefaults({ ...filled, headline: 'Tech Lead' })).toEqual({ ...filled, headline: 'Tech Lead' });
+    const oldResume: TailoredResume = { ...legacy, lang: 'pt-BR', experiences: [] }; // currículo adaptado gravado antes da mudança
+    expect(withProfileDefaults(oldResume)).toMatchObject({ lang: 'pt-BR', headline: '', skills: [{ group: '' }] });
   });
 });
