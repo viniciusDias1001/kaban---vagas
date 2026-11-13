@@ -30,7 +30,15 @@ const clock = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'use o formato HH:MM
 const blockList = z
   .array(z.string().trim().min(1).max(APPLY_SETTINGS_LIMITS.listItemLength))
   .max(APPLY_SETTINGS_LIMITS.listItems)
-  .transform((list) => [...new Set(list)]);
+  .transform((list) => {
+    const seen = new Set<string>();
+    return list.filter((item) => {
+      const key = item.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  });
 
 /**
  * O schema de cada configuração. Usado duas vezes: para validar o PATCH e para reler o que está no banco

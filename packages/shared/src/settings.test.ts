@@ -81,3 +81,11 @@ describe('apply settings', () => {
     expect(ok({ applyResumeMode: 'other' })).toBe(false);
   });
 });
+
+describe('block lists', () => {
+  it('de-duplicates case-insensitively, keeping the first spelling', () => {
+    const parsed = SettingsPatchSchema.parse({ applyBlockedCompanies: ['Acme', 'acme', 'ACME', 'Beta'], applyBlockedTerms: ['Estágio', 'estágio'] });
+    expect(parsed.applyBlockedCompanies).toEqual(['Acme', 'Beta']);
+    expect(parsed.applyBlockedTerms).toEqual(['Estágio']);
+  });
+});

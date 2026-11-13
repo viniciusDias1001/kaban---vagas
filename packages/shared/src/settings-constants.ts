@@ -150,9 +150,9 @@ export interface SettingsPatch {
   leverCompanies?: string[] | null;
   applyEnabled?: boolean | null;
   applyMinScore?: number | null;
-  /** Parcial: o que faltar vale o padrão (`dry_run`). */
+  /** Parcial: é mesclado, site a site, com o que já está gravado; o que nunca foi gravado vale o padrão (`dry_run`). `null` apaga tudo. */
   applySiteModes?: Partial<Record<ApplySiteId, ApplyMode>> | null;
-  /** Parcial: o que faltar vale o padrão. */
+  /** Parcial: é mesclado, limite a limite, com o que já está gravado; o que nunca foi gravado vale o padrão. `null` apaga tudo. */
   applyDailyCaps?: Partial<ApplyDailyCaps> | null;
   applyCompanyCap?: number | null;
   applyWindow?: ApplyWindow | null;

@@ -302,10 +302,18 @@ export function createSettingsService(db: Db, opts: SettingsServiceOptions = {})
           if (value === undefined) continue;
           if (value === null) await tx.delete(settingsTable).where(eq(settingsTable.key, key));
           else {
+            let toStore: unknown = value;
+            // Modos por site e limites por site são parciais: mesclam com o que já está gravado, para que salvar um
+            // não desfaça os outros (e não afrouxe um limite apertado antes).
+            if (key === 'applySiteModes' || key === 'applyDailyCaps') {
+              const [row] = await tx.select().from(settingsTable).where(eq(settingsTable.key, key));
+              const prior = row ? SETTING_SCHEMAS[key].safeParse(row.value) : null;
+              toStore = { ...(prior?.success ? prior.data : {}), ...(value as object) };
+            }
             await tx
               .insert(settingsTable)
-              .values({ key, value, updatedAt: at })
-              .onConflictDoUpdate({ target: settingsTable.key, set: { value, updatedAt: at } });
+              .values({ key, value: toStore, updatedAt: at })
+              .onConflictDoUpdate({ target: settingsTable.key, set: { value: toStore, updatedAt: at } });
           }
         }
       });

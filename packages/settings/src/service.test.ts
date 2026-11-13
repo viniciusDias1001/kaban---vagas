@@ -282,3 +282,23 @@ describe('automatic application settings', () => {
     expect(dto.apply.minScore).toEqual({ value: 70, source: 'default' });
   });
 });
+
+describe('partial apply settings merge with what is stored', () => {
+  it('keeps earlier site modes when another site is saved, and null returns all to default', async () => {
+    const svc = service();
+    await svc.update({ applySiteModes: { linkedin: 'real' } });
+    await svc.update({ applySiteModes: { greenhouse: 'real' } });
+    expect((await svc.applyConfig()).siteModes).toEqual({ linkedin: 'real', greenhouse: 'real', lever: 'dry_run', fake: 'dry_run' });
+    await svc.update({ applySiteModes: null });
+    expect((await svc.applyConfig()).siteModes).toEqual({ linkedin: 'dry_run', greenhouse: 'dry_run', lever: 'dry_run', fake: 'dry_run' });
+  });
+
+  it('keeps a tightened cap when another cap is saved, and null returns all to default', async () => {
+    const svc = service();
+    await svc.update({ applyDailyCaps: { linkedin: 5 } });
+    await svc.update({ applyDailyCaps: { greenhouse: 20 } });
+    expect((await svc.applyConfig()).dailyCaps).toEqual({ linkedin: 5, greenhouse: 20, lever: 15, fake: 15, total: 30, linkedinViews: 30 });
+    await svc.update({ applyDailyCaps: null });
+    expect((await svc.applyConfig()).dailyCaps).toEqual({ linkedin: 10, greenhouse: 15, lever: 15, fake: 15, total: 30, linkedinViews: 30 });
+  });
+});
