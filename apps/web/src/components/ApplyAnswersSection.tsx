@@ -7,7 +7,7 @@ import type { ApplyAnswerInput } from '../applyApi';
 import {
   ANSWER_LIMITS, BOOLEAN_LABELS, EMPTY_NEW_ANSWER, NEW_ANSWER_KIND_LABELS, answerField, answerInput, answerProblem, answerToStore,
   booleanAnswer, booleanChoice, counterVisible, countryLabel, kindHint, newAnswerInput, saveStateLabel, scopeLabel, splitAnswers, usedLabel,
-  validateNewAnswer, type BooleanChoice, type NewAnswerDraft, type NewAnswerKind, type SaveStatus,
+  validateNewAnswer, createKeyedQueue, decideCommit, type BooleanChoice, type NewAnswerDraft, type NewAnswerKind, type SaveStatus,
 } from '../lib/apply';
 import { spring } from '../lib/motion';
 import { cn } from '../lib/utils';
@@ -46,21 +46,24 @@ function useAnswerEditor(row: ApplyAnswerDto, save: SaveFn) {
   const value = draft ?? row.answer;
   const dirty = draft !== null && answerToStore(row.kind, draft) !== row.answer;
 
-  async function commit(next: string = value) {
-    const problem = answerProblem(row.kind, next);
-    if (problem) {
+  async function commit(text?: string) {
+    const next = text ?? draft;
+    const decision = decideCommit(row.kind, next, row.answer);
+    // Nada digitado: entrar e sair do campo não envia nada, mesmo que o texto guardado não esteja na forma canônica.
+    if (decision.action === 'nothing') return;
+    if (decision.action === 'invalid') {
       setStatus('error');
-      setError(problem);
+      setError(decision.problem);
       return;
     }
-    const stored = answerToStore(row.kind, next);
-    if (stored === row.answer) {
+    if (decision.action === 'unchanged') {
       // Nada mudou (ou voltou ao que estava): não há o que enviar.
       setDraft(null);
       if (status === 'error') setStatus('idle');
       setError(null);
       return;
     }
+    const { stored } = decision;
     if (sending.current === stored) return;
     sending.current = stored;
     setStatus('saving');
@@ -109,16 +112,15 @@ interface FieldProps {
   describedBy?: string;
   invalid?: boolean;
   testId?: string;
-  disabled?: boolean;
   placeholder?: string;
 }
 
 /** O campo certo para o tipo: Sim/Não/sem resposta, número ou texto que cresce com o conteúdo. */
-function AnswerFieldInput({ kind, value, onChange, onChoose, onBlur, id, labelledBy, describedBy, invalid, testId, disabled, placeholder }: FieldProps) {
+function AnswerFieldInput({ kind, value, onChange, onChoose, onBlur, id, labelledBy, describedBy, invalid, testId, placeholder }: FieldProps) {
   const field = answerField(kind);
   if (field === 'boolean') {
     return (
-      <div data-testid={testId} id={id} className={cn(disabled && 'pointer-events-none opacity-50')}>
+      <div data-testid={testId} id={id}>
         <Segmented
           aria-labelledby={labelledBy} value={booleanChoice(value)} onValueChange={(choice) => onChoose?.(choice)}
           options={(['yes', 'no', 'none'] as const).map((c) => ({ value: c, label: BOOLEAN_LABELS[c], ariaLabel: BOOLEAN_LABELS[c] }))}
@@ -129,7 +131,7 @@ function AnswerFieldInput({ kind, value, onChange, onChoose, onBlur, id, labelle
   if (field === 'number') {
     return (
       <Input
-        id={id} data-testid={testId} type="text" inputMode="decimal" autoComplete="off" value={value} disabled={disabled}
+        id={id} data-testid={testId} type="text" inputMode="decimal" autoComplete="off" value={value}
         onChange={(e) => onChange(e.target.value)} onBlur={onBlur} onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
         maxLength={24} placeholder={placeholder ?? 'ex.: 8000'} aria-invalid={invalid || undefined} aria-describedby={describedBy}
         className="tabular-nums"
@@ -138,7 +140,7 @@ function AnswerFieldInput({ kind, value, onChange, onChoose, onBlur, id, labelle
   }
   return (
     <Textarea
-      id={id} data-testid={testId} value={value} disabled={disabled} rows={1} onChange={(e) => onChange(e.target.value)} onBlur={onBlur}
+      id={id} data-testid={testId} value={value} rows={1} onChange={(e) => onChange(e.target.value)} onBlur={onBlur}
       maxLength={ANSWER_LIMITS.answer} placeholder={placeholder} aria-invalid={invalid || undefined} aria-describedby={describedBy}
       className={FIELD_TEXT}
     />
@@ -337,10 +339,12 @@ function LearnedRow({ row, save }: { row: ApplyAnswerDto; save: SaveFn }) {
 }
 
 /** Rótulo + controle do formulário de nova resposta. */
-function FormField({ id, label, error, hint, children }: { id: string; label: string; error?: string; hint?: ReactNode; children: ReactNode }) {
+function FormField({ id, labelId, label, error, hint, children }: {
+  id: string; labelId?: string; label: string; error?: string; hint?: ReactNode; children: ReactNode;
+}) {
   return (
     <div className="min-w-0">
-      <label htmlFor={id} className="block text-[13px] font-medium text-ink-2">{label}</label>
+      <label id={labelId} htmlFor={id} className="block text-[13px] font-medium text-ink-2">{label}</label>
       <div className="mt-1.5">{children}</div>
       {error ? <p id={`${id}-error`} role="alert" className="mt-1.5 text-xs leading-snug text-bad">{error}</p> : hint}
     </div>
@@ -352,7 +356,9 @@ function NewAnswerForm({ save, onDone }: { save: SaveFn; onDone: () => void }) {
   const [errors, setErrors] = useState<ReturnType<typeof validateNewAnswer>>({});
   const [saving, setSaving] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
-  const ids = { question: useId(), answer: useId(), kind: useId(), scope: useId(), company: useId() };
+  const ids = { question: useId(), answer: useId(), answerLabel: useId(), kind: useId(), scope: useId(), company: useId() };
+  /** Trava de reentrada: dois envios no mesmo instante (Enter segurado) criariam duas linhas antes de `saving` valer. */
+  const submitting = useRef(false);
   const set = (patch: Partial<NewAnswerDraft>) => {
     setDraft((d) => ({ ...d, ...patch }));
     setErrors((e) => {
@@ -364,10 +370,12 @@ function NewAnswerForm({ save, onDone }: { save: SaveFn; onDone: () => void }) {
   };
 
   async function submit() {
+    if (submitting.current) return;
     const found = validateNewAnswer(draft);
     setErrors(found);
     setServerError(null);
     if (Object.keys(found).length > 0) return;
+    submitting.current = true;
     setSaving(true);
     try {
       await save(undefined, newAnswerInput(draft));
@@ -375,6 +383,7 @@ function NewAnswerForm({ save, onDone }: { save: SaveFn; onDone: () => void }) {
     } catch (e) {
       setServerError(messageOf(e));
       setSaving(false);
+      submitting.current = false;
     }
   }
 
@@ -431,11 +440,11 @@ function NewAnswerForm({ save, onDone }: { save: SaveFn; onDone: () => void }) {
         </AnimatePresence>
 
         <FormField
-          id={ids.answer} label="Resposta" error={errors.answer}
+          id={ids.answer} labelId={ids.answerLabel} label="Resposta" error={errors.answer}
           hint={kindHint(draft.kind) ? <p className="mt-1.5 text-xs text-faint">{kindHint(draft.kind)}</p> : undefined}
         >
           <AnswerFieldInput
-            kind={draft.kind} value={draft.answer} id={ids.answer} labelledBy={ids.answer} testId="apply-answer-new-answer"
+            kind={draft.kind} value={draft.answer} id={ids.answer} labelledBy={ids.answerLabel} testId="apply-answer-new-answer"
             onChange={(answer) => set({ answer })} onChoose={(choice) => set({ answer: booleanAnswer(choice) })}
             invalid={!!errors.answer} describedBy={errors.answer ? `${ids.answer}-error` : undefined}
           />
@@ -466,14 +475,21 @@ function Loaded({ rows }: { rows: ApplyAnswerDto[] }) {
   const [adding, setAdding] = useState(false);
   const { common, learned } = splitAnswers(rows);
   const learnedId = useId();
+  const [queue] = useState(() => createKeyedQueue<number>());
 
-  /** Salva e já põe a resposta devolvida na lista, para o campo não voltar ao texto antigo até a releitura chegar. */
-  const save: SaveFn = async (id, input) => {
-    const saved = await saveAnswer.mutateAsync({ id, input });
-    qc.setQueryData<ApplyAnswerDto[]>(APPLY_KEYS.answers, (old) =>
-      old ? (old.some((r) => r.id === saved.id) ? old.map((r) => (r.id === saved.id ? saved : r)) : [...old, saved]) : old,
-    );
-    return saved;
+  /**
+   * Salva e já põe a resposta devolvida na lista, para o campo não voltar ao texto antigo até a releitura chegar.
+   * Os salvamentos de uma mesma linha esperam um ao outro: a última resposta gravada no cache é sempre a do último envio.
+   */
+  const save: SaveFn = (id, input) => {
+    const task = async () => {
+      const saved = await saveAnswer.mutateAsync({ id, input });
+      qc.setQueryData<ApplyAnswerDto[]>(APPLY_KEYS.answers, (old) =>
+        old ? (old.some((r) => r.id === saved.id) ? old.map((r) => (r.id === saved.id ? saved : r)) : [...old, saved]) : old,
+      );
+      return saved;
+    };
+    return id === undefined ? task() : queue(id, task);
   };
 
   return (

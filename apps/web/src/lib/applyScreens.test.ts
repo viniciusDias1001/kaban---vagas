@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { APPLICATION_STATUSES, type ApplyStatusDto, type PendingQuestion, type Question } from '@kv/shared';
 import {
   SCOPE_LABELS, SHOT_LABELS, answerText, applicationActions, applyErrorMessage, canApplyNow, editPendingDraft, emptyAnswerValue,
-  firstFilterWithItems, initialPendingDraft, pendingErrorFor, waitingText,
+  firstFilterWithItems, initialPendingDraft, pendingErrorFor, waitingText, toPendingAnswersBody, waitNotice, afterSend, UNCONFIRMED_TEXT, reasonText,
 } from './apply';
 
 const q = (id: string, over: Partial<Question> = {}): Question => ({
@@ -126,5 +126,45 @@ describe('texts for the application screens', () => {
     expect(firstFilterWithItems({ active: 2, needs_human: 1, rehearsals: 0, submitted: 0, skipped: 0 })).toBe('needs_human');
     expect(firstFilterWithItems({ active: 0, needs_human: 0, rehearsals: 0, submitted: 3, skipped: 0 })).toBe('submitted');
     expect(firstFilterWithItems({ active: 0, needs_human: 0, rehearsals: 0, submitted: 0, skipped: 0 })).toBe('active');
+  });
+});
+
+describe('an edited pending question becomes the request body', () => {
+  it('sends an edited proposal as the owner own value, and leaves a blank optional out', () => {
+    const proposal = pending(q('w', { kind: 'longtext' }), 'confirm_proposal', { source: 'written', value: 'Gosto de Go.' });
+    const optional = pending(q('o', { required: false }), 'unanswered');
+    const start = initialPendingDraft(proposal);
+    expect(toPendingAnswersBody([start]).answers).toEqual([{ questionId: 'w', value: 'Gosto de Go.', scope: 'job', confirmMatch: true }]);
+    const edited = editPendingDraft(proposal, start, 'Gosto de Go e Rust.');
+    const body = toPendingAnswersBody([edited, initialPendingDraft(optional)]);
+    expect(body.answers).toEqual([{ questionId: 'w', value: 'Gosto de Go e Rust.', scope: 'job', confirmMatch: false }]);
+  });
+});
+
+describe('waitNotice', () => {
+  it('does not notify for a wait that was already there when the page loaded', () => {
+    expect(waitNotice(undefined, '3:captcha')).toEqual({ notify: false, seen: '3:captcha' });
+    expect(waitNotice(undefined, null)).toEqual({ notify: false, seen: null });
+  });
+  it('notifies once for each new wait', () => {
+    expect(waitNotice(null, '3:captcha')).toEqual({ notify: true, seen: '3:captcha' });
+    expect(waitNotice('3:captcha', '3:captcha')).toEqual({ notify: false, seen: '3:captcha' });
+    expect(waitNotice('3:captcha', null)).toEqual({ notify: false, seen: null });
+    expect(waitNotice('3:captcha', '3:login')).toEqual({ notify: true, seen: '3:login' });
+  });
+});
+
+describe('afterSend', () => {
+  it('shows a sent rehearsal as queued for a real send until the application is read again', () => {
+    const app = { status: 'dry_run_ready', mode: 'dry_run', reason: 'question' } as Parameters<typeof afterSend>[0];
+    expect(afterSend(app)).toMatchObject({ status: 'queued', mode: 'real', reason: null });
+    expect(applicationActions(afterSend(app)).send).toBe(false);
+  });
+});
+
+describe('the unconfirmed submission sentence', () => {
+  it('is the one sentence in the reason text and the drawer, and no longer mentions trying again', () => {
+    expect(UNCONFIRMED_TEXT).toBe('O envio foi iniciado e o site não confirmou. Confira no site ou no seu e-mail se a candidatura chegou.');
+    expect(reasonText('confirm_submission', null)).toBe(UNCONFIRMED_TEXT);
   });
 });
