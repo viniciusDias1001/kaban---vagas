@@ -307,7 +307,8 @@ Motivos de `needs_human`: `question`, `captcha`, `verification_code`, `login`, `
 - `needs_human` ou `waiting_human`: fica em Selecionadas com `needs_human` ligado e o motivo em texto; resolvido, desliga.
 - `skipped`: o card não se move. A exceção é `already_applied`, que leva o card para Aplicada como aplicada pelo dono.
 - A IA nunca move além de Aplicada, e seus movimentos não disparam a análise da camada 2.
-- Se o dono move o card por conta própria, a candidatura na fila é cancelada; uma em andamento confere o cancelamento antes do envio.
+- Se o dono move o card por conta própria, a candidatura na fila é cancelada; uma em andamento confere o cancelamento antes do envio. A marca "precisa de você" é desligada junto.
+- Os movimentos da IA gravam histórico e posição no quadro como os do dono.
 
 ### Quando o humano é necessário
 
@@ -361,7 +362,7 @@ Uma candidatura típica custa perto de US$ 0,08; com o limite padrão de US$ 1 p
 
 ### Segurança e privacidade
 
-- A função só liga com a API escutando em endereço local; em container fica desligada, com o motivo na tela.
+- A função só liga com `HOST` em endereço local. A API e o worker conferem isso cada um por si; em container fica desligada, com o motivo na tela.
 - O app continua sem login: quem alcançar o app pode disparar candidaturas com as contas do dono e ler as respostas dele. O aviso de não expor o app fica mais forte e aparece nesta seção das Configurações.
 - A sessão dos sites fica só no perfil do navegador, no disco do dono. Nunca vai para o banco nem para log.
 - As fotos contêm dados pessoais: ficam na pasta de dados local, com limpeza depois de 90 dias. O PDF enviado fica no banco, junto da candidatura, e não é limpo sozinho. "Apagar todos os dados de IA" apaga também o banco de respostas, os PDFs, as fotos e o conteúdo das candidaturas, mantendo estado e datas.
@@ -374,6 +375,7 @@ Tabelas novas, com RLS habilitado:
 - `application_events`: candidatura, quando, estado, mensagem.
 - `apply_answers`: pergunta, chave fixa (para as comuns), resposta, tipo, alcance (`sempre`, empresa ou vaga), país (para visto e autorização), variações confirmadas pelo dono, vezes usada, atualizada em.
 - `apply_commands`: pedidos da API ao worker (abrir login, conferir sessão, fechar navegador), com estado e resultado. O worker continua sem receber HTTP.
+- `apply_sites`: uma linha por site, escrita pelo worker: estado da sessão e quando foi conferida, pausa (com motivo e desde quando) e as contagens do dia. O que o dono edita (modo, limites) continua em `settings`.
 
 Mudanças: novas chaves em `settings`; a camada `apply` em `ai_usage`; os campos novos do perfil (Parte A). `jobs` não muda: `applied_by`, `needs_human` e `needs_human_reason` já existem. As fotos ficam em disco; o banco guarda o caminho.
 
@@ -383,7 +385,7 @@ Para os sub-projetos 4 e 5: e-mail usado, empresa, site, fonte, nota, idioma, or
 
 - Fila própria, verificada a cada 5 s, concorrência 1. Falha ou lentidão aqui não atrasa a busca nem a fila de IA.
 - Candidatura em `preparing` ou `filling` quando o worker reinicia volta para a fila; em `submitting`, vira `confirm_submission`.
-- Tempo limite de 10 minutos de trabalho por candidatura, sem contar a espera pelo dono.
+- Tempo limite de 10 minutos de trabalho por candidatura, sem contar a espera pelo dono. A espera pelo dono e a espera pelo currículo adaptado são estados da fila e não contam como candidatura travada.
 
 ### API
 
@@ -419,6 +421,7 @@ Segue o tema, os componentes (`ui/*`) e o Motion que o app já usa. As telas nov
 - Respostas: regras, casamento com o banco, categorias sensíveis nunca respondidas pelo modelo, resposta fora das opções, conferência de anos, verificador nas respostas abertas, comando escondido em rótulo de formulário.
 - PDF: ordem e conteúdo das seções, grupos, rodapé, quebras de página, os dois idiomas, perfil antigo sem os campos novos. Sempre com um perfil fictício.
 - e2e com o site falso: ligar a função, vaga com nota acima do mínimo é aplicada, vaga abaixo não é, pergunta pendente respondida no app e reaproveitada.
+- Nos testes e na CI o navegador é o Chromium do Playwright, sem janela; a exigência de Chrome ou Edge com janela vale só para o uso real.
 - Nenhum teste automatizado toca um site real. Um roteiro manual `pnpm apply:smoke`, sempre em ensaio e nunca na CI, confere os sites de verdade.
 
 ## Critérios de aceite
