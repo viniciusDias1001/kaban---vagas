@@ -5,7 +5,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { eq } from 'drizzle-orm';
 import { createFakeSite, exactBankMatch } from '@kv/apply';
 import {
-  applicationForJob, applications, applyAnswers, closeDb, createApplication, jobs, listApplyAnswers, transitionApplication, type Db,
+  applicationForJob, applications, applyAnswers, closeDb, createApplication, jobs, listApplyAnswers, saveApplyWorkerState, transitionApplication,
+  type Db,
 } from '@kv/db';
 import { createTestDb, resetTestDb } from '@kv/db/testing';
 import type { AnswerValue, PendingQuestion, Question } from '@kv/shared';
@@ -89,19 +90,91 @@ describe('POST /jobs/:id/application', () => {
   });
 });
 
-describe('reading applications', () => {
-  it('never returns the PDF bytes in JSON; null for a job without an application, 404 only for a missing job', async () => {
+describe('a job the owner already applied to', () => {
+  it('refuses a new application with 409 already_applied, by column or by applied_by', async () => {
+    await enable();
+    for (const over of [{ column: 'aplicada' as const }, { column: 'entrevista' as const }, { column: 'arquivada' as const }, { appliedBy: 'humano' as const }]) {
+      const job = await fakeJob(over);
+      const res = await post(`/jobs/${job.id}/application`);
+      expect(res.statusCode, JSON.stringify(over)).toBe(409);
+      expect(res.json()).toMatchObject({ error: 'already_applied' });
+      expect(await applicationForJob(db, job.id)).toBeNull();
+    }
+  });
+
+  it('refuses retry, send and send-all with 409 already_applied', async () => {
+    const seed = async (status: 'failed' | 'cancelled' | 'dry_run_ready') => {
+      const job = await fakeJob();
+      const id = (await createApplication(db, { jobId: job.id, site: 'fake', trigger: 'auto', mode: 'dry_run' }))!;
+      await transitionApplication(db, id, { status });
+      await db.update(jobs).set({ column: 'aplicada', appliedBy: 'humano' }).where(eq(jobs.id, job.id));
+      return { job, id };
+    };
+    for (const status of ['failed', 'cancelled'] as const) {
+      const a = await seed(status);
+      const res = await post(`/applications/${a.id}/retry`);
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ error: 'already_applied' });
+      expect((await applicationForJob(db, a.job.id))!.status).toBe(status);
+    }
+    const rehearsal = await seed('dry_run_ready');
+    const send = await post(`/applications/${rehearsal.id}/send`);
+    expect(send.statusCode).toBe(409);
+    expect(send.json()).toMatchObject({ error: 'already_applied' });
+    const all = await post('/applications/send-rehearsals', { ids: [rehearsal.id] });
+    expect(all.statusCode).toBe(409);
+    expect(all.json()).toMatchObject({ error: 'already_applied' });
+    expect((await applicationForJob(db, rehearsal.job.id))!.status).toBe('dry_run_ready');
+  });
+});
+
+describe('GET /jobs/:id/application', () => {
+  const read = async (id: number) => {
+    const res = await app.inject(`/jobs/${id}/application`);
+    expect(res.statusCode).toBe(200);
+    return res.json();
+  };
+
+  it('says the button can appear only when every check of the POST route passes, naming the first that fails', async () => {
     const job = await fakeJob();
-    // Toda vaga aberta no painel pergunta pela candidatura: "não tem" é resposta normal (200 null), não um 404 que o
+    expect(await read(job.id)).toEqual({ application: null, site: 'fake', canApply: false, cannotApplyReason: 'apply_disabled' });
+    await enable({ applyBlockedCompanies: ['Globex'] });
+    expect(await read(job.id)).toEqual({ application: null, site: 'fake', canApply: true, cannotApplyReason: null });
+    const remotive = await seedJob(db, { source: 'remotive' });
+    expect(await read(remotive.id)).toEqual({ application: null, site: null, canApply: false, cannotApplyReason: 'unsupported_site' });
+    const applied = await fakeJob({ column: 'oferta' });
+    expect(await read(applied.id)).toMatchObject({ site: 'fake', canApply: false, cannotApplyReason: 'already_applied' });
+    const byHand = await fakeJob({ appliedBy: 'humano' });
+    expect(await read(byHand.id)).toMatchObject({ canApply: false, cannotApplyReason: 'already_applied' });
+    const blocked = await fakeJob({ company: 'Globex' });
+    expect(await read(blocked.id)).toMatchObject({ canApply: false, cannotApplyReason: 'blocked' });
+    vi.stubEnv('HOST', '0.0.0.0');
+    expect(await read(job.id)).toMatchObject({ canApply: false, cannotApplyReason: 'apply_unavailable' });
+    vi.unstubAllEnvs();
+    await saveApplyWorkerState(db, { available: false, reason: 'Navegador não encontrado.' });
+    expect(await read(job.id)).toMatchObject({ canApply: false, cannotApplyReason: 'apply_unavailable' });
+    await saveApplyWorkerState(db, { available: true, reason: null });
+    // Com candidatura: ela vem junto, e o botão não aparece.
+    expect((await post(`/jobs/${job.id}/application`)).statusCode).toBe(202);
+    expect(await read(job.id)).toMatchObject({
+      application: { jobId: job.id, status: 'queued', cancelRequested: false }, site: 'fake', canApply: false, cannotApplyReason: 'already_exists',
+    });
+  });
+});
+
+describe('reading applications', () => {
+  it('never returns the PDF bytes in JSON; application null for a job without one, 404 only for a missing job', async () => {
+    const job = await fakeJob();
+    // Toda vaga aberta no painel pergunta pela candidatura: "não tem" é resposta normal (200), não um 404 que o
     // navegador registra como erro no console.
     const none = await app.inject(`/jobs/${job.id}/application`);
     expect(none.statusCode).toBe(200);
-    expect(none.json()).toBeNull();
+    expect(none.json()).toMatchObject({ application: null });
     expect((await app.inject('/jobs/99999/application')).statusCode).toBe(404);
     await createApplication(db, { jobId: job.id, site: 'fake', trigger: 'auto', mode: 'dry_run' });
     await db.update(applications).set({ resumePdf: Buffer.from('%PDF-1.4 segredo'), approvedAnswers: [] });
     const body = (await app.inject(`/jobs/${job.id}/application`)).body;
-    expect(JSON.parse(body)).toMatchObject({ hasResume: true, status: 'queued', events: [{ status: 'queued' }] });
+    expect(JSON.parse(body).application).toMatchObject({ hasResume: true, status: 'queued', events: [{ status: 'queued' }] });
     expect(body).not.toContain('resumePdf');
     expect(body).not.toContain('approvedAnswers');
     expect(body).not.toContain('segredo');
@@ -113,9 +186,16 @@ describe('reading applications', () => {
     await createApplication(db, { jobId: a.id, site: 'fake', trigger: 'auto', mode: 'dry_run' });
     const idB = (await createApplication(db, { jobId: b.id, site: 'fake', trigger: 'auto', mode: 'dry_run' }))!;
     await transitionApplication(db, idB, { status: 'failed' });
-    expect((await app.inject('/applications')).json()).toHaveLength(2);
-    expect((await app.inject('/applications?status=failed&site=fake')).json()).toMatchObject([{ id: idB, jobTitle: 'Dev React' }]);
+    const counts = { active: 1, needs_human: 0, rehearsals: 0, submitted: 0, skipped: 1 };
+    const all = (await app.inject('/applications')).json();
+    expect(all.items).toHaveLength(2);
+    expect(all.counts).toEqual(counts);
+    expect((await app.inject('/applications?status=failed&site=fake')).json().items).toMatchObject([{ id: idB, jobTitle: 'Dev React' }]);
+    // O filtro da aba: as linhas desse filtro, e as contagens de todos, sempre sobre todas as linhas.
+    expect((await app.inject('/applications?filter=skipped')).json()).toMatchObject({ items: [{ id: idB, status: 'failed' }], counts });
+    expect((await app.inject('/applications?filter=rehearsals')).json()).toEqual({ items: [], counts });
     expect((await app.inject('/applications?status=nope')).statusCode).toBe(400);
+    expect((await app.inject('/applications?filter=nope')).statusCode).toBe(400);
   });
 
   it('serves the sent PDF and the photos, and nothing outside the data folder', async () => {
@@ -132,9 +212,21 @@ describe('reading applications', () => {
     expect(pdf.headers['content-type']).toBe('application/pdf');
     expect(pdf.headers['cache-control']).toBe('no-store');
     expect(pdf.headers['content-disposition']).toBe('attachment; filename="Meu_Curriculo.pdf"');
+    expect(pdf.headers['cross-origin-resource-policy']).toBe('same-origin');
     const shot = await app.inject(`/applications/${id}/shots/filled`);
     expect(shot.headers['content-type']).toBe('image/jpeg');
     expect(shot.headers['cache-control']).toBe('no-store');
+    expect(shot.headers['cross-origin-resource-policy']).toBe('same-origin');
+    // Só a pasta de fotos desta candidatura: nem outro arquivo da pasta de dados, nem a foto de outra candidatura.
+    await mkdir(join(dataDir, 'browser', 'Default'), { recursive: true });
+    await writeFile(join(dataDir, 'browser', 'Default', 'Cookies'), Buffer.from('segredo'));
+    await mkdir(join(dataDir, 'shots', String(id + 1)), { recursive: true });
+    await writeFile(join(dataDir, 'shots', String(id + 1), 'filled.jpg'), Buffer.from([0xff, 0xd8, 0xff]));
+    for (const rel of ['browser/Default/Cookies', `shots/${id + 1}/filled.jpg`]) {
+      await db.update(applications).set({ shots: { filled: rel } });
+      expect((await app.inject(`/applications/${id}/shots/filled`)).statusCode, rel).toBe(404);
+    }
+    await db.update(applications).set({ shots: { filled: `shots/${id}/filled.jpg`, blocked: `shots/${id}/blocked.jpg` } });
     expect((await app.inject(`/applications/${id}/shots/blocked`)).statusCode).toBe(404); // gravada, arquivo não existe
     expect((await app.inject(`/applications/${id}/shots/confirmation`)).statusCode).toBe(404); // nunca gravada
     expect((await app.inject(`/applications/${id}/shots/passwd`)).statusCode).toBe(404); // tipo desconhecido
@@ -153,7 +245,8 @@ describe('PUT /applications/:id/answers', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ status: 'queued', pendingQuestions: [] });
     const bank = await listApplyAnswers(db);
-    expect(bank).toMatchObject([{ question: 'Pretensão salarial', answer: '20000', kind: 'number', scope: 'always', country: 'BR' }]);
+    // Pergunta não classificada como pessoal: vale em qualquer país.
+    expect(bank).toMatchObject([{ question: 'Pretensão salarial', answer: '20000', kind: 'number', scope: 'always', country: null }]);
     expect(await jobRow(job.id)).toMatchObject({ needsHuman: false, needsHumanReason: null });
   });
 
@@ -168,10 +261,66 @@ describe('PUT /applications/:id/answers', () => {
   });
 
   it('updates the saved row of the same question instead of duplicating it', async () => {
-    await db.insert(applyAnswers).values({ question: 'Pergunta a', normalized: 'pergunta a', kind: 'text', country: 'BR', createdAt: 1, updatedAt: 1 });
+    await db.insert(applyAnswers).values({ question: 'Pergunta a', normalized: 'pergunta a', kind: 'text', createdAt: 1, updatedAt: 1 });
     const { id } = await seedPending([unanswered(question('a'))]);
     await put(`/applications/${id}/answers`, { answers: [item('a', 'novo')] });
     expect(await listApplyAnswers(db)).toMatchObject([{ answer: 'novo' }]);
+  });
+
+  it('never saves the same question twice: two questions with one label in a PUT, or two PUTs answering it', async () => {
+    const twin = (id: string) => unanswered(question(id, { label: 'Você tem CNH?' }));
+    const { id } = await seedPending([twin('a'), twin('b')]);
+    expect((await put(`/applications/${id}/answers`, { answers: [item('a', 'Sim'), item('b', 'Sim, categoria B')] })).statusCode).toBe(200);
+    expect(await listApplyAnswers(db)).toMatchObject([{ question: 'Você tem CNH?', answer: 'Sim, categoria B' }]);
+    // Duas candidaturas respondendo a mesma pergunta ao mesmo tempo: uma linha só no banco. (A primeira a gravar devolve
+    // a outra à fila, então a segunda pode chegar tarde e receber 409 not_pending; nunca grava uma segunda linha.)
+    const one = await seedPending([twin('c')]);
+    const two = await seedPending([twin('d')]);
+    const results = await Promise.all([
+      put(`/applications/${one.id}/answers`, { answers: [item('c', 'Não')] }),
+      put(`/applications/${two.id}/answers`, { answers: [item('d', 'Não')] }),
+    ]);
+    expect(results[0].statusCode).toBe(200);
+    expect([200, 409]).toContain(results[1].statusCode);
+    expect((await listApplyAnswers(db)).map((r) => r.answer)).toEqual(['Não']);
+  });
+
+  it('ties an answer to a personal question to the job country, and every other answer to no country', async () => {
+    const visa = question('visa', { label: 'Are you legally authorized to work in the country where this job is located?', kind: 'select', options: ['Yes', 'No'] });
+    const years = question('years', { label: 'Anos de experiência com Go' });
+    const personal = (q: Question): PendingQuestion => ({ question: q, category: 'personal', kind: 'unanswered', proposal: null });
+    const fact = (q: Question): PendingQuestion => ({ question: q, category: 'profile_fact', kind: 'unanswered', proposal: null });
+    const abroad = await seedPending([personal(visa), fact(years)], 'question', { country: 'INT' });
+    await put(`/applications/${abroad.id}/answers`, { answers: [item('visa', 'No'), item('years', '4')] });
+    const bank = await listApplyAnswers(db);
+    expect(bank.map((r) => [r.question, r.country])).toEqual([[visa.label, 'INT'], [years.label, null]]);
+    const at = (jobId: number, country: 'BR' | 'INT') => ({ company: 'Acme Fictícia', jobId, country });
+    // A resposta do visto dada numa vaga de fora não vale numa vaga do Brasil (vai para o dono), vale em outra de fora.
+    expect(exactBankMatch(visa, bank, at(abroad.job.id + 100, 'BR'))).toBeNull();
+    expect(exactBankMatch(visa, bank, at(abroad.job.id + 100, 'INT'))?.value).toBe('No');
+    // O fato do perfil vale em qualquer vaga.
+    expect(exactBankMatch(years, bank, at(abroad.job.id + 100, 'BR'))?.value).toBe('4');
+    // Numa vaga do Brasil, a pessoal fica com 'BR'.
+    const home = await seedPending([personal(question('salary', { label: 'Pretensão salarial', kind: 'number' }))]);
+    await put(`/applications/${home.id}/answers`, { answers: [item('salary', '20000')] });
+    expect((await listApplyAnswers(db)).find((r) => r.question === 'Pretensão salarial')).toMatchObject({ country: 'BR' });
+  });
+
+  it('refuses a confirmed match whose saved answer was edited after the proposal, attaching nothing', async () => {
+    const saved = (await db.insert(applyAnswers).values({
+      question: 'Precisa de visto?', normalized: 'precisa de visto', kind: 'choice', answer: 'Yes', createdAt: 1, updatedAt: 1,
+    }).returning())[0];
+    const q = question('v', { label: 'Do you require sponsorship?', kind: 'select', options: ['Yes', 'No'] });
+    // A proposta foi feita quando a resposta salva dizia "No"; o dono a editou para "Yes" depois.
+    const { id } = await seedPending([{
+      question: q, category: 'personal', kind: 'confirm_match',
+      proposal: { bankAnswerId: saved.id, bankQuestion: saved.question, bankAnswer: 'No', value: 'No', source: 'bank', basis: [] },
+    }]);
+    const res = await put(`/applications/${id}/answers`, { answers: [item('v', null, { confirmMatch: true })] });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ error: 'validation', message: expect.stringContaining('responda de novo') });
+    expect((await listApplyAnswers(db))[0].aliases).toEqual([]);
+    expect((await applicationForJob(db, (await db.select().from(applications))[0].jobId))!.status).toBe('needs_human');
   });
 
   it('requeues the other applications that were waiting on a question', async () => {
@@ -205,13 +354,13 @@ describe('PUT /applications/:id/answers', () => {
       proposal: { bankAnswerId: saved.id, bankQuestion: saved.question, bankAnswer: 'No', value: 'No', source: 'bank', basis: [] },
     };
     const { id, job } = await seedPending([match]);
-    expect(exactBankMatch(q, await listApplyAnswers(db), { company: 'Acme', jobId: job.id, country: 'BR' })).toBeNull();
+    expect(exactBankMatch(q, await listApplyAnswers(db), { company: 'Acme', jobId: job.id, country: 'BR' as const })).toBeNull();
     const res = await put(`/applications/${id}/answers`, { answers: [item('v', null, { confirmMatch: true })] });
     expect(res.json()).toMatchObject({ status: 'queued' });
     const bank = await listApplyAnswers(db);
     expect(bank).toHaveLength(1);
     expect(bank[0].aliases).toEqual([{ normalized: 'do you require sponsorship', options: ['Yes', 'No'], value: 'No' }]);
-    expect(exactBankMatch(q, bank, { company: 'Acme', jobId: job.id, country: 'BR' })?.value).toBe('No');
+    expect(exactBankMatch(q, bank, { company: 'Acme', jobId: job.id, country: 'BR' as const })?.value).toBe('No');
   });
 
   it('accepts a proposal: the profile fact for always, the written text for the job only', async () => {
@@ -232,7 +381,7 @@ describe('PUT /applications/:id/answers', () => {
     expect(bank.map((r) => [r.question, r.answer, r.scope, r.scopeValue])).toEqual([
       ['Anos de React?', '5', 'always', null], ['Por que nós?', 'Gosto do produto.', 'job', String(job.id)],
     ]);
-    const ctx = { company: 'Acme', jobId: job.id, country: 'BR' };
+    const ctx = { company: 'Acme', jobId: job.id, country: 'BR' as const };
     expect(exactBankMatch(fact, bank, ctx)?.value).toBe('5');
     expect(exactBankMatch(text, bank, ctx)?.value).toBe('Gosto do produto.');
     expect(exactBankMatch(text, bank, { ...ctx, jobId: job.id + 1 })).toBeNull();
@@ -290,7 +439,7 @@ describe('PUT /applications/:id/answers', () => {
 });
 
 describe('answers are read back from the bank in the own type of the question', () => {
-  const ctxOf = (jobId: number) => ({ company: 'Acme Fictícia', jobId, country: 'BR' });
+  const ctxOf = (jobId: number) => ({ company: 'Acme Fictícia', jobId, country: 'BR' as const });
   const cases: { name: string; q: Question; value: unknown; expected: unknown }[] = [
     { name: 'text', q: question('t'), value: 'olá', expected: 'olá' },
     { name: 'longtext', q: question('l', { kind: 'longtext' }), value: 'um texto longo', expected: 'um texto longo' },
@@ -314,23 +463,49 @@ describe('answers are read back from the bank in the own type of the question', 
     });
   }
 
-  it('a confirmed match on a multiselect and on a boolean without options', async () => {
-    const saved = async (question_: string, answer: string, kind: 'choice' | 'boolean') =>
-      (await db.insert(applyAnswers).values({ question: question_, normalized: question_.toLowerCase().replace(/\W+/g, ' ').trim(), kind, answer, createdAt: 1, updatedAt: 1 }).returning())[0];
-    const models = await saved('Modelos de trabalho', 'Remoto\nHíbrido', 'choice');
-    const auth = await saved('Autorizado a trabalhar', 'Sim', 'boolean');
-    const multi = question('m', { label: 'Work models', kind: 'multiselect', options: ['Remote', 'Hybrid', 'Onsite'] });
-    const bool = question('b', { label: 'Authorized to work', kind: 'boolean' });
-    const pending = (q: Question, row: typeof models, value: AnswerValue): PendingQuestion => ({
-      question: q, category: 'personal', kind: 'confirm_match',
-      proposal: { bankAnswerId: row.id, bankQuestion: row.question, bankAnswer: row.answer, value, source: 'bank', basis: [] },
+  /*
+   * A1-1, de ponta a ponta do lado da API: a proposta de casamento com resposta salva chega no tipo da própria pergunta
+   * (booleano de verdade numa caixa de seleção, lista numa múltipla escolha, a opção exata numa seleção), que é o que o
+   * resolvedor corrigido produz (`proposedValue` em packages/apply/src/answers/resolve.ts). A rota aceita cada uma, e a
+   * variação gravada é lida de volta por `exactBankMatch` no mesmo tipo. A forma com a saída do resolvedor passada direto
+   * para a rota fica para depois da junção dos ramos (aqui o resolvedor ainda é o antigo).
+   */
+  const savedAnswer = async (question_: string, answer: string, kind: 'choice' | 'boolean') =>
+    (await db.insert(applyAnswers).values({ question: question_, normalized: question_.toLowerCase().replace(/\W+/g, ' ').trim(), kind, answer, createdAt: 1, updatedAt: 1 }).returning())[0];
+  const matchOf = (q: Question, row: { id: number; question: string; answer: string }, value: AnswerValue): PendingQuestion => ({
+    question: q, category: 'personal', kind: 'confirm_match',
+    proposal: { bankAnswerId: row.id, bankQuestion: row.question, bankAnswer: row.answer, value, source: 'bank', basis: [] },
+  });
+  const multi = question('m', { label: 'Work models', kind: 'multiselect', options: ['Remote', 'Hybrid', 'Onsite'] });
+  const bool = question('b', { label: 'Authorized to work', kind: 'boolean' });
+  const select = question('s', { label: 'Seniority', kind: 'select', options: ['Junior', 'Senior'] });
+
+  it('a confirmed match on a multiselect, a boolean without options and a select, in the types the resolver produces', async () => {
+    const models = await savedAnswer('Modelos de trabalho', 'Remoto\nHíbrido', 'choice');
+    const auth = await savedAnswer('Autorizado a trabalhar', 'Sim', 'boolean');
+    const level = await savedAnswer('Senioridade', 'Sênior', 'choice');
+    const { id, job } = await seedPending([matchOf(multi, models, ['Remote', 'Hybrid']), matchOf(bool, auth, true), matchOf(select, level, 'Senior')]);
+    const res = await put(`/applications/${id}/answers`, {
+      answers: [item('m', null, { confirmMatch: true }), item('b', null, { confirmMatch: true }), item('s', null, { confirmMatch: true })],
     });
-    const { id, job } = await seedPending([pending(multi, models, ['Remote', 'Hybrid']), pending(bool, auth, true)]);
-    const res = await put(`/applications/${id}/answers`, { answers: [item('m', null, { confirmMatch: true }), item('b', null, { confirmMatch: true })] });
+    expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ status: 'queued' });
     const bank = await listApplyAnswers(db);
     expect(exactBankMatch(multi, bank, ctxOf(job.id))?.value).toEqual(['Remote', 'Hybrid']);
     expect(exactBankMatch(bool, bank, ctxOf(job.id))?.value).toBe(true);
+    expect(exactBankMatch(select, bank, ctxOf(job.id))?.value).toBe('Senior');
+  });
+
+  it('refuses a match proposal in the old wrong type: "Sim" for a checkbox, one string for a multiselect', async () => {
+    const models = await savedAnswer('Modelos de trabalho', 'Remoto', 'choice');
+    const auth = await savedAnswer('Autorizado a trabalhar', 'Sim', 'boolean');
+    for (const [q, row, value] of [[bool, auth, 'Sim'], [multi, models, 'Remote']] as const) {
+      const { id } = await seedPending([matchOf(q, row, value)]);
+      const res = await put(`/applications/${id}/answers`, { answers: [item(q.id, null, { confirmMatch: true })] });
+      expect(res.statusCode, q.kind).toBe(400);
+      expect(res.json()).toMatchObject({ error: 'validation' });
+    }
+    expect((await listApplyAnswers(db)).flatMap((r) => r.aliases)).toEqual([]);
   });
 
   it('an accepted saved-answer match on a question without options keeps the proposal as it is', async () => {
@@ -411,16 +586,27 @@ describe('send, retry and cancel', () => {
     expect((await post('/applications/9999/send')).statusCode).toBe(404);
   });
 
-  it('sends every rehearsal at once', async () => {
+  it('sends exactly the listed rehearsals and says how many were left out', async () => {
     const one = await seedApp('dry_run_ready', undefined, { answers });
     const two = await seedApp('dry_run_ready', undefined, { answers });
+    const unlisted = await seedApp('dry_run_ready', undefined, { answers });
     const failed = await seedApp('failed');
-    const res = await post('/applications/send-rehearsals');
+    const res = await post('/applications/send-rehearsals', { ids: [one.id, two.id, failed.id, 9999] });
     expect(res.statusCode).toBe(202);
-    expect(res.json()).toEqual({ queued: 2 });
+    expect(res.json()).toEqual({ queued: 2, skipped: 2 });
     expect((await applicationForJob(db, one.job.id))!.approvedAnswers).toEqual(answers);
     expect(await applicationForJob(db, two.job.id)).toMatchObject({ status: 'queued', mode: 'real' });
+    expect(await applicationForJob(db, unlisted.job.id)).toMatchObject({ status: 'dry_run_ready', mode: 'dry_run' });
     expect(await applicationForJob(db, failed.job.id)).toMatchObject({ status: 'failed', approvedAnswers: [] });
+    // Nada listado que ainda seja ensaio: 202 com nada enviado.
+    expect((await post('/applications/send-rehearsals', { ids: [failed.id] })).json()).toEqual({ queued: 0, skipped: 1 });
+  });
+
+  it('validates the send-all body: 1 to 200 ids', async () => {
+    for (const payload of [undefined, {}, { ids: [] }, { ids: ['1'] }, { ids: [0] }, { ids: Array.from({ length: 201 }, (_, i) => i + 1) }, { ids: [1], x: 1 }]) {
+      const res = await post('/applications/send-rehearsals', payload);
+      expect(res.statusCode, JSON.stringify(payload)?.slice(0, 40)).toBe(400);
+    }
   });
 
   it('clears finished_at when a finished application is retried', async () => {

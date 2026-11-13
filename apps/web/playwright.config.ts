@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { defineConfig } from '@playwright/test';
 import { E2E_APPLY_DATA_DIR } from './e2e/apply-data';
 import { E2E_DATABASE_URL, e2eDatabaseName } from './e2e/database';
+import { E2E_API_PORT, E2E_WEB_URL } from './e2e/ports';
 
 // Falha já ao carregar a config se a URL apontar para um banco que não é de teste.
 e2eDatabaseName(E2E_DATABASE_URL);
@@ -10,6 +11,8 @@ const CI = !!process.env.CI;
 
 export default defineConfig({
   testDir: './e2e',
+  // Roda depois de o webServer subir: aborta a suíte se o servidor alcançado não for o do e2e (GET /api/meta).
+  globalSetup: './e2e/global-setup.ts',
   timeout: 120_000,
   // Um único banco e um único trio web/api/worker: os testes não podem rodar em paralelo.
   workers: 1,
@@ -17,7 +20,7 @@ export default defineConfig({
   forbidOnly: CI,
   reporter: CI ? [['list'], ['html', { open: 'never' }]] : 'list',
   use: {
-    baseURL: 'http://localhost:5173',
+    baseURL: E2E_WEB_URL,
     viewport: { width: 1600, height: 900 },
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
@@ -26,8 +29,11 @@ export default defineConfig({
     // O preparo do banco vem antes do `pnpm dev` (que roda `db:migrate` e sobe api, worker e web).
     command: 'pnpm exec tsx apps/web/e2e/prepare-db.ts && pnpm dev',
     cwd: '../..',
-    // Passa pelo proxy do Vite até a API: só responde 200 quando os dois estão no ar.
-    url: 'http://localhost:5173/api/sources',
+    // Passa pelo proxy do Vite até a API: só responde 200 quando os dois estão no ar. Qualquer API responderia aqui;
+    // quem confere que é a do e2e é o globalSetup.
+    url: `${E2E_WEB_URL}/api/meta`,
+    // Nunca reaproveita um servidor que já está no ar: com a 5173 ocupada (o `pnpm dev` do dono, por exemplo), o
+    // Playwright recusa começar. A porta do web não muda porque o vite.config.ts a fixa (strictPort) para o `pnpm dev`.
     reuseExistingServer: false,
     timeout: 120_000,
     // E2E_SERVER_LOGS=1 mostra a saída da api, do worker e do web também fora da CI (para investigar uma falha).
@@ -35,6 +41,11 @@ export default defineConfig({
     stderr: 'pipe',
     env: {
       DATABASE_URL: E2E_DATABASE_URL,
+      // Uma porta só da API do e2e, nunca a 3333 do app do dono: se ela estivesse ocupada pela API dele, o proxy do Vite
+      // levaria os testes até ela. Vence o API_PORT do .env de quem roda; PORT vazia para não ter precedência sobre ela.
+      // O proxy do Vite lê a mesma variável.
+      API_PORT: E2E_API_PORT,
+      PORT: '',
       FAKE_CONNECTORS: '1',
       // IA: nenhum provedor no ambiente (o teste escolhe pela aba Configurações). AI_ALLOW_FAKE só libera o
       // provedor falso entre as opções; ele não usa rede nem chave.
