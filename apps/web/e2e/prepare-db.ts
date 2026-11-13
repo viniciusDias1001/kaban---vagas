@@ -6,7 +6,7 @@
  * `globalSetup`: o Playwright sobe o webServer ANTES do globalSetup, e a API não inicia sem as tabelas.
  */
 import { closeDb, createDb, dbErrorMessage, migrate } from '../../../packages/db/src/index';
-import { resetApplyDataDir } from './apply-data';
+import { E2E_APPLY_DATA_DIR, resetApplyDataDir } from './apply-data';
 import { E2E_DATABASE_URL, e2eDatabaseName } from './database';
 
 const TABLES = [
@@ -41,9 +41,19 @@ try {
     await closeDb(db);
   }
   console.log(`[e2e] banco ${name} migrado e esvaziado`);
-  // A pasta de dados da candidatura (perfil do navegador, currículos, fotos) também começa vazia.
-  resetApplyDataDir();
 } catch (e) {
   console.error(`[e2e] falha ao preparar o banco: ${dbErrorMessage(e)}`);
+  process.exit(1);
+}
+
+// A pasta de dados da candidatura (perfil do navegador, currículos, fotos) também começa vazia. Falha à parte: no Windows,
+// um navegador que ficou aberto de uma execução anterior segura o perfil, e isso nada tem a ver com o banco.
+try {
+  resetApplyDataDir();
+} catch (e) {
+  console.error(
+    `[e2e] falha ao esvaziar a pasta de dados da candidatura (${E2E_APPLY_DATA_DIR}): ${e instanceof Error ? e.message : String(e)}. ` +
+      'Feche o navegador do e2e que ficou aberto (ou o processo que usa a pasta) e rode de novo.',
+  );
   process.exit(1);
 }
