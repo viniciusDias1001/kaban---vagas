@@ -89,7 +89,7 @@ export function cardBadge(
   return null;
 }
 
-export const SOURCE_LABELS: Record<AnswerSource, string> = {
+export const ANSWER_SOURCE_LABELS: Record<AnswerSource, string> = {
   rule: 'regra', bank: 'sua resposta', profile: 'do perfil', written: 'escrita pela IA', blank: 'em branco',
 };
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { APPLICATION_STATUSES, NEEDS_HUMAN_REASONS, SKIP_REASONS, type AnswerSource, type ApplicationListItemDto, type ApplicationStatus, type ApplyStatusDto, type PendingQuestion, type Question } from '@kv/shared';
 import {
-  AI_ANSWER_LABELS, FILTER_LABELS, PENDING_KIND_LABELS, type ApplicationFilter, SOURCE_LABELS, STATUS_LABELS, applyErrorMessage, applyPollMs, cardBadge, filterApplications,
+  AI_ANSWER_LABELS, FILTER_LABELS, PENDING_KIND_LABELS, type ApplicationFilter, ANSWER_SOURCE_LABELS, STATUS_LABELS, applyErrorMessage, applyPollMs, cardBadge, filterApplications,
   filterCounts, reasonText, toPendingAnswersBody, validatePendingDrafts, type PendingDraft,
 } from './apply';
 
@@ -64,7 +64,7 @@ describe('texts', () => {
   });
   it('labels every answer source and AI answer mode', () => {
     const sources: AnswerSource[] = ['rule', 'bank', 'profile', 'written', 'blank'];
-    for (const s of sources) expect(SOURCE_LABELS[s]).toBeTruthy();
+    for (const s of sources) expect(ANSWER_SOURCE_LABELS[s]).toBeTruthy();
     expect(Object.keys(AI_ANSWER_LABELS)).toEqual(['off', 'review', 'auto']);
     expect(AI_ANSWER_LABELS.review.title).toBe('Com a sua aprovação');
     expect(PENDING_KIND_LABELS).toEqual({ unanswered: 'sem resposta', confirm_match: 'confirmar resposta salva', confirm_proposal: 'confirmar proposta da IA' });

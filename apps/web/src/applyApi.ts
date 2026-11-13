@@ -27,9 +27,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const text = await res.text().catch(() => '');
     throw new ApiError(res.status, applyErrorMessage(res.status, text));
   }
-  if (res.status === 204) return undefined as T;
+  // Um sucesso sem corpo (204, ou 202 sem corpo) não tem valor; só um corpo que não é JSON é resposta inesperada.
+  const text = await res.text().catch(() => '');
+  if (text.trim() === '') return undefined as T;
   try {
-    return (await res.json()) as T;
+    return JSON.parse(text) as T;
   } catch {
     throw new ApiError(res.status, 'A API respondeu algo inesperado. Confira se ela está no ar e tente de novo.');
   }
