@@ -155,14 +155,10 @@ export function condenseProfile(profile: CandidateProfile) {
  * voláteis, delimitados, com o aviso repetido depois deles.
  */
 export function buildPrompt(task: PromptTask, profile: unknown | null, data: unknown): { system: string; prompt: string } {
-  const rules =
-    task === 'apply_open'
-      ? `${INSTRUCTIONS[task]}\n\n${NO_INVENTION}\n\n${OPEN_ANSWER_RULES}`
-      : task === 'tier3'
-      ? `${INSTRUCTIONS[task]}\n\n${NO_INVENTION}\n\n${TAILORED_RULES}`
-      : task === 'profile_translate'
-        ? `${INSTRUCTIONS[task]}\n\n${TRANSLATION_RULES}`
-        : INSTRUCTIONS[task];
+  let rules = INSTRUCTIONS[task];
+  if (task === 'apply_open') rules += `\n\n${NO_INVENTION}\n\n${OPEN_ANSWER_RULES}`;
+  else if (task === 'tier3') rules += `\n\n${NO_INVENTION}\n\n${TAILORED_RULES}`;
+  else if (task === 'profile_translate') rules += `\n\n${TRANSLATION_RULES}`;
   const system = [rules, DATA_GUARD, profile === null ? null : block('perfil', profile)].filter(Boolean).join('\n\n');
   const prompt = `<tarefa>${task}</tarefa>\n${block('dados', data)}\n\n${DATA_GUARD}`;
   return { system, prompt };

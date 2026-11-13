@@ -10,7 +10,7 @@ import type { AiProvider } from './types';
 /** Teto da descrição enviada à conferência da vaga (o que passar disso é cortado no fim). */
 export const GATE_DESCRIPTION_CHARS = 12_000;
 /** Teto da descrição enviada à resposta aberta. */
-export const OPEN_DESCRIPTION_CHARS = 12_000;
+const OPEN_DESCRIPTION_CHARS = 12_000;
 
 const GATE_OUTPUT_TOKENS = 300;
 const OPEN_OUTPUT_TOKENS_MAX = 2_000;
