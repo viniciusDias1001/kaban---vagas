@@ -743,6 +743,93 @@ describe('fix round 5: symbols, action verbs, clause openers, "all" in the truth
   });
 });
 
+describe('polish: the parked consent items', () => {
+  const box = (label: string, help = '') => q(label, { kind: 'boolean', help });
+  const verdict = (label: string, help = '', company = 'Acme') => {
+    const rc: RuleContext = { ...ctx, job: { ...ctx.job, company } };
+    return [classifyByRule(box(label, help), company), answerByRule(box(label, help), 'consent', rc)];
+  };
+  const consent = (label: string, help = '', company = 'Acme') =>
+    expect(verdict(label, help, company), `${label} | ${help} | ${company}`).toEqual(['consent', true]);
+  const personal = (label: string, help = '', company = 'Acme') =>
+    expect(verdict(label, help, company), `${label} | ${help} | ${company}`).toEqual(['personal', undefined]);
+
+  it('1: only the contiguous truthfulness phrase is marked', () => {
+    for (const label of ['I agree to the privacy policy and my data and the information is accurate',
+      'I consent to your data and my application is complete', 'I accept your statements and my answers are true',
+      'I agree to complete the recruitment process and the information is true'])
+      personal(label);
+    for (const label of ['I certify that the information provided in this application is true and complete',
+      'Declaro que as informações prestadas são verdadeiras', 'I confirm that all information provided is true, accurate and complete'])
+      consent(label);
+  });
+
+  it('2: "all" and "todos" are consumed only inside the truth phrase they belong to', () => {
+    for (const label of ['I consent to data processing for all data and the application is true',
+      'I consent to data processing for all data and my application is complete', 'I agree to all data and my application is true',
+      'Autorizo todos os dados e minha candidatura é verdadeira'])
+      personal(label);
+  });
+
+  it('3: "o que", "aquilo que", "tudo o que" and "what", "whatever", "anything", "everything" point elsewhere', () => {
+    for (const label of ['Concordo com a política de privacidade e com o que eu autorizo',
+      'Concordo com a política de privacidade e com tudo o que eu li', 'Concordo com a política de privacidade e com aquilo que eu li',
+      'Li e concordo com tudo que li e com a política de privacidade',
+      'I agree to the privacy policy and what I read', 'I agree to the privacy policy and whatever you send',
+      'I agree to the privacy policy and anything', 'I agree to everything and the privacy policy'])
+      personal(label);
+    consent('Declaro que li a política de privacidade');
+  });
+
+  it('4: a company name with "&" or "+" is read like the label', () => {
+    consent('I agree to the privacy policy of Johnson & Johnson', '', 'Johnson & Johnson');
+    consent('I agree to the AT&T privacy policy', '', 'AT&T');
+    consent('I agree to the Johnson and Johnson privacy policy', '', 'Johnson & Johnson');
+    consent('Concordo com a política de privacidade da Mar + Sol', '', 'Mar + Sol');
+    personal('I agree to the privacy policy of Johnson', '', 'Johnson & Johnson');
+    personal('I agree to the privacy policy and Johnson & Johnson', '', 'Johnson & Johnson');
+  });
+
+  it('5: the checkbox preamble is an act phrase', () => {
+    for (const label of ['By checking this box, I agree to the privacy policy',
+      'Ao marcar esta caixa, declaro que li e aceito a política de privacidade', 'By ticking the box, I accept the terms of use',
+      'By selecting this checkbox, I consent to the processing of my personal data', 'By clicking this box, I agree to the privacy policy',
+      'Ao selecionar esta opção, concordo com os termos de uso', 'Ao clicar na caixa de seleção, aceito a política de privacidade'])
+      consent(label);
+    for (const label of ['By checking this box, I agree to the privacy policy and to work weekends',
+      'By clicking here, I agree to the privacy policy', 'By checking the boxes below, I agree to the privacy policy',
+      'By checking, I agree to the privacy policy', 'Ao marcar, concordo com a política de privacidade'])
+      personal(label);
+  });
+
+  it('own probes: wrong acceptances through the truth phrase and the new act phrases are refused', () => {
+    for (const label of [
+      // Veracidade.
+      "I certify that Acme's statements are accurate",
+      'I confirm your answers are true',
+      'I certify that the information is true and complete and final',
+      'I confirm that the information is accurate and the selection process is complete',
+      'I certify that all the information is true and all data',
+      'Declaro que as informações são verdadeiras e completas e os dados',
+      'I certify that the information is true, my data',
+      // Frases de ato.
+      'By checking this box I agree to this and the privacy policy',
+      'By checking this box and the boxes below, I agree to the privacy policy',
+      'Ao marcar esta caixa, concordo com a política de privacidade e com o que eu autorizo',
+      'Ao clicar nesta opção, aceito os termos de uso abaixo',
+      'By checking this, I agree to the privacy policy',
+    ])
+      personal(label);
+  });
+
+  it('a truthfulness statement without an agreement expression is left to the model, never answered', () => {
+    for (const label of ['Informações verdadeiras', 'The information provided is true']) {
+      expect(classifyByRule(box(label), 'Acme'), label).toBeNull();
+      expect(answerByRule(box(label), 'consent', ctx), label).toBeUndefined();
+    }
+  });
+});
+
 describe('fix round 1: a bare name field', () => {
   it('is the first name when the step also asks for the last name, the full name otherwise', () => {
     expect(answerByRule(q('Nome'), 'identity', ctx)).toBe('Maria Exemplo da Silva');
