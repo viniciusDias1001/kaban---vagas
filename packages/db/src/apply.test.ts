@@ -5,7 +5,7 @@ import { closeDb, type Db } from './index';
 import {
   listApplicationEvents, applicationForJob, applyCandidates, applyCountsSince, companyFormsSince, createApplication,
   deleteApplyData, enqueueApplyCommand, finishApplyCommand, listApplications, nextApplyCommand, nextQueuedApplication,
-  recoverApplications, requestCancel, siteState, toApplicationDto, transitionApplication, updateSiteState,
+  recoverApplications, recoverApplyCommands, requestCancel, siteState, toApplicationDto, transitionApplication, updateSiteState,
 } from './apply';
 import { deleteAllAiData } from './ai';
 import { applications, applyAnswers, applyCommands, candidateProfiles, jobAi, jobs } from './schema';
@@ -69,7 +69,7 @@ describe('createApplication / transitionApplication', () => {
     expect(row).toMatchObject({ startedAt: 2000, submittedAt: 3000, finishedAt: 3000 });
     const failed = await create('fake', 'auto', 1);
     await transitionApplication(db, failed.id, { status: 'failed', detail: 'x' }, 4000);
-    expect(await applicationForJob(db, failed.job.id)).toMatchObject({ startedAt: 4000, finishedAt: 4000, detail: 'x' });
+    expect(await applicationForJob(db, failed.job.id)).toMatchObject({ startedAt: null, finishedAt: 4000, detail: 'x' });
   });
 
   it('applies the set fields and clears reason and detail when omitted', async () => {
@@ -78,6 +78,19 @@ describe('createApplication / transitionApplication', () => {
     expect(await applicationForJob(db, job.id)).toMatchObject({ reason: 'question', detail: 'd', waitingGate: 'captcha', attempts: 2 });
     await transitionApplication(db, id, { status: 'queued' }, 2100);
     expect(await applicationForJob(db, job.id)).toMatchObject({ reason: null, detail: null, waitingGate: 'captcha' });
+  });
+
+  it('refuses a guarded transition when the status changed, and leaves unguarded ones alone', async () => {
+    const { job, id } = await create();
+    const picked = await nextQueuedApplication(db, { excludeSites: [] }, 5000);
+    expect(picked!.id).toBe(id);
+    expect(await requestCancel(db, job.id, 5001)).toBe(true);
+    expect(await transitionApplication(db, id, { status: 'preparing', from: ['queued'] }, 5002)).toBe(false);
+    expect(await applicationForJob(db, job.id)).toMatchObject({ status: 'cancelled', startedAt: null });
+    expect(await listApplicationEvents(db, id)).toHaveLength(2);
+    expect(await transitionApplication(db, id, { status: 'queued' }, 5003)).toBe(true);
+    expect(await transitionApplication(db, id, { status: 'preparing', from: ['queued'] }, 5004)).toBe(true);
+    expect(await applicationForJob(db, job.id)).toMatchObject({ status: 'preparing', startedAt: 5004 });
   });
 
   it('returns false for an unknown id', async () => {
@@ -223,6 +236,19 @@ describe('recovery and cancellation', () => {
     await transitionApplication(db, submitted.id, { status: 'submitted' }, 2000);
     expect(await requestCancel(db, queued.job.id, 3000)).toBe(true);
     expect(await applicationForJob(db, queued.job.id)).toMatchObject({ status: 'cancelled', finishedAt: 3000 });
+    const parked = await create();
+    const dry = await create();
+    const sending = await create();
+    await transitionApplication(db, parked.id, { status: 'needs_human', reason: 'question' }, 2000);
+    await transitionApplication(db, dry.id, { status: 'dry_run_ready' }, 2000);
+    await transitionApplication(db, sending.id, { status: 'submitting' }, 2000);
+    expect(await requestCancel(db, parked.job.id, 3000)).toBe(true);
+    expect(await applicationForJob(db, parked.job.id)).toMatchObject({ status: 'cancelled', finishedAt: 3000 });
+    expect(await requestCancel(db, dry.job.id, 3000)).toBe(true);
+    expect(await applicationForJob(db, dry.job.id)).toMatchObject({ status: 'cancelled' });
+    expect(await requestCancel(db, sending.job.id, 3000)).toBe(true);
+    expect(await applicationForJob(db, sending.job.id)).toMatchObject({ status: 'submitting', cancelRequested: true });
+    expect(await requestCancel(db, queued.job.id, 3000)).toBe(false);
     expect(await requestCancel(db, running.job.id, 3000)).toBe(true);
     expect(await applicationForJob(db, running.job.id)).toMatchObject({ status: 'filling', cancelRequested: true });
     expect(await requestCancel(db, submitted.job.id, 3000)).toBe(false);
@@ -244,6 +270,17 @@ describe('commands and site state', () => {
     const [row] = await db.select().from(applyCommands).where(eq(applyCommands.id, next.id));
     expect(row).toMatchObject({ status: 'error', result: 'falhou', finishedAt: 20 });
     expect(await enqueueApplyCommand(db, 'check_session', 'linkedin', 30)).not.toBeNull();
+  });
+
+  it('recovers commands left running by a crash', async () => {
+    await enqueueApplyCommand(db, 'open_login', 'lever', 10);
+    await nextApplyCommand(db);
+    expect(await enqueueApplyCommand(db, 'open_login', 'lever', 11)).toBeNull();
+    expect(await recoverApplyCommands(db, 50)).toBe(1);
+    const [row] = await db.select().from(applyCommands);
+    expect(row).toMatchObject({ status: 'error', result: 'interrompido: o worker reiniciou', finishedAt: 50 });
+    expect(await enqueueApplyCommand(db, 'open_login', 'lever', 60)).not.toBeNull();
+    expect(await recoverApplyCommands(db, 70)).toBe(0);
   });
 
   it('returns null when there is no command', async () => {

@@ -37,6 +37,8 @@ export async function createApplication(
 
 export interface Transition {
   status: ApplicationStatus;
+  /** Só grava se o estado atual está na lista (a leitura e a escrita são na mesma transação travada); senão devolve false. */
+  from?: readonly ApplicationStatus[];
   reason?: ApplicationReason | null;
   detail?: string | null;
   /** Texto do evento na linha do tempo. */
@@ -59,7 +61,7 @@ async function writeTransition(tx: Db, row: ApplicationRow, t: Transition, now: 
       // Quem sai de um estado de espera não carrega o motivo anterior: só fica o que a transição declara.
       reason: t.reason ?? null,
       detail: t.detail ?? null,
-      ...(row.startedAt === null && row.status === 'queued' && t.status !== 'queued' ? { startedAt: now } : {}),
+      ...(row.startedAt === null && (RUNNING_STATUSES as readonly string[]).includes(t.status) ? { startedAt: now } : {}),
       ...(t.status === 'submitted' ? { submittedAt: now } : {}),
       ...(FINAL_STATUSES.includes(t.status) ? { finishedAt: now } : {}),
     })
@@ -76,12 +78,18 @@ export async function transitionApplication(db: Db, id: number, t: Transition, n
   return db.transaction(async (tx) => {
     const [row] = await tx.select().from(applications).where(eq(applications.id, id)).for('update');
     if (!row || row.status === 'submitted') return false;
+    if (t.from && !t.from.includes(row.status)) return false;
     await writeTransition(tx, row, t, now);
     return true;
   });
 }
 
-/** A próxima: `queued` com `run_after` vencido e site fora de `excludeSites`; manuais primeiro, depois a mais antiga. */
+/**
+ * A próxima: `queued` com `run_after` vencido e site fora de `excludeSites`; manuais primeiro, depois a mais antiga.
+ * A leitura não trava a linha: quem a pega deve reivindicá-la com
+ * `transitionApplication(db, id, { status: 'preparing', from: ['queued'] })` e pulá-la se isso devolver false (o dono pode
+ * ter cancelado entre a leitura e a gravação).
+ */
 export async function nextQueuedApplication(
   db: Db,
   opts: { excludeSites: ApplySiteId[] },
@@ -265,12 +273,16 @@ export async function recoverApplications(db: Db, now: number = Date.now()): Pro
   return { requeued, unconfirmed };
 }
 
-/** O dono moveu o card: `queued` vira `cancelled`; em andamento, liga `cancel_requested`. Devolve se havia o que cancelar. */
+/**
+ * O dono moveu o card: `queued`, `needs_human` e `dry_run_ready` viram `cancelled` na hora; `preparing`, `filling`,
+ * `waiting_human` e `submitting` ganham `cancel_requested` (o worker para). `submitted`, `skipped`, `failed` e `cancelled`
+ * ficam como estão. Devolve se havia o que cancelar.
+ */
 export async function requestCancel(db: Db, jobId: number, now: number = Date.now()): Promise<boolean> {
   return db.transaction(async (tx) => {
     const [row] = await tx.select().from(applications).where(eq(applications.jobId, jobId)).for('update');
     if (!row) return false;
-    if (row.status === 'queued') {
+    if (row.status === 'queued' || row.status === 'needs_human' || row.status === 'dry_run_ready') {
       await writeTransition(tx, row, { status: 'cancelled', message: 'Cancelada pelo dono.' }, now);
       return true;
     }
@@ -298,6 +310,19 @@ export async function enqueueApplyCommand(
     .onConflictDoNothing()
     .returning({ id: applyCommands.id });
   return row?.id ?? null;
+}
+
+/**
+ * No início do worker: todo comando `running` ficou para trás (o índice único parcial o manteria bloqueando o mesmo tipo e
+ * site para sempre) e vira `error`. Devolve quantos.
+ */
+export async function recoverApplyCommands(db: Db, now: number = Date.now()): Promise<number> {
+  const rows = await db
+    .update(applyCommands)
+    .set({ status: 'error', result: 'interrompido: o worker reiniciou', finishedAt: now })
+    .where(eq(applyCommands.status, 'running'))
+    .returning({ id: applyCommands.id });
+  return rows.length;
 }
 
 /** O mais antigo na fila, marcado `running`. */

@@ -348,7 +348,7 @@ export const applyCommands = pgTable(
   {
     id: integer('id').primaryKey().generatedAlwaysAsIdentity(),
     kind: text('kind').notNull(),
-    site: text('site').$type<ApplySiteId>().notNull(),
+    site: text('site').$type<ApplySiteId | ''>().notNull(),
     status: text('status').$type<RunStatus>().notNull(),
     result: text('result'),
     createdAt: epochMs('created_at').notNull(),
