@@ -23,14 +23,29 @@ export function browserProfileDir(dataDir: string): string {
   return join(dataDir, 'browser');
 }
 
+/**
+ * O perfil do Chromium do Playwright que abre o site de teste (`FAKE_APPLY_SITE=1`), separado do perfil do navegador
+ * real do dono: o mesmo perfil em dois navegadores dá conflito de versão e de trava.
+ */
+export function fakeBrowserProfileDir(dataDir: string): string {
+  return join(dataDir, 'browser-fake');
+}
+
 export function shotPath(dataDir: string, applicationId: number, kind: ShotKind): { absolute: string; relative: string } {
   const rel = `shots/${applicationId}/${kind}.jpg`;
   return { absolute: join(dataDir, rel), relative: rel };
 }
 
-/** Caminho absoluto de uma foto gravada, ou null se o relativo sai da pasta de dados. */
+/** O formato que `shotPath` grava: `shots/<id da candidatura>/<arquivo>`. */
+const SHOT = /^shots\/\d+\/[^/]+$/;
+
+/**
+ * Caminho absoluto de uma foto gravada, ou null se o relativo não tem o formato de `shotPath` (só fotos: nunca o
+ * perfil do navegador, os PDFs ou outro arquivo da pasta de dados) ou sai da pasta de dados.
+ */
 export function resolveShot(dataDir: string, rel: string): string | null {
   if (!rel || isAbsolute(rel) || posix.isAbsolute(rel) || win32.isAbsolute(rel)) return null;
+  if (!SHOT.test(rel)) return null;
   // Os caminhos gravados usam só "/": barra invertida, letra de unidade e segmentos ".." nunca são legítimos.
   if (rel.includes('\\')|| rel.includes(':') || rel.split('/').includes('..')) return null;
   const root = resolve(dataDir);

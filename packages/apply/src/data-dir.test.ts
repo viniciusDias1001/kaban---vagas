@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { applyDataDir, browserProfileDir, resolveShot, shotPath } from './data-dir';
+import { applyDataDir, browserProfileDir, fakeBrowserProfileDir, resolveShot, shotPath } from './data-dir';
 
 describe('data folder', () => {
   it('resolves the data folder per platform', () => {
@@ -23,6 +23,17 @@ describe('data folder', () => {
     expect(resolveShot('/data', 'shots/7/filled.jpg')).toBe(join('/data', 'shots/7/filled.jpg'));
     expect(resolveShot('/data', '../etc/passwd')).toBeNull();
     expect(resolveShot('/data', '/etc/passwd')).toBeNull();
+  });
+  it('serves only a photo under shots/<application id>/, never another file of the data folder', () => {
+    for (const bad of ['browser/Default/Cookies', 'resumes/7/cv.pdf', 'smoke/lever-1.png', 'shots', 'shots/7', 'shots/x/filled.jpg',
+      'shots/7/sub/filled.jpg', 'shots//filled.jpg', './shots/7/filled.jpg']) {
+      expect(resolveShot('/data', bad), bad).toBeNull();
+    }
+    expect(resolveShot('/data', 'shots/12/confirmation.jpg')).toBe(join('/data', 'shots/12/confirmation.jpg'));
+  });
+  it('names the profile folder of the test site browser apart from the real one', () => {
+    expect(fakeBrowserProfileDir('/data')).toBe(join('/data', 'browser-fake'));
+    expect(fakeBrowserProfileDir('/data')).not.toBe(browserProfileDir('/data'));
   });
   it('rejects the Windows and nested traversal forms too', () => {
     for (const bad of ['..\\x', 'C:\\x', 'C:x', '\\\\srv\\s','a/../../x', 'a/../x']) {
