@@ -175,6 +175,19 @@ export function emailConversation({ messages, replies }: JobEmailsDto): Conversa
   });
 }
 
+const sameAddress = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+
+/**
+ * A resposta vai para outro endereço que não o de quem escreveu (um Reply-To, por exemplo): o sino e o painel da vaga
+ * avisam. `origin` é o e-mail recebido, ou a conversa carregada, onde ele é achado pelo id; sem ele, não há aviso.
+ */
+export function replyGoesElsewhere(reply: MailReplyDto, origin: MailMessageDto | readonly MailMessageDto[] | undefined): boolean {
+  const from = Array.isArray(origin)
+    ? (origin as readonly MailMessageDto[]).find((m) => m.id === reply.messageId)
+    : (origin as MailMessageDto | undefined);
+  return from !== undefined && !sameAddress(reply.toAddress, from.fromAddress);
+}
+
 /** O e-mail que moveu o card, numa linha do histórico: "E-mail — Reprovação: Sua candidatura na Acme". */
 export function historyMailLine(mail: { kind: EmailKind | null; subject: string }): string {
   const subject = mail.subject.trim() || '(sem assunto)';

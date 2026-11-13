@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { MailMessageDto, MailReplyDto } from '@kv/shared/client';
-import { emailConversation, historyMailLine } from './email';
+import { emailConversation, historyMailLine, replyGoesElsewhere } from './email';
 
 const message = (over: Partial<MailMessageDto> = {}): MailMessageDto => ({
   id: 1, messageId: '<in-1@acme.example>', threadKey: 't1', direction: 'in', fromAddress: 'ana@acme.example', fromName: 'Ana',
@@ -72,5 +72,21 @@ describe('historyMailLine', () => {
   it('works without a kind and without a subject', () => {
     expect(historyMailLine({ kind: null, subject: 'Olá' })).toBe('E-mail — Olá');
     expect(historyMailLine({ kind: 'entrevista', subject: '  ' })).toBe('E-mail — Entrevista: (sem assunto)');
+  });
+});
+
+describe('replyGoesElsewhere', () => {
+  it('warns when the reply goes to an address that is not the sender, ignoring case and spaces', () => {
+    const invite = message({ fromAddress: 'ana@acme.example' });
+    expect(replyGoesElsewhere(reply({ toAddress: 'agenda@scheduler.example' }), invite)).toBe(true);
+    expect(replyGoesElsewhere(reply({ toAddress: ' ANA@Acme.example ' }), invite)).toBe(false);
+  });
+
+  it('finds the origin among the loaded messages, and stays quiet when it is not there', () => {
+    const messages = [message({ id: 1, fromAddress: 'ana@acme.example' }), message({ id: 2, fromAddress: 'rh@globex.example' })];
+    expect(replyGoesElsewhere(reply({ messageId: 2, toAddress: 'rh@globex.example' }), messages)).toBe(false);
+    expect(replyGoesElsewhere(reply({ messageId: 1, toAddress: 'rh@globex.example' }), messages)).toBe(true);
+    expect(replyGoesElsewhere(reply({ messageId: 99, toAddress: 'x@example.com' }), messages)).toBe(false);
+    expect(replyGoesElsewhere(reply({ toAddress: 'x@example.com' }), undefined)).toBe(false);
   });
 });

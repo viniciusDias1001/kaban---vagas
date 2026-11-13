@@ -5,7 +5,7 @@ import {
 import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { AlertDto, AlertKind } from '@kv/shared/client';
-import { alertAction, alertBody, alertCanLink, alertTitle, alertsToNotify } from '../lib/email';
+import { alertAction, alertBody, alertCanLink, alertTitle, alertsToNotify, replyGoesElsewhere } from '../lib/email';
 import { spring, springSnap } from '../lib/motion';
 import { cn } from '../lib/utils';
 import { useAlertActions, useAlerts, useJobEmails, useMessageActions } from '../useEmail';
@@ -360,10 +360,12 @@ function AlertDraft({ alert, jobId, replyId, disabled }: { alert: AlertDto; jobI
       : null;
   }
   if (reply.state !== 'rascunho' && reply.state !== 'falhou') return null;
+  // O mesmo critério do painel da vaga: o endereço da resposta contra o remetente do e-mail a que ela responde.
+  const otherRecipient = replyGoesElsewhere(reply, emails.data?.messages);
   return (
     <div className="mt-3.5">
       <ReplyDraftEditor
-        reply={reply} jobId={jobId} disabled={disabled} otherRecipient={!!alert.payload.recipient?.trim()}
+        reply={reply} jobId={jobId} disabled={disabled} otherRecipient={otherRecipient}
         ids={{
           text: `alert-draft-${alert.id}`, approve: `alert-approve-${alert.id}`, save: `alert-save-${alert.id}`,
           discard: `alert-discard-${alert.id}`, discardDialog: `alert-discard-confirm-${alert.id}`, error: `alert-error-${alert.id}`,

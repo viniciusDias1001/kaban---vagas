@@ -5,7 +5,7 @@ import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import {
   COLUMN_LABELS, EMAIL_KIND_LABELS, type JobDto, type MailMessageDto, type MailReplyDto, type ReplyState,
 } from '@kv/shared/client';
-import { emailConversation, replyStateLabel, type ConversationItem } from '../lib/email';
+import { emailConversation, replyGoesElsewhere, replyStateLabel, type ConversationItem } from '../lib/email';
 import { spring } from '../lib/motion';
 import { EYEBROW } from '../lib/styles';
 import { cn } from '../lib/utils';
@@ -37,8 +37,6 @@ function useFailure() {
     return messageOf(e);
   };
 }
-
-const sameAddress = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
 
 function InlineError({ error, testId }: { error: string | null; testId: string }) {
   if (!error) return null;
@@ -105,7 +103,7 @@ function SentBy({ approvedBy, sentAt }: { approvedBy: 'auto' | 'owner' | null; s
 
 /** Para quem a resposta vai; quando não é quem escreveu, isso é dito com o endereço (e o "Para:" não se repete). */
 function Recipient({ reply, origin }: { reply: MailReplyDto; origin: MailMessageDto | undefined }) {
-  const differs = origin !== undefined && !sameAddress(reply.toAddress, origin.fromAddress);
+  const differs = replyGoesElsewhere(reply, origin);
   return (
     <div className="space-y-1">
       {differs ? (
@@ -135,7 +133,7 @@ function ReplyBlock({ reply, origin, jobId }: { reply: MailReplyDto; origin: Mai
     body = (
       <ReplyDraftEditor
         reply={reply} jobId={jobId} failedText={<FoldedText text={reply.body} />}
-        otherRecipient={origin !== undefined && !sameAddress(reply.toAddress, origin.fromAddress)}
+        otherRecipient={replyGoesElsewhere(reply, origin)}
         ids={{
           text: `job-reply-text-${reply.id}`, approve: `job-reply-approve-${reply.id}`, save: `job-reply-save-${reply.id}`,
           discard: `job-reply-discard-${reply.id}`, discardDialog: `job-reply-discard-dialog-${reply.id}`, error: `job-reply-error-${reply.id}`,
