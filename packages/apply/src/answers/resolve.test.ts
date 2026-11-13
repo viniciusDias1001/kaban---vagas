@@ -25,7 +25,7 @@ const ctx: ResolveInput['ctx'] = {
   sourceLabel: 'LinkedIn', resumeFileName: 'Maria_Exemplo_CV.pdf', company: 'Acme', jobId: 1, country: 'BR',
 };
 const input = (questions: Question[], bank: ApplyAnswerRow[] = [], over: Partial<ResolveInput> = {}): ResolveInput => ({
-  questions, bank, ctx, aiAnswers: 'review', previous: [], ...over,
+  questions, bank, ctx, aiAnswers: 'review', approved: [], ...over,
 });
 
 const deps = {
@@ -54,7 +54,7 @@ describe('questions the model must never answer', () => {
     const res = await resolveAnswers(input([select('q1', 'Are you legally authorized to work in the US?', ['Yes', 'No'], true)], bank), deps);
     expect(res.answers).toEqual([]);
     expect(res.pending).toEqual([expect.objectContaining({ kind: 'confirm_match', category: 'personal',
-      proposal: { bankAnswerId: 7, bankQuestion: 'Precisa de patrocínio de visto?', value: 'No', source: 'bank', basis: [] } })]);
+      proposal: { bankAnswerId: 7, bankQuestion: 'Precisa de patrocínio de visto?', bankAnswer: 'Não', value: 'No', source: 'bank', basis: [] } })]);
     expect(res.usedBankIds).toEqual([]);
   });
 
@@ -69,7 +69,7 @@ describe('questions the model must never answer', () => {
       const questions = [
         q('q1', 'Valor', true, { help: 'Informe sua pretensão salarial' }),
         select('q2', 'Status', ['I will require visa sponsorship', 'I will not'], true),
-        q('q3', 'Quanto você ganha hoje?', true),
+        q('q3', 'Algo sobre você que só você sabe', true),
         q('q4', 'Como você se identifica?', true),
         q('q5', 'Gênero', true),
       ];
@@ -107,7 +107,7 @@ describe('questions the model must never answer', () => {
   it('does not answer a question the model calls consent or identity unless a rule recognizes it', async () => {
     modelSays({ q1: 'consent', q2: 'identity', q3: 'origin' });
     const res = await resolveAnswers(input([
-      q('q1', 'I certify that all information I gave is true', true, { kind: 'boolean' }),
+      q('q1', 'I commit to the on-call rotation', true, { kind: 'boolean' }),
       q('q2', 'Name of the person who referred you', true),
       q('q3', 'Who referred you?', true),
     ]), deps);
@@ -130,10 +130,20 @@ describe('answers proposed by the model', () => {
     expect(res.answers).toEqual([]);
     expect(res.pending).toEqual([
       { question: fact, category: 'profile_fact', kind: 'confirm_proposal',
-        proposal: { bankAnswerId: null, bankQuestion: null, value: '5', source: 'profile', basis: ['exp_aaaaaaa1'] } },
+        proposal: { bankAnswerId: null, bankQuestion: null, bankAnswer: null, value: '5', source: 'profile', basis: ['exp_aaaaaaa1'] } },
       { question: open, category: 'open', kind: 'confirm_proposal',
-        proposal: { bankAnswerId: null, bankQuestion: null, value: 'Porque gosto do produto.', source: 'written', basis: [] } },
+        proposal: { bankAnswerId: null, bankQuestion: null, bankAnswer: null, value: 'Porque gosto do produto.', source: 'written', basis: [] } },
     ]);
+  });
+
+  it('in review mode, an optional profile fact is left blank and the model is not asked; in auto it is answered', async () => {
+    const optional = { ...fact, required: false };
+    const review = await resolveAnswers(input([optional], [], { aiAnswers: 'review' }), deps);
+    expect(deps.profileFacts).not.toHaveBeenCalled();
+    expect(review.pending).toEqual([]);
+    expect(review.answers).toEqual([expect.objectContaining({ questionId: 'q1', source: 'blank', value: null })]);
+    const auto = await resolveAnswers(input([optional], [], { aiAnswers: 'auto' }), deps);
+    expect(auto.answers).toEqual([expect.objectContaining({ questionId: 'q1', source: 'profile', value: '5' })]);
   });
 
   it('writes an open answer only for a required question; an optional one is left blank, in review and in auto', async () => {
@@ -235,6 +245,41 @@ describe('resolution order', () => {
     expect(res.pending).toEqual([expect.objectContaining({ category: 'profile_fact', kind: 'unanswered' })]);
   });
 
+  it('in auto, a declined worked-here question goes straight to the owner: no saved answer, no proposal, no profile fact', async () => {
+    modelSays({ q1: 'profile_fact' });
+    deps.profileFacts.mockResolvedValue(new Map([['q1', { value: 'Yes', basis: ['exp_aaaaaaa1'] }]]));
+    const exp = { id: 'exp_aaaaaaa1', company: 'Minsait (Indra)', title: 'Dev', start: '2020-01', end: '2022-01', location: '', achievements: [] };
+    const indra = { ...ctx, company: 'Indra', job: { ...ctx.job, company: 'Indra' }, profile: { ...profile, experiences: [exp] } };
+    const bank = [a({ id: 31, question: 'Have you previously worked at Indra?', answer: 'No' })];
+    deps.proposeMatches.mockResolvedValue(new Map([['q1', { bankAnswerId: 31, option: 'No' }]]));
+    const res = await resolveAnswers(input([select('q1', 'Have you previously worked at Indra?', ['Yes', 'No'])], bank, { ctx: indra, aiAnswers: 'auto' }), deps);
+    expect(deps.profileFacts).not.toHaveBeenCalled();
+    expect(deps.proposeMatches).not.toHaveBeenCalled();
+    expect(res.answers).toEqual([]);
+    expect(res.pending).toEqual([expect.objectContaining({ category: 'profile_fact', kind: 'unanswered', proposal: null })]);
+  });
+
+  it('treats a worked-here question by its own rule whatever category the model gives', async () => {
+    modelSays({ q1: 'open' });
+    const res = await resolveAnswers(input([select('q1', 'Have you previously worked at Acme?', ['Yes', 'No'])], [], { aiAnswers: 'auto' }), deps);
+    expect(deps.writeOpen).not.toHaveBeenCalled();
+    expect(res.answers).toEqual([expect.objectContaining({ value: 'No', source: 'rule', category: 'profile_fact' })]);
+  });
+
+  it('never offers an unanswered file question to proposeMatches', async () => {
+    const bank = [a({ question: 'Cover letter', answer: 'x' })];
+    const res = await resolveAnswers(input([q('q1', 'Cover letter', true, { kind: 'file' })], bank), deps);
+    expect(deps.proposeMatches).not.toHaveBeenCalled();
+    expect(res.pending).toEqual([expect.objectContaining({ kind: 'unanswered', category: 'file' })]);
+  });
+
+  it('a bare name field gets the first name when the step also has a last-name field', async () => {
+    const res = await resolveAnswers(input([q('q1', 'Nome'), q('q2', 'Sobrenome')]), deps);
+    expect(res.answers.map((x) => x.value)).toEqual(['Maria', 'Exemplo']);
+    const alone = await resolveAnswers(input([q('q1', 'Nome')]), deps);
+    expect(alone.answers.map((x) => x.value)).toEqual(['Maria Exemplo']);
+  });
+
   it('leaves optional questions blank and makes required ones pending', async () => {
     const res = await resolveAnswers(input([q('q1', 'Algo que ninguém sabe', false), q('q2', 'Outra coisa', true)]), deps);
     expect(res.answers).toEqual([expect.objectContaining({ questionId: 'q1', source: 'blank', value: null })]);
@@ -259,35 +304,52 @@ describe('resolution order', () => {
     expect(res.answers).toEqual([expect.objectContaining({ questionId: 'q1', value: 'Feminino', source: 'bank', bankAnswerId: 5 })]);
   });
 
-  it('repeats the rehearsal answers verbatim', async () => {
-    const previous: AnswerRecord[] = [{
-      questionId: 'old-id', label: 'Why do you want to work here?', kind: 'text', options: [], required: true,
-      value: 'Texto aprovado.', source: 'written', category: 'open', basis: [], bankAnswerId: null,
-    }];
-    const res = await resolveAnswers(input([q('q1', 'Why do you want to work here?'), q('q2', 'Outra coisa')], [], { previous }), deps);
-    expect(res.answers).toEqual([{ questionId: 'q1', value: 'Texto aprovado.', source: 'written', category: 'open', basis: [], bankAnswerId: null }]);
-    for (const spy of [deps.classify, deps.proposeMatches, deps.profileFacts]) expect(idsOf(spy.mock.calls.map((c) => c[0]))).not.toContain('q1');
-    expect(deps.writeOpen.mock.calls.map((c) => c[0].id)).not.toContain('q1');
+  const record = (over: Partial<AnswerRecord> & Pick<AnswerRecord, 'label' | 'value' | 'source'>): AnswerRecord => ({
+    questionId: 'old-id', help: '', kind: 'text', options: [], required: true, category: 'open', basis: [], bankAnswerId: null, ...over,
   });
 
-  it('does not repeat a rehearsal answer when the options or the kind changed', async () => {
-    const previous: AnswerRecord[] = [{
-      questionId: 'q1', label: 'Nível de inglês', kind: 'select', options: ['Básico', 'Fluente'], required: true,
-      value: 'Fluente', source: 'bank', category: 'unknown', basis: [], bankAnswerId: 2,
-    }];
-    const res = await resolveAnswers(input([select('q1', 'Nível de inglês', ['Básico', 'Intermediário', 'Fluente'])], [], { previous }), deps);
+  it('repeats the approved rehearsal answers verbatim, model answers included, in every mode', async () => {
+    const approved = [record({ label: 'Why do you want to work here?', value: 'Texto aprovado.', source: 'written' })];
+    for (const aiAnswers of ['off', 'review', 'auto'] as const) {
+      vi.clearAllMocks();
+      const res = await resolveAnswers(input([q('q1', 'Why do you want to work here?'), q('q2', 'Outra coisa')], [], { approved, aiAnswers }), deps);
+      expect(res.answers).toEqual([{ questionId: 'q1', value: 'Texto aprovado.', source: 'written', category: 'open', basis: [], bankAnswerId: null }]);
+      for (const spy of [deps.classify, deps.proposeMatches, deps.profileFacts]) expect(idsOf(spy.mock.calls.map((c) => c[0]))).not.toContain('q1');
+      expect(deps.writeOpen.mock.calls.map((c) => c[0].id)).not.toContain('q1');
+    }
+  });
+
+  it('does not repeat an approved answer when the options, the kind or the help text changed', async () => {
+    const approved = [
+      record({ label: 'Nível de inglês', kind: 'select', options: ['Básico', 'Fluente'], value: 'Fluente', source: 'rule', category: 'unknown' }),
+      record({ label: 'Conte sobre você', help: 'Em até 200 caracteres', value: 'Texto.', source: 'written' }),
+    ];
+    const res = await resolveAnswers(input([select('q1', 'Nível de inglês', ['Básico', 'Intermediário', 'Fluente']),
+      q('q2', 'Conte sobre você', true, { help: 'Fale do seu último projeto' })], [], { approved }), deps);
     expect(res.answers).toEqual([]);
-    expect(deps.classify).toHaveBeenCalled();
+    expect(idsOf(deps.classify.mock.calls.map((c) => c[0]))).toEqual(['q1', 'q2']);
+  });
+
+  it('repeats an approved saved answer only while the saved answer still gives the same value', async () => {
+    const approved = [record({ label: 'Pronomes', value: 'ela/dela', source: 'bank', category: 'demographic', bankAnswerId: 41 })];
+    const same = await resolveAnswers(input([q('q1', 'Pronomes')], [a({ id: 41, question: 'Pronomes', answer: 'ela/dela' })], { approved }), deps);
+    expect(same.answers).toEqual([expect.objectContaining({ value: 'ela/dela', source: 'bank', bankAnswerId: 41 })]);
+
+    const edited = await resolveAnswers(input([q('q1', 'Pronomes')], [a({ id: 41, question: 'Pronomes', answer: 'elu/delu' })], { approved }), deps);
+    expect(edited.answers).toEqual([expect.objectContaining({ value: 'elu/delu', source: 'bank', bankAnswerId: 41 })]);
+
+    const deleted = await resolveAnswers(input([q('q1', 'Pronomes')], [], { approved }), deps);
+    expect(deleted.answers).toEqual([]);
+    expect(deleted.pending).toEqual([expect.objectContaining({ kind: 'unanswered' })]);
   });
 
   it('lists the bank answers it used', async () => {
     const bank = [a({ id: 11, question: 'Pretensão salarial', answer: '15000' }), a({ id: 12, question: 'Pronomes', answer: 'ela/dela' }),
-      a({ id: 13, question: 'Nunca usada', answer: 'x' })];
-    const previous: AnswerRecord[] = [{
-      questionId: 'q9', label: 'Notice period', kind: 'text', options: [], required: true,
-      value: '30 dias', source: 'bank', category: 'personal', basis: [], bankAnswerId: 14,
-    }];
-    const res = await resolveAnswers(input([q('q1', 'Pretensão salarial'), q('q2', 'Pronomes'), q('q3', 'Notice period')], bank, { previous }), deps);
+      a({ id: 13, question: 'Nunca usada', answer: 'x' }), a({ id: 14, question: 'Aviso prévio', answer: '30 dias' })];
+    const approved = [record({ label: 'Notice period', value: '30 dias', source: 'bank', category: 'personal', bankAnswerId: 14,
+      })];
+    bank[3]!.aliases = [{ normalized: 'notice period', options: [], value: '30 dias' }];
+    const res = await resolveAnswers(input([q('q1', 'Pretensão salarial'), q('q2', 'Pronomes'), q('q3', 'Notice period')], bank, { approved }), deps);
     expect(res.usedBankIds.sort()).toEqual([11, 12, 14]);
   });
 });
@@ -310,7 +372,7 @@ describe('saved answers the model says fit', () => {
     const res = await resolveAnswers(input([q('q1', 'English level', false)], bank, { aiAnswers: 'auto' }), deps);
     expect(res.answers).toEqual([]);
     expect(res.pending).toEqual([{ question: q('q1', 'English level', false), category: 'profile_fact', kind: 'confirm_match',
-      proposal: { bankAnswerId: 21, bankQuestion: 'Seu nível de inglês', value: 'Fluente', source: 'bank', basis: [] } }]);
+      proposal: { bankAnswerId: 21, bankQuestion: 'Seu nível de inglês', bankAnswer: 'Fluente', value: 'Fluente', source: 'bank', basis: [] } }]);
   });
 
   it('drops a proposal for an answer that was not offered or an option that does not exist', async () => {

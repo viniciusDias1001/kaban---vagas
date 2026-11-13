@@ -25,11 +25,11 @@ describe('apply constants', () => {
     const question = { id: 'q1', label: 'Anos de React?', help: '', kind: 'text' as const, options: [], required: true, maxLength: null };
     const proposal: PendingQuestion = {
       question, category: 'profile_fact', kind: 'confirm_proposal',
-      proposal: { bankAnswerId: null, bankQuestion: null, value: '5', source: 'profile', basis: ['exp_aaaaaaa1'] },
+      proposal: { bankAnswerId: null, bankQuestion: null, bankAnswer: null, value: '5', source: 'profile', basis: ['exp_aaaaaaa1'] },
     };
     const match: PendingQuestion = {
       question, category: 'personal', kind: 'confirm_match',
-      proposal: { bankAnswerId: 7, bankQuestion: 'Precisa de visto?', value: 'No', source: 'bank', basis: [] },
+      proposal: { bankAnswerId: 7, bankQuestion: 'Precisa de visto?', bankAnswer: 'Não', value: 'No', source: 'bank', basis: [] },
     };
     expect(proposal.proposal?.bankAnswerId).toBeNull();
     expectTypeOf(proposal.proposal!.source).toEqualTypeOf<'bank' | 'profile' | 'written'>();
