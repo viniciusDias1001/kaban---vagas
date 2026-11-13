@@ -3,7 +3,7 @@ import type { ApplySiteId } from '@kv/shared/client';
 import { useEffect, useRef } from 'react';
 import type { ApplicationDto, ApplicationListItemDto, ApplyStatusDto } from '@kv/shared/client';
 import { applyApi, type ApplyAnswerInput, type PendingAnswersBody } from './applyApi';
-import { afterSend, applyPollMs, waitNotice, waitingText } from './lib/apply';
+import { afterSend, applyPollMs, queueSignature, waitNotice, waitingText } from './lib/apply';
 
 /** Chaves do React Query das telas de candidatura automática. */
 export const APPLY_KEYS = {
@@ -19,13 +19,29 @@ const INLINE_ERROR = { inlineError: true } as const;
 /** Intervalo de releitura pelo estado em cache de `useApplyStatus`: rápido com candidatura ativa ou espera ao vivo. */
 const pollFromStatus = (qc: QueryClient) => () => applyPollMs(qc.getQueryData(APPLY_KEYS.status));
 
-/** Estado geral: sites, sessões, limites do dia, fila e espera ao vivo. */
+/**
+ * Estado geral: sites, sessões, limites do dia, fila e espera ao vivo. Quando as contagens da fila ou a espera mudam,
+ * relê na hora a lista e as candidaturas das vagas: elas andam no ritmo do estado, e quando a fila para o ritmo cai para
+ * 15 s (o contador "Precisam de você" já mostraria a pergunta e a lista ainda não).
+ */
 export function useApplyStatus() {
-  return useQuery({
+  const qc = useQueryClient();
+  const query = useQuery({
     queryKey: APPLY_KEYS.status,
     queryFn: applyApi.status,
-    refetchInterval: (query) => applyPollMs(query.state.data),
+    refetchInterval: (q) => applyPollMs(q.state.data),
   });
+  const signature = queueSignature(query.data);
+  const seen = useRef<string | null>(null);
+  useEffect(() => {
+    if (signature === null) return;
+    const before = seen.current;
+    seen.current = signature;
+    if (before === null || before === signature) return;
+    void qc.invalidateQueries({ queryKey: APPLY_KEYS.applications });
+    void qc.invalidateQueries({ queryKey: ['application'] });
+  }, [signature, qc]);
+  return query;
 }
 
 export function useApplications() {

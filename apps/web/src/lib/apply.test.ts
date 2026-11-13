@@ -3,7 +3,7 @@ import { APPLICATION_STATUSES, type ApplyAnswerDto, NEEDS_HUMAN_REASONS, SKIP_RE
 import {
   AI_ANSWER_LABELS, FILTER_LABELS, PENDING_KIND_LABELS, type ApplicationFilter, ANSWER_SOURCE_LABELS, STATUS_LABELS, applyErrorMessage, applyPollMs, cardBadge, filterApplications,
   ANSWER_LIMITS, EMPTY_NEW_ANSWER, accountFeedback, answerField, answerInput, answerProblem, answerToStore, booleanAnswer, booleanChoice, counterVisible,
-  countryLabel, kindHint, newAnswerInput, numberProblem, saveStateLabel, scopeLabel, splitAnswers, usedLabel, validateNewAnswer, filterCounts, reasonText, toPendingAnswersBody, validatePendingDrafts, NUMBER_FORMAT_PROBLEM, decideCommit, createKeyedQueue, type AccountAction, type AccountMutationView, type PendingDraft,
+  countryLabel, kindHint, newAnswerInput, numberProblem, saveStateLabel, scopeLabel, splitAnswers, usedLabel, validateNewAnswer, filterCounts, reasonText, toPendingAnswersBody, validatePendingDrafts, NUMBER_FORMAT_PROBLEM, decideCommit, queueSignature, createKeyedQueue, type AccountAction, type AccountMutationView, type PendingDraft,
 } from './apply';
 
 const item = (id: number, status: ApplicationStatus): ApplicationListItemDto => ({
@@ -90,6 +90,21 @@ describe('applyPollMs', () => {
 
   it('polls fast while an application is running', () => {
     expect(applyPollMs({ ...idle, running: 1 })).toBe(2_000);
+  });
+});
+
+describe('queueSignature', () => {
+  it('changes whenever the queue counts or the live wait change, so the lists are reread at once', () => {
+    // A lista e a candidatura da vaga são relidas no ritmo do estado: quando a última candidatura para numa pergunta,
+    // o estado passa a 15 s e a lista podia ficar 15 s dizendo "Em andamento" com o contador já em "Precisam de você".
+    expect(queueSignature(undefined)).toBeNull();
+    const base = queueSignature(idle);
+    expect(queueSignature({ ...idle })).toBe(base);
+    for (const changed of [
+      { ...idle, queued: 1 }, { ...idle, running: 1 }, { ...idle, needsHuman: 1 },
+      { ...idle, waiting: { applicationId: 1, jobId: 1, gate: 'captcha' as const } },
+    ]) expect(queueSignature(changed)).not.toBe(base);
+    expect(queueSignature({ ...idle, totalToday: 3 })).toBe(base); // só o que muda as listas
   });
 });
 

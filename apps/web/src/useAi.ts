@@ -3,6 +3,7 @@ import { useEffect, useMemo } from 'react';
 import type { AiProviderId, ProfileWire, ResumeLang, SettingsPatch, TailoredDraft } from '@kv/shared/client';
 import { aiApi } from './aiApi';
 import { pollMs, toScoreMap } from './lib/ai';
+import { APPLY_KEYS } from './useApply';
 
 /** Chaves do React Query das telas de IA. */
 export const AI_KEYS = {
@@ -114,14 +115,18 @@ export function useSettings() {
   return useQuery({ queryKey: AI_KEYS.settings, queryFn: aiApi.settings });
 }
 
-/** Uma mudança de configuração muda o estado da IA em todas as telas: tudo que depende dele é relido. */
+/**
+ * O que uma mudança de configuração relê: o estado da IA em todas as telas e o da candidatura automática (ligada,
+ * horário, modo dos sites), que sem isto só seria relido no próximo intervalo de 15 s.
+ */
+export const SETTINGS_REFRESH_KEYS: readonly (readonly string[])[] = [
+  AI_KEYS.settings, AI_KEYS.status, AI_KEYS.usage, AI_KEYS.scores, APPLY_KEYS.status,
+];
+
 function useSettingsRefresh() {
   const qc = useQueryClient();
   return () => {
-    void qc.invalidateQueries({ queryKey: AI_KEYS.settings });
-    void qc.invalidateQueries({ queryKey: AI_KEYS.status });
-    void qc.invalidateQueries({ queryKey: AI_KEYS.usage });
-    void qc.invalidateQueries({ queryKey: AI_KEYS.scores });
+    for (const queryKey of SETTINGS_REFRESH_KEYS) void qc.invalidateQueries({ queryKey });
   };
 }
 

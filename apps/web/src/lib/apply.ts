@@ -103,6 +103,15 @@ export function applyPollMs(status: ApplyStatusDto | undefined): number {
   return status && (status.queued > 0 || status.running > 0 || status.waiting !== null) ? 2_000 : 15_000;
 }
 
+/**
+ * O que, no estado, muda as listas de candidaturas: as contagens da fila e a espera ao vivo. Mudou, as listas são
+ * relidas na hora (sem isto, quando a fila para, elas esperam o intervalo de 15 s). Null antes do primeiro estado.
+ */
+export function queueSignature(status: ApplyStatusDto | undefined): string | null {
+  if (!status) return null;
+  return `${status.queued}:${status.running}:${status.needsHuman}:${status.waiting ? `${status.waiting.applicationId}:${status.waiting.gate}` : ''}`;
+}
+
 export const AI_ANSWER_LABELS: Record<ApplyAiAnswers, { title: string; hint: string }> = {
   off: { title: 'Desligado', hint: 'Só as regras e as suas respostas salvas respondem.' },
   review: { title: 'Com a sua aprovação', hint: 'A IA propõe; você aprova uma vez e a resposta fica salva.' },
