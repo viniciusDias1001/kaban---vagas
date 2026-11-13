@@ -35,9 +35,9 @@ export function sentMail(): FakeStored[] {
 }
 
 /** Reprovação: o modelo falso classifica pela palavra "infelizmente". */
-export const rejection = (subjectNote = ''): Partial<RawMail> => ({
+export const rejection = (subject = `Sua candidatura na ${COMPANY}: infelizmente`): Partial<RawMail> => ({
   from: RECRUITER,
-  subject: `Sua candidatura na ${COMPANY}: infelizmente${subjectNote}`,
+  subject,
   text: `Olá, Maria.\n\nAgradecemos o seu interesse. Infelizmente seguimos com outras pessoas no processo seletivo da ${COMPANY}.\n\nJoana`,
 });
 

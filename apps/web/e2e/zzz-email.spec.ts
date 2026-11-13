@@ -194,4 +194,71 @@ test.describe.serial('e-mail', () => {
     expect(sentMail(), 'nada além das duas respostas saiu').toHaveLength(2);
     expect(problems, 'erros de console, exceções ou requisições com falha').toEqual([]);
   });
+
+  test('Painel: numbers, funnel, e-mail block and the mail list after the mailbox scenarios', async ({ page }) => {
+    test.setTimeout(300_000);
+    const { problems } = collectProblems(page);
+    await page.goto('/');
+
+    // A reprovação do teste anterior foi desfeita: com `corrected`, ela não conta em número nenhum do Painel. Uma
+    // segunda reprovação, sem Desfazer, é a que o bloco de e-mails e a lista mostram.
+    const lost = deliver(rejection(`Atualização sobre o processo seletivo - ${COMPANY}`));
+    const lostRow = await waitForMail(page, lost.subject, (m) => m.movedTo === 'perdida');
+    expect(lostRow.kind).toBe('reprovacao');
+    expect(lostRow.corrected).toBe(false);
+    const askedRow = (await mailRows(page)).find((m) => m.direction === 'in' && m.subject === salaryRequest().subject);
+    expect(askedRow?.replyState).toBe('enviada');
+
+    // Os números vêm do servidor; a tela mostra os mesmos.
+    const dto = await getJson<{ applied: { total: number }; email: { received: Record<string, number> } }>(page, '/api/dashboard?period=30');
+    expect(dto.applied.total).toBeGreaterThanOrEqual(1);
+    expect(dto.email.received.reprovacao).toBeGreaterThanOrEqual(1);
+
+    await goTo(page, 'Painel');
+    const blocks = page.getByTestId('painel-blocks');
+    await expect(blocks).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId('painel-period').getByRole('radio', { name: '30 dias' })).toHaveAttribute('aria-checked', 'true');
+    const applied = page.getByTestId('kpi-applied');
+    await expect(applied.locator('p').nth(1)).toHaveText(String(dto.applied.total));
+    expect(Number(await applied.locator('p').nth(1).innerText())).toBeGreaterThanOrEqual(1);
+    await expect(page.getByTestId('painel-funnel')).toBeVisible();
+    await expect(page.getByTestId('painel-email')).toContainText('Reprovação');
+    // Poucos dados: número e base, nunca uma conta quebrada.
+    await expect(blocks).not.toContainText('NaN');
+    await expect(blocks).not.toContainText('Infinity');
+
+    // --- A lista: a reprovação moveu o card; o pedido foi respondido sozinho -----------------------------------------
+    const list = page.getByTestId('painel-mail-list');
+    await expect(list.getByTestId(`painel-mail-row-${lostRow.id}`)).toContainText('moveu o card para Perdida');
+    await expect(list.getByTestId(`painel-mail-row-${lostRow.id}`)).toContainText('Reprovação');
+    await expect(list.getByTestId(`painel-mail-row-${askedRow!.id}`)).toContainText('respondeu sozinho');
+    const rows = list.locator('[data-testid^="painel-mail-row-"]');
+    const allRows = await rows.count();
+    expect(allRows).toBeGreaterThanOrEqual(2);
+
+    // "Sem vaga": todos os e-mails desta execução estão ligados a uma vaga, então a lista esvazia.
+    const unmatched = await getJson<unknown[]>(page, '/api/email/messages?unmatched=1');
+    await list.getByTestId('painel-mail-filter-unmatched').click();
+    if (unmatched.length === 0) {
+      await expect(list.getByTestId('painel-mail-empty')).toBeVisible();
+      await expect(rows).toHaveCount(0);
+    } else {
+      await expect(rows).toHaveCount(unmatched.length);
+      expect(unmatched.length).toBeLessThan(allRows);
+    }
+    await list.getByTestId('painel-mail-filter-unmatched').click();
+    await expect(rows).toHaveCount(allRows);
+
+    // --- Período de 7 dias: a página continua de pé ------------------------------------------------------------------
+    await page.getByTestId('painel-period').getByRole('radio', { name: '7 dias' }).click();
+    await expect(page.getByTestId('painel-period').getByRole('radio', { name: '7 dias' })).toHaveAttribute('aria-checked', 'true');
+    await expect(blocks).not.toHaveAttribute('aria-busy', 'true', { timeout: 15_000 });
+    await expect(page.getByText('Não foi possível carregar o Painel')).toHaveCount(0);
+    await expect(applied.locator('p').nth(1)).toHaveText(String(dto.applied.total));
+    await expect(page.getByTestId('painel-email')).toContainText('Reprovação');
+    await expect(list.getByTestId(`painel-mail-row-${lostRow.id}`)).toBeVisible();
+    await expect(blocks).not.toContainText('NaN');
+
+    expect(problems, 'erros de console, exceções ou requisições com falha').toEqual([]);
+  });
 });
