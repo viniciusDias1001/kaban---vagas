@@ -64,13 +64,13 @@ const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
  *    mesmo com a função desligada, para o dono conectar as contas antes (não com uma candidatura usando o navegador);
  * 2. sem candidatura em andamento, fecha o navegador parado há mais de `browserIdleMs`, menos com uma janela de login
  *    esperando o dono (até a conferência de sessão achar o dono conectado, ou `humanWaitMs` depois do `open_login`);
- * 3. função desligada: para aqui;
+ * 3. uma vez por dia, ligada ou desligada, apaga as fotos com mais de `shotRetentionDays` dias e as tira da coluna
+ *    `shots`; função desligada: para aqui;
  * 4. a cada `sweepMs`, dentro do horário, cria as candidaturas automáticas que cabem hoje (`sweepCandidates`);
  * 5. sem candidatura em andamento nem janela de login esperando, reivindica a próxima (`preparing`, guardada por
  *    `from: ['queued']`) fora dos sites pausados ou ainda no intervalo de ritmo, e fora dos sites sem limite sobrando
  *    (salvo uma linha que já abriu o formulário hoje); fora do horário só as manuais. O modo atual do site vale na
- *    reivindicação (um envio de verdade sem respostas aprovadas vira ensaio num site em ensaio). Começa uma e não espera;
- * 6. uma vez por dia, apaga as fotos com mais de `shotRetentionDays` dias e as tira da coluna `shots`.
+ *    reivindicação (um envio de verdade sem respostas aprovadas vira ensaio num site em ensaio). Começa uma e não espera.
  */
 export function createApplyQueue(deps: ApplyQueueDeps): ApplyQueue {
   const { db, browser, availability } = deps;
@@ -296,6 +296,8 @@ export function createApplyQueue(deps: ApplyQueueDeps): ApplyQueue {
       if (!inFlight && loginWaits.size === 0 && browser.isOpen() && now() - idleSince > APPLY_TIMING.browserIdleMs) await browser.close();
 
       const cfg = await deps.settings.applyConfig();
+      // As fotos antigas saem também com a função desligada: o prazo de guarda vale sempre.
+      await cleanupShots(now(), cfg.timeZone).catch((e) => log(`candidaturas: erro ao apagar fotos antigas: ${errorText(e)}`));
       if (!cfg.enabled) return result;
       const at = now();
       const within = withinWindow(at, cfg.window, cfg.timeZone);
@@ -308,7 +310,6 @@ export function createApplyQueue(deps: ApplyQueueDeps): ApplyQueue {
         }
       }
       if (!inFlight) result.started = await startNext(cfg, within);
-      await cleanupShots(at, cfg.timeZone).catch((e) => log(`candidaturas: erro ao apagar fotos antigas: ${errorText(e)}`));
       return result;
     } finally {
       ticking = false;
@@ -319,9 +320,12 @@ export function createApplyQueue(deps: ApplyQueueDeps): ApplyQueue {
     tick,
     /**
      * Só no início do worker: o que ficou `running` é de um processo anterior. Comandos viram erro; candidaturas antes do
-     * clique voltam à fila; uma encontrada em `submitting` nunca é reenviada: vai ao dono confirmar no site.
+     * clique voltam à fila; uma encontrada em `submitting` nunca é reenviada: vai ao dono confirmar no site. Os PDFs que
+     * uma execução morta deixou em `<pasta de dados>/resumes` são apagados (cada execução grava o seu de novo).
      */
     async recoverInterrupted() {
+      await rm(join(deps.dataDir, 'resumes'), { recursive: true, force: true })
+        .catch((e) => log(`candidaturas: não foi possível apagar os currículos deixados por uma execução anterior: ${errorText(e)}`));
       const commands = await recoverApplyCommands(db, now());
       if (commands > 0) log(`candidaturas: ${commands} comandos interrompidos marcados como erro`);
       const { requeued, unconfirmed } = await recoverApplications(db, now());

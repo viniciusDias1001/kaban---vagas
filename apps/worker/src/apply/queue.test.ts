@@ -291,6 +291,14 @@ describe('crash recovery', () => {
     expect(await applicationForJob(db, jobId)).toMatchObject({ status: 'submitted' });
   });
 
+  it('removes the résumé files a killed run left on disk', async () => {
+    await mkdir(join(dataDir, 'resumes', '7'), { recursive: true });
+    await writeFile(join(dataDir, 'resumes', '7', 'Curriculo.pdf'), 'pdf');
+    await queue().recoverInterrupted();
+    expect(existsSync(join(dataDir, 'resumes'))).toBe(false);
+    expect(existsSync(dataDir)).toBe(true);
+  });
+
   it('turns commands left running into errors', async () => {
     await enqueueApplyCommand(db, 'check_session', 'fake');
     await nextApplyCommand(db);
@@ -880,7 +888,7 @@ describe('the daily cap and a form already opened today', () => {
 });
 
 describe('old photos', () => {
-  it('deletes the files past the retention and drops them from the row', async () => {
+  for (const enabled of [true, false]) it(`deletes the files past the retention and drops them from the row (feature ${enabled ? 'on' : 'off'})`, async () => {
     const { id: jobId } = await candidate({ score: null });
     const id = (await createApplication(db, { jobId, site: 'fake', trigger: 'auto', mode: 'real' }, NOON))!;
     const shots = { filled: `shots/${id}/filled.jpg`, confirmation: `shots/${id}/confirmation.jpg` };
@@ -892,7 +900,7 @@ describe('old photos', () => {
     const recent = (NOON - 86_400_000) / 1000;
     await utimes(join(dataDir, shots.confirmation), recent, recent);
 
-    await queue().tick();
+    await queue({ enabled }).tick();
     expect(existsSync(join(dataDir, shots.filled))).toBe(false);
     expect(existsSync(join(dataDir, shots.confirmation))).toBe(true);
     expect((await applicationForJob(db, jobId))!.shots).toEqual({ confirmation: shots.confirmation });
