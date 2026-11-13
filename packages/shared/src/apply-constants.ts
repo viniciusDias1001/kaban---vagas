@@ -180,7 +180,20 @@ export function bankText(value: AnswerValue): string {
   return value.trim();
 }
 
-const BANK_YES = ['sim', 'yes', 'true', 'verdadeiro', 's', 'y', '1'];
+/** A mensagem única para um número fora da regra de `parseNumberAnswer` (API e tela). */
+export const NUMBER_FORMAT_PROBLEM = 'Use só dígitos, com no máximo duas casas decimais e sem separador de milhar (ex.: 20000 ou 1234,56).';
+
+/**
+ * A regra única da resposta numérica: o texto aparado, dígitos com sinal de menos opcional e no máximo duas casas
+ * decimais (`.` ou `,`). Devolve o número com `.` decimal, ou null se não serve. 20.000 é vinte mil no Brasil e vinte fora
+ * dele: não dá para adivinhar, então `.` ou `,` seguido de três dígitos é recusado.
+ */
+export function parseNumberAnswer(text: string): string | null {
+  const t = text.trim();
+  return /^-?\d+([.,]\d{1,2})?$/.test(t) ? t.replace(',', '.') : null;
+}
+
+const BANK_YES =['sim', 'yes', 'true', 'verdadeiro', 's', 'y', '1'];
 const BANK_NO = ['nao', 'no', 'false', 'falso', 'n', '0'];
 
 /** Lê uma resposta salva como sim ou não: sim, yes, true, verdadeiro, s, y, 1 / não, nao, no, false, falso, n, 0 (sem diferenciar maiúsculas e acentos). Qualquer outra coisa: null. */

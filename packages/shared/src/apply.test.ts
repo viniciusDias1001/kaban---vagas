@@ -4,6 +4,7 @@ import {
   normalizeQuestionText, bankBoolean, bankList, bankText, SHOT_KINDS, PendingAnswersBodySchema, ApplyAnswerInputSchema, type AnswerValue, type ApplicationStatus,
   type PendingQuestion, COLUMNS, isAppliedOrLater, type CannotApplyReason, type JobApplicationDto,
   APPLICATION_FILTERS, APPLICATION_FILTER_STATUSES, APPLICATION_STATUSES, applicationFilterOf, type ApplicationFilter,
+  NUMBER_FORMAT_PROBLEM, parseNumberAnswer,
 } from './index';
 
 describe('apply constants', () => {
@@ -41,6 +42,20 @@ describe('apply constants', () => {
     expect(APPLY_DEFAULTS.minScore).toBe(70);
     expect(APPLY_DEFAULTS.dailyCaps).toMatchObject({ linkedin: 10, greenhouse: 15, lever: 15, total: 30, linkedinViews: 30 });
     expect(APPLY_TIMING.humanWaitMs).toBe(600_000);
+  });
+});
+
+describe('the number rule', () => {
+  it('accepts digits with an optional minus and up to two decimals, and returns them with a dot', () => {
+    expect(parseNumberAnswer(' 20000 ')).toBe('20000');
+    expect(parseNumberAnswer('1234,56')).toBe('1234.56');
+    expect(parseNumberAnswer('8000.5')).toBe('8000.5');
+    expect(parseNumberAnswer('-5')).toBe('-5');
+    expect(parseNumberAnswer('0')).toBe('0');
+    for (const bad of ['', ' ', '20.000', '20,000', '1.234,56', '1,2345', '1e3', '0x10', 'abc', '12a', '1,2,3', '- 5', '5.']) {
+      expect(parseNumberAnswer(bad)).toBeNull();
+    }
+    expect(NUMBER_FORMAT_PROBLEM).toBe('Use só dígitos, com no máximo duas casas decimais e sem separador de milhar (ex.: 20000 ou 1234,56).');
   });
 });
 
