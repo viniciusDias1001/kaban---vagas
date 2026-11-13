@@ -136,8 +136,12 @@ export function applicationRoutes(app: FastifyInstance, db: Db, ctx: AiContext) 
   app.get('/jobs/:id/application', async (req, reply) => {
     const id = idParam(req);
     const row = id === null ? null : await applicationForJob(db, id);
-    if (!row) return reply.code(404).send({ error: 'not_found', message: 'esta vaga não tem candidatura' });
-    return dto(row);
+    if (row) return dto(row);
+    // Vaga sem candidatura é o caso comum (o painel pergunta por toda vaga aberta): 200 com `null`, não um 404 que o
+    // navegador registraria como erro no console. 404 só para vaga que não existe.
+    const [job] = id === null ? [] : await db.select({ id: jobs.id }).from(jobs).where(eq(jobs.id, id));
+    if (!job) return reply.code(404).send(jobNotFound);
+    return reply.type('application/json').send('null');
   });
 
   /** "Candidatar agora": cria a candidatura manual (entra na frente da fila). O worker faz o resto. */

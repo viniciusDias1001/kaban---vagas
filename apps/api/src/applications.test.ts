@@ -90,9 +90,14 @@ describe('POST /jobs/:id/application', () => {
 });
 
 describe('reading applications', () => {
-  it('never returns the PDF bytes in JSON, and 404s without an application', async () => {
+  it('never returns the PDF bytes in JSON; null for a job without an application, 404 only for a missing job', async () => {
     const job = await fakeJob();
-    expect((await app.inject(`/jobs/${job.id}/application`)).statusCode).toBe(404);
+    // Toda vaga aberta no painel pergunta pela candidatura: "não tem" é resposta normal (200 null), não um 404 que o
+    // navegador registra como erro no console.
+    const none = await app.inject(`/jobs/${job.id}/application`);
+    expect(none.statusCode).toBe(200);
+    expect(none.json()).toBeNull();
+    expect((await app.inject('/jobs/99999/application')).statusCode).toBe(404);
     await createApplication(db, { jobId: job.id, site: 'fake', trigger: 'auto', mode: 'dry_run' });
     await db.update(applications).set({ resumePdf: Buffer.from('%PDF-1.4 segredo'), approvedAnswers: [] });
     const body = (await app.inject(`/jobs/${job.id}/application`)).body;

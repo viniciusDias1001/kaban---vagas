@@ -44,10 +44,10 @@ const del = (): RequestInit => ({ method: 'DELETE' });
 export const applyApi = {
   status: () => request<ApplyStatusDto>('/apply/status'),
   applications: () => request<ApplicationListItemDto[]>('/applications'),
-  /** null quando a vaga não tem candidatura (404). */
+  /** null quando a vaga não tem candidatura (200 `null`) ou não existe mais (404). */
   jobApplication: async (jobId: number): Promise<ApplicationDto | null> => {
     try {
-      return await request<ApplicationDto>(`/jobs/${jobId}/application`);
+      return (await request<ApplicationDto | null>(`/jobs/${jobId}/application`)) ?? null;
     } catch (e) {
       if (e instanceof ApiError && e.status === 404) return null;
       throw e;

@@ -26,7 +26,9 @@ describe('applyApi', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/jobs/3/application', expect.objectContaining({ method: 'POST' }));
   });
 
-  it('gives null for a job without an application (404)', async () => {
+  it('gives null for a job without an application (200 null) and for a job that is gone (404)', async () => {
+    reply(200, 'null');
+    await expect(applyApi.jobApplication(3)).resolves.toBeNull();
     reply(404, JSON.stringify({ error: 'not_found' }));
     await expect(applyApi.jobApplication(3)).resolves.toBeNull();
   });
