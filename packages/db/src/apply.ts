@@ -70,8 +70,8 @@ async function writeTransition(tx: Db, row: ApplicationRow, t: Transition, now: 
 }
 
 /**
- * Grava o estado e um evento na mesma transação. Preenche `started_at` na primeira saída de `queued`,
- * `submitted_at` em `submitted` e `finished_at` em estado final. Devolve false, sem gravar, se a linha está em `submitted`
+ * Grava o estado e um evento na mesma transação. Preenche `started_at` na primeira entrada num estado em execução
+ * (`preparing`, `filling`, `waiting_human`, `submitting`), se ainda estiver vazio, `submitted_at` em `submitted` e `finished_at` em estado final. Devolve false, sem gravar, se a linha está em `submitted`
  * (ou não existe).
  */
 export async function transitionApplication(db: Db, id: number, t: Transition, now: number = Date.now()): Promise<boolean> {

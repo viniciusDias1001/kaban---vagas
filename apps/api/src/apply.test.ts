@@ -103,6 +103,24 @@ describe('the answer bank', () => {
     expect((await app.inject({ method: 'PUT', url: '/apply/answers/9999', payload: input })).statusCode).toBe(404);
   });
 
+  it('applies the number rule to a number row, on POST and PUT, and stores the normalised text', async () => {
+    const bad = ['20.000', '1,234', '1.234,56', 'doze', '1.5.5', '1,234.5'];
+    for (const answer of bad) {
+      const res = await post('/apply/answers', { ...input, answer });
+      expect(res.statusCode, answer).toBe(400);
+      expect(res.json()).toMatchObject({ error: 'validation', message: expect.stringContaining('sem separador de milhar') });
+    }
+    expect((await app.inject('/apply/answers')).json()).toHaveLength(8);
+    const created = await post('/apply/answers', { ...input, answer: '1234,56' });
+    expect(created.json()).toMatchObject({ answer: '1234.56' });
+    const put = (answer: string) => app.inject({ method: 'PUT', url: `/apply/answers/${created.json().id}`, payload: { ...input, answer } });
+    expect((await put('20.000')).statusCode).toBe(400);
+    expect((await put('-5,5')).json()).toMatchObject({ answer: '-5.5' });
+    expect((await put('')).json()).toMatchObject({ answer: '' });
+    // Só a linha de número é conferida.
+    expect((await post('/apply/answers', { ...input, kind: 'text', answer: '20.000' })).statusCode).toBe(200);
+  });
+
   it('deletes an answer and removes one variation', async () => {
     const saved = (await post('/apply/answers', input)).json();
     await db.update(applyAnswers).set({ aliases: [{ normalized: 'quanto quer', options: [], value: '1' }, { normalized: 'outra', options: [], value: '2' }] })

@@ -11,6 +11,7 @@ import {
 } from '@kv/shared';
 import type { AiContext } from '../ai-context';
 import { idParam } from './ids';
+import { NUMBER_ANSWER_MESSAGE, normalizeNumberAnswer } from './number-answer';
 
 const unavailable = (reason: string | null) => ({ error: 'apply_unavailable', message: reason ?? 'a candidatura automática não está disponível' });
 const answerNotFound = { error: 'not_found', message: 'resposta não encontrada' };
@@ -82,8 +83,14 @@ export function applyRoutes(app: FastifyInstance, db: Db, ctx: AiContext) {
     if (input.scope !== 'always' && !input.scopeValue?.trim()) {
       return reply.code(400).send({ error: 'validation', message: 'scopeValue: informe a empresa ou a vaga a que a resposta se aplica' });
     }
+    let answer = input.answer;
+    if (input.kind === 'number' && answer.trim() !== '') {
+      const number = normalizeNumberAnswer(answer);
+      if (number === null) return reply.code(400).send({ error: 'validation', message: NUMBER_ANSWER_MESSAGE });
+      answer = number;
+    }
     if (id !== undefined && !(await applyAnswerExists(db, id))) return reply.code(404).send(answerNotFound);
-    const row = await saveApplyAnswer(db, { ...input, id, scopeValue: input.scopeValue?.trim() || null }, ctx.now());
+    const row = await saveApplyAnswer(db, { ...input, answer, id, scopeValue: input.scopeValue?.trim() || null }, ctx.now());
     return toApplyAnswerDto(row);
   };
   app.post('/apply/answers', async (req, reply) => saveAnswer(req, reply));
