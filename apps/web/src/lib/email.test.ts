@@ -72,6 +72,13 @@ describe('alertTitle / alertBody / alertAction', () => {
     expect(alertCanLink(alert({ kind: 'backfill_summary', jobId: null, messageId: null }))).toBe(false);
   });
 
+  it('never ends a title in a bare colon, and names an unknown fact by its key', () => {
+    expect(alertTitle(alert({ kind: 'interview', company: null, subject: null }))).toBe('Convite de entrevista: (sem assunto)');
+    expect(alertTitle(alert({ kind: 'offer', company: ' ', subject: '  ' }))).toBe('Oferta: (sem assunto)');
+    expect(alertTitle(alert({ kind: 'unmatched', company: null, subject: null }))).toBe('E-mail sem vaga: (sem assunto)');
+    expect(alertBody(alert({ kind: 'missing_fact', payload: { missing: ['phone', 'shoe_size' as never] } }))).toBe('Falta: Telefone, shoe_size');
+  });
+
   it('maps each kind to its action', () => {
     expect(ALERT_KINDS.map((k) => alertAction(k))).toEqual([
       'review_draft', 'open_job', 'answer_fact', 'review_draft', 'confirm_move', 'link', 'open_settings', 'open_list', 'classify_anyway',

@@ -29,7 +29,9 @@ export function ratioShare(r: Ratio): number {
 
 export function daysText(days: number | null, base: number): string {
   if (days === null) return NO_DATA;
-  return `${decimal(days, 1)} dias (${base} ${base === 1 ? 'resposta' : 'respostas'})`;
+  // O singular ou o plural vem do número mostrado: 0,96 aparece como "1,0 dia".
+  const shown = decimal(days, 1);
+  return `${shown} ${shown === '1,0' ? 'dia' : 'dias'} (${base} ${base === 1 ? 'resposta' : 'respostas'})`;
 }
 
 export function usdText(value: number | null): string {
@@ -40,8 +42,9 @@ export function minutesText(minutes: number | null): string {
   if (minutes === null) return NO_DATA;
   if (minutes < 60) return `${Math.round(minutes)} min`;
   if (minutes < 1440) return `${short(minutes / 60)} h`;
-  const days = minutes / 1440;
-  return `${short(days)} ${days < 2 ? 'dia' : 'dias'}`;
+  // O singular ou o plural vem do número mostrado (1,99 aparece como "2", então "2 dias").
+  const shown = short(minutes / 1440);
+  return `${shown} ${Number(shown.replace(',', '.')) < 2 ? 'dia' : 'dias'}`;
 }
 
 const SCORE_LABELS: Record<string, string> = {

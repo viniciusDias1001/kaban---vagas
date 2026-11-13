@@ -6,8 +6,10 @@ import { DRAFT_PLACEHOLDER, EMAIL_KIND_LABELS, type JobEmailsDto, type MailMessa
 /** Funções puras do e-mail (sem React): textos dos alertas, rótulos e a conferência da senha de app. */
 
 const subjectOf = (a: AlertDto): string => a.subject?.trim() ?? '';
+/** O assunto para um título: nunca vazio (o título não termina em dois-pontos soltos). */
+const titleSubject = (a: AlertDto): string => subjectOf(a) || '(sem assunto)';
 /** A empresa do card; sem ela, o assunto do e-mail. */
-const who = (a: AlertDto): string => a.company?.trim() || subjectOf(a);
+const who = (a: AlertDto): string => a.company?.trim() || titleSubject(a);
 
 export function alertTitle(a: AlertDto): string {
   switch (a.kind) {
@@ -17,7 +19,7 @@ export function alertTitle(a: AlertDto): string {
     // Sem resposta preparada (e-mail que não aceita resposta, IA desligada ou falhou), o título não promete um rascunho.
     case 'draft': return a.replyId === null ? `${who(a)} pediu uma resposta sua` : `Rascunho esperando você: ${who(a)}`;
     case 'move_confirm': return `Mover ${who(a)} para ${a.payload.moveTo ? COLUMN_LABELS[a.payload.moveTo] : 'outra coluna'}?`;
-    case 'unmatched': return `E-mail sem vaga: ${subjectOf(a)}`;
+    case 'unmatched': return `E-mail sem vaga: ${titleSubject(a)}`;
     case 'mailbox_error': return 'A caixa de e-mail parou';
     case 'backfill_summary': return 'Primeira leitura da caixa';
     case 'budget_waiting':
@@ -41,7 +43,8 @@ export function alertBody(a: AlertDto): string {
 function alertMainBody(a: AlertDto): string {
   switch (a.kind) {
     case 'missing_fact': {
-      const labels = (a.payload.missing ?? []).map((f) => KNOWN_FACT_LABELS[f]);
+      // Um dado que esta versão da tela não conhece aparece pela própria chave, nunca como "undefined".
+      const labels = (a.payload.missing ?? []).map((f) => KNOWN_FACT_LABELS[f] ?? f);
       return `Falta: ${labels.join(', ')}`;
     }
     case 'backfill_summary': return summaryLine(a.payload.counts ?? {}, a.payload.total ?? 0);

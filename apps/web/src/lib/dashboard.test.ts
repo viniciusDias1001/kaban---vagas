@@ -48,6 +48,14 @@ describe('dashboard formatting', () => {
     expect(minutesText(4320)).toBe('3 dias');
     expect(minutesText(null)).toBe('sem dados');
   });
+  it('picks singular or plural from the rounded number it shows', () => {
+    // 1,99 dia aparece como "2": o plural vem do número mostrado, não do valor antes de arredondar.
+    expect(minutesText(1440 * 1.99)).toBe('2 dias');
+    expect(minutesText(1440 * 1.04)).toBe('1 dia');
+    expect(daysText(0.96, 1)).toBe('1,0 dia (1 resposta)');
+    expect(daysText(1.04, 2)).toBe('1,0 dia (2 respostas)');
+    expect(daysText(1.06, 2)).toBe('1,1 dias (2 respostas)');
+  });
   it('labels breakdown rows', () => {
     expect(breakdownLabel('site', 'outside', [])).toBe('Fora do app');
     expect(breakdownLabel('site', 'greenhouse', [])).toBe('Greenhouse');
