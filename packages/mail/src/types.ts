@@ -6,6 +6,7 @@ export interface RawMail {
   from: { address: string; name: string };
   /** Endereços de To e Cc, em minúsculas. */
   to: string[];
+  /** Endereço do Reply-To, em minúsculas; null sem o cabeçalho ou sem endereço não vazio. Com mais de um endereço, todos, separados por `, ` (nunca reduzido a um). */
   replyTo: string | null;
   subject: string;
   /** Data do cabeçalho Date, em epoch ms. */

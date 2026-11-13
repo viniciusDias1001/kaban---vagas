@@ -151,6 +151,12 @@ function epochMs(value: Date | string | undefined): number | null {
   return Number.isNaN(ms) ? null : ms;
 }
 
+/** Endereços não vazios do Reply-To, em minúsculas, separados por `, `; nenhum: null. */
+function replyToAddresses(list: { address?: string }[] | undefined): string | null {
+  const addresses = (list ?? []).map((a) => (a.address ?? '').trim().toLowerCase()).filter(Boolean);
+  return addresses.length ? addresses.join(', ') : null;
+}
+
 /** Uma mensagem buscada com HEAD_QUERY, mais o texto já extraído, vira RawMail. */
 export function toRawMail(
   msg: Pick<FetchMessageObject, 'uid' | 'threadId' | 'envelope' | 'headers' | 'internalDate'>,
@@ -171,7 +177,8 @@ export function toRawMail(
     from: { address: (from?.address ?? '').toLowerCase(), name: from?.name ?? '' },
     to: [...(env.to ?? []), ...(env.cc ?? [])].map((a) => (a.address ?? '').toLowerCase()).filter(Boolean),
     // O ENVELOPE repete o From em Reply-To quando o cabeçalho não existe: vale só o cabeçalho de verdade.
-    replyTo: h.has('reply-to') ? (env.replyTo?.[0]?.address?.toLowerCase() ?? null) : null,
+    // Grupo vazio vem com endereço vazio e não conta; vários endereços ficam todos, para não parecer um só.
+    replyTo: h.has('reply-to') ? replyToAddresses(env.replyTo) : null,
     subject: env.subject ?? '',
     date: epochMs(env.date) ?? epochMs(msg.internalDate) ?? 0,
     inReplyTo,

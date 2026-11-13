@@ -1,8 +1,23 @@
 import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFakeMailbox, deliverFakeMail, readFakeMailbox, writeFakeMailbox } from './fake';
+
+// Simula o Windows recusando a criação da trava enquanto outro processo a apaga (EPERM).
+const lockFaults = vi.hoisted(() => ({ left: 0, seen: 0 }));
+vi.mock('node:fs', async (importOriginal) => {
+  const fs = await importOriginal<typeof import('node:fs')>();
+  const openSync = ((...args: Parameters<typeof fs.openSync>) => {
+    if (args[1] === 'wx' && lockFaults.left > 0) {
+      lockFaults.left--;
+      lockFaults.seen++;
+      throw Object.assign(new Error('EPERM: operation not permitted, open'), { code: 'EPERM' });
+    }
+    return fs.openSync(...args);
+  }) as typeof fs.openSync;
+  return { ...fs, openSync, default: { ...fs, openSync } };
+});
 import { rawMail } from './testing';
 import { MailAuthError, type OutgoingMail } from './types';
 
@@ -22,7 +37,7 @@ const outgoing = (over: Partial<OutgoingMail> = {}): OutgoingMail => ({
 
 let dir: string;
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'kv-fake-mail-')); });
-afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+afterEach(() => { lockFaults.left = 0; rmSync(dir, { recursive: true, force: true }); });
 
 describe('fake mailbox', () => {
   it('starts empty when there is no file', () => {
@@ -61,6 +76,17 @@ describe('fake mailbox', () => {
   it('writes the file atomically, leaving no temporary file behind', () => {
     deliverFakeMail(dir, { subject: 'um' });
     deliverFakeMail(dir, { subject: 'dois' });
+    expect(readdirSync(dir)).toEqual(['mailbox.json']);
+  });
+
+  it('waits for the lock when Windows briefly refuses to create it', async () => {
+    lockFaults.left = 3;
+    lockFaults.seen = 0;
+    expect(deliverFakeMail(dir, { subject: 'um' }).uid).toBe(1);
+    expect(lockFaults.seen).toBe(3);
+    lockFaults.left = 2;
+    await createFakeMailbox(dir, creds).send(outgoing({ messageId: 'out-1@kv' }));
+    expect(readFakeMailbox(dir).messages.map((m) => m.subject)).toEqual(['um', 'Re: Olá']);
     expect(readdirSync(dir)).toEqual(['mailbox.json']);
   });
 

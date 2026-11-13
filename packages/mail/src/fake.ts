@@ -41,7 +41,9 @@ function withLock<T>(dir: string, fn: () => T): T {
     try {
       fd = openSync(lock, 'wx');
     } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== 'EEXIST' || attempt >= 500) throw e;
+      // EEXIST: outro processo segura a trava. EPERM/EACCES/EBUSY: no Windows, a trava está sendo apagada.
+      const code = (e as NodeJS.ErrnoException).code ?? '';
+      if ((code !== 'EEXIST' && !BUSY.has(code)) || attempt >= 500) throw e;
       try {
         if (Date.now() - statSync(lock).mtimeMs > STALE_LOCK_MS) rmSync(lock, { force: true });
       } catch { /* a trava sumiu entre as duas chamadas */ }

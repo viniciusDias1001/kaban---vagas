@@ -129,6 +129,18 @@ describe('headers and messages', () => {
     });
   });
 
+  it('keeps every usable Reply-To address and never an empty one', () => {
+    const withReplyTo = (replyTo: { name?: string; address?: string }[]) => toRawMail(
+      { uid: 1, envelope: { from: [{ address: 'joana@acme.com' }], replyTo }, headers: Buffer.from('Reply-To: x\r\n\r\n') }, '', 1,
+    ).replyTo;
+    // Grupo (`Recrutamento: ;`): o imapflow devolve o nome do grupo com endereço vazio.
+    expect(withReplyTo([{ name: 'Recrutamento', address: '' }])).toBeNull();
+    expect(withReplyTo([{ name: 'Recrutamento', address: '' }, { name: 'Ana', address: 'Ana@Acme.com' }])).toBe('ana@acme.com');
+    // Dois endereços: os dois ficam, para quem decide o destinatário ver que não é um só.
+    expect(withReplyTo([{ address: 'A@Acme.com' }, { address: 'b@globex.com' }])).toBe('a@acme.com, b@globex.com');
+    expect(withReplyTo([])).toBeNull();
+  });
+
   it('builds a plain-text reply in the thread with one attachment at most', () => {
     const opts = sendOptions({
       messageId: 'out-1@kv', from: 'maria@example.com', fromName: 'Maria Exemplo da Silva', to: 'joana@acme.com', subject: 'Re: Vaga',
