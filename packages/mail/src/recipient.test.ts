@@ -7,7 +7,11 @@ describe('isNoReply', () => {
     expect(isNoReply(a)).toBe(true);
   });
 
-  it.each(['joana@acme.com', 'rh@acme.com', 'ana.noreply@acme.com'])('%s takes a reply', (a) => {
+  it.each(['careers-noreply@acme.com', 'talent.noreply@acme.com', 'jobs-noreply@acme.com', 'acme-no-reply@acme.com', 'recrutamento.naoresponda@acme.com.br', 'ana.noreply.silva@acme.com', 'ana.noreply@acme.com', 'vagas_do-not-reply@acme.com', 'rh+nao-responda@acme.com', 'NoReply-Talent@acme.com'])('%s takes no reply (token anywhere)', (a) => {
+    expect(isNoReply(a)).toBe(true);
+  });
+
+  it.each(['joana@acme.com', 'rh@acme.com', 'bernoreply@acme.com', 'ana.noreplysilva@acme.com'])('%s takes a reply', (a) => {
     expect(isNoReply(a)).toBe(false);
   });
 });
