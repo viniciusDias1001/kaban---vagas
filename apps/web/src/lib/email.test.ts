@@ -1,12 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { ALERT_KINDS, type AlertDto } from '@kv/shared/client';
+import { ALERT_KINDS, type AlertDto, type MailMessageDto } from '@kv/shared/client';
 import {
-  alertAction, alertBody, alertTitle, alertsToNotify, mailBadgeLabel, mailPasswordProblem, replyStateLabel, summaryLine,
+  alertAction, alertBody, alertTitle, alertsToNotify, mailActions, mailBadgeLabel, mailPasswordProblem, replyStateLabel, summaryLine,
 } from './email';
 
 const alert = (over: Partial<AlertDto> = {}): AlertDto => ({
   id: 1, kind: 'interview', jobId: 5, company: 'Acme', jobTitle: 'Dev', messageId: 9, replyId: null, subject: 'Olá', summary: null,
   payload: {}, createdAt: 0, ...over,
+});
+
+const message = (over: Partial<MailMessageDto> = {}): MailMessageDto => ({
+  id: 1, threadKey: 't', direction: 'in', fromAddress: 'rh@example.com', fromName: 'RH', toAddress: 'maria@example.com', subject: 'Olá',
+  sentAt: 0, body: '', kind: null, summary: null, lang: null, requests: [], jobId: 5, company: 'Acme', jobTitle: 'Dev', linkedBy: 'auto',
+  corrected: false, backfill: false, movedTo: null, canUndoMove: false, replyState: null, replyOrigin: null, replyApprovedBy: null,
+  alerted: false, ...over,
 });
 
 describe('alertTitle / alertBody / alertAction', () => {
@@ -89,5 +96,19 @@ describe('mailPasswordProblem', () => {
     expect(mailPasswordProblem('a'.repeat(65))).not.toBeNull();
     expect(mailPasswordProblem('a'.repeat(64))).toBeNull();
     expect(mailPasswordProblem('abcdefgé12345')).not.toBeNull();
+  });
+});
+
+describe('mailActions', () => {
+  it('says what the app did with a mail', () => {
+    expect(mailActions(message({ movedTo: 'perdida' }))).toEqual(['moveu o card para Perdida']);
+    expect(mailActions(message({ replyState: 'enviada', replyApprovedBy: 'auto' }))).toEqual(['respondeu sozinho']);
+    expect(mailActions(message({ replyState: 'enviada', replyApprovedBy: 'owner' }))).toEqual(['respondeu com o seu OK']);
+    expect(mailActions(message({ movedTo: 'entrevista', replyState: 'rascunho', alerted: true }))).toEqual(['moveu o card para Entrevista', 'rascunho esperando você']);
+    expect(mailActions(message({ replyState: 'descartada' }))).toEqual(['resposta descartada']);
+    expect(mailActions(message({ replyState: 'falhou' }))).toEqual(['envio falhou']);
+    expect(mailActions(message({ alerted: true }))).toEqual(['alertou você']);
+    expect(mailActions(message({ corrected: true }))).toEqual(['classificação corrigida']);
+    expect(mailActions(message({}))).toEqual([]);
   });
 });

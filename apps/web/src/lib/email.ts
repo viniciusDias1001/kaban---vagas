@@ -1,5 +1,5 @@
 import {
-  COLUMN_LABELS, KNOWN_FACT_LABELS, type AlertDto, type AlertKind, type EmailKind, type JobMailMarks, type ReplyState,
+  COLUMN_LABELS, KNOWN_FACT_LABELS, type AlertDto, type AlertKind, type EmailKind, type JobMailMarks, type MailMessageDto, type ReplyState,
 } from '@kv/shared/client';
 
 /** Funções puras do e-mail (sem React): textos dos alertas, rótulos e a conferência da senha de app. */
@@ -106,4 +106,17 @@ export function mailPasswordProblem(raw: string): string | null {
   if (password.length > 64) return 'A senha de app é longa demais.';
   if (!/^[\x21-\x7e]+$/.test(password)) return 'A senha de app só pode ter letras, números e símbolos comuns.';
   return null;
+}
+
+/** O que o app fez com o e-mail, em pt-BR; lista vazia quando não fez nada. */
+export function mailActions(m: MailMessageDto): string[] {
+  const out: string[] = [];
+  if (m.movedTo) out.push(`moveu o card para ${COLUMN_LABELS[m.movedTo]}`);
+  if (m.replyState === 'enviada') out.push(m.replyApprovedBy === 'owner' ? 'respondeu com o seu OK' : 'respondeu sozinho');
+  else if (m.replyState === 'rascunho') out.push('rascunho esperando você');
+  else if (m.replyState === 'descartada') out.push('resposta descartada');
+  else if (m.replyState === 'falhou') out.push('envio falhou');
+  else if (m.alerted && m.replyState === null) out.push('alertou você');
+  if (m.corrected) out.push('classificação corrigida');
+  return out;
 }
