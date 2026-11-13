@@ -161,3 +161,10 @@ Decidido durante a implementação; substitui as partes deste spec que citam SQL
 - **Segurança:** RLS habilitado em todas as tabelas, sem policies. O app acessa pelo `DATABASE_URL` (papel dono); a API pública do Supabase (chave anon) não enxerga nada.
 - **Testes:** unitários rodam em PGlite (Postgres em memória, sem serviço externo); e2e e CI usam um Postgres real.
 - **Railway:** continua um serviço só; o volume deixa de ser necessário.
+
+## Adendo (2026-11-12): roteiro atualizado
+
+Decidido ao desenhar o sub-projeto 3; substitui a lista de cinco sub-projetos da seção "Contexto":
+
+- O roteiro passa a ter oito sub-projetos e está em `2026-11-12-candidatura-automatica-design.md`: candidatura automática (3), e-mail (4), painel de métricas (5), mais sites e fontes (6), login (7) e polish (8).
+- No sub-projeto 3 a IA move o card até **Aplicada**, não até Entrevista. Os movimentos para Entrevista, Oferta e Perdida passam ao sub-projeto 4, que os decide pelos e-mails recebidos.
