@@ -132,6 +132,12 @@ describe('headers and messages', () => {
     });
   });
 
+  it('dates a message by when Gmail received it, and by its Date header only without that', () => {
+    const base = { seq: 1, uid: 3, envelope: { date: new Date(1000), from: [{ address: 'joana@acme.com' }] }, headers: Buffer.from('') };
+    expect(toRawMail({ ...base, internalDate: new Date(9000) }, '', 1).date).toBe(9000);
+    expect(toRawMail(base, '', 1).date).toBe(1000);
+  });
+
   it('drops NUL characters from the subject, names and addresses', () => {
     const msg = {
       seq: 1, uid: 5,

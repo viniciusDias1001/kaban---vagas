@@ -202,7 +202,8 @@ export function toRawMail(
     // Grupo vazio vem com endereço vazio e não conta; vários endereços ficam todos, para não parecer um só.
     replyTo: h.has('reply-to') ? replyToAddresses(env.replyTo) : null,
     subject: env.subject ?? '',
-    date: epochMs(env.date) ?? epochMs(msg.internalDate) ?? 0,
+    // A data em que o Gmail recebeu (INTERNALDATE), que o remetente não escolhe; o cabeçalho Date só na falta dela.
+    date: epochMs(msg.internalDate) ?? epochMs(env.date) ?? 0,
     inReplyTo,
     references,
     autoSubmitted: autoSubmitted !== undefined && autoSubmitted.trim().toLowerCase() !== 'no',

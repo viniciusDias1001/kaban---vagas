@@ -9,7 +9,7 @@ export interface RawMail {
   /** Endereço do Reply-To, em minúsculas; null sem o cabeçalho ou sem endereço não vazio. Com mais de um endereço, todos, separados por `, ` (nunca reduzido a um). */
   replyTo: string | null;
   subject: string;
-  /** Data do cabeçalho Date, em epoch ms. */
+  /** Quando o servidor recebeu a mensagem (INTERNALDATE), em epoch ms; sem ela, o cabeçalho Date. */
   date: number;
   inReplyTo: string | null;
   references: string[];
