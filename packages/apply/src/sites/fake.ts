@@ -3,7 +3,7 @@ import type { Page } from 'playwright';
 import type { Question, QuestionKind } from '@kv/shared';
 import { SiteLayoutError } from '../types';
 import type { ApplyJob, ApplySite, ApplyTarget, HumanGate, StepRead } from '../types';
-import { buttonOnScreen, fieldErrorOnScreen, forgetSubmitClick, squash, submitAndWait } from './shared';
+import { buttonOnScreen, fieldErrorOnScreen, forgetSubmitClick, siteLayoutErrors, squash, submitAndWait } from './shared';
 
 export const FAKE_SITE_ORIGIN = 'http://apply.fake.test';
 
@@ -77,7 +77,7 @@ export function createFakeSite(options: FakeSiteOptions = {}): ApplySite {
       return { kind: 'form' };
     },
 
-    async readStep(page): Promise<StepRead> {
+    readStep: (page) => siteLayoutErrors('site de teste', async (): Promise<StepRead> => {
       const step = page.locator('form[data-fake-form] .step:not([hidden])').first();
       if (!(await step.count())) throw new SiteLayoutError('formulário do site de teste não encontrado');
       const questions = await step.locator('.field').evaluateAll((fields): Question[] =>
@@ -113,9 +113,9 @@ export function createFakeSite(options: FakeSiteOptions = {}): ApplySite {
       }
       const isLast = (await page.locator('#next:visible').count()) === 0;
       return { questions, isLast };
-    },
+    }),
 
-    async fillStep(page, answers, files) {
+    fillStep: (page, answers, files) => siteLayoutErrors('site de teste', async () => {
       const step = page.locator('form[data-fake-form] .step:not([hidden])').first();
       for (const answer of answers) {
         const input = step.locator(`[name="${answer.questionId}"]`);
@@ -131,7 +131,7 @@ export function createFakeSite(options: FakeSiteOptions = {}): ApplySite {
         else if (type.startsWith('select')) await input.selectOption(Array.isArray(value) ? value : String(value));
         else await input.fill(String(value));
       }
-    },
+    }),
 
     async next(page) {
       await page.locator('#next').click({ timeout: STEP_TIMEOUT_MS });

@@ -79,6 +79,41 @@ export async function leaveForm(page: Page): Promise<void> {
   await page.goto('about:blank');
 }
 
+/** Rede, navegação e navegador fechado: passageiros (o motor relança e a fila tenta de novo mais tarde). */
+const TRANSIENT = /net::ERR_|navigat|execution context was destroyed|frame was detached|has been closed|target closed|browser closed|crash|fetch failed|ECONN|ETIMEDOUT|ENOTFOUND|EAI_AGAIN/i;
+/** Estado de elemento que o roteiro não esperava: a página mudou de forma. */
+const ELEMENT_STATE = new RegExp([
+  'element is not', 'not a checkbox or radio button', 'did not change its state', 'strict mode violation',
+  'can only accept single file', 'not attached to the dom', 'did not find some options', 'outside of the viewport',
+  'cannot set input files', 'not an? <',
+].join('|'), 'i');
+
+/**
+ * Erro do Playwright que diz que a página não é o que o roteiro espera: espera esgotada (`errors.TimeoutError`) ou
+ * elemento em estado inesperado. Erro de rede, de navegação ou de navegador fechado não é.
+ */
+export function isLayoutFailure(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  // Só a primeira linha: o "Call log" que o Playwright acrescenta cita navegações agendadas em qualquer espera.
+  const first = error.message.split(/\r?\n/)[0] ?? '';
+  if (TRANSIENT.test(first)) return false;
+  return error.name === 'TimeoutError' || ELEMENT_STATE.test(first);
+}
+
+/**
+ * Roda a leitura ou o preenchimento de uma etapa transformando as falhas de layout do Playwright em
+ * `SiteLayoutError` ("formulário não reconhecido"); o resto passa como veio.
+ */
+export async function siteLayoutErrors<T>(site: string, run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    if (error instanceof SiteLayoutError || error instanceof SubmitRejectedError || !isLayoutFailure(error)) throw error;
+    const line = ((error as Error).message.split(/\r?\n/)[0] ?? '').trim().slice(0, 200);
+    throw new SiteLayoutError(`${site}: o formulário não respondeu como esperado (${line})`, { cause: error });
+  }
+}
+
 export const squash = (text: string): string => text.replace(/\s+/g, ' ').trim();
 export const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 

@@ -3,8 +3,8 @@ import type { Question, QuestionKind, ResolvedAnswer } from '@kv/shared';
 import { SiteLayoutError, SubmitRejectedError } from '../types';
 import type { ApplyJob, ApplySite, ApplyTarget, HumanGate, StepRead } from '../types';
 import {
-  SITE_TIMEOUTS, buttonOnScreen, fieldErrorOnScreen, forgetSubmitClick, humanGateOf, leaveForm, matchOption, sameText, squash, submitAndWait,
-  typeWithSuggestions,
+  SITE_TIMEOUTS, buttonOnScreen, fieldErrorOnScreen, forgetSubmitClick, humanGateOf, leaveForm, matchOption, sameText, siteLayoutErrors, squash,
+  submitAndWait, typeWithSuggestions,
 } from './shared';
 
 const EMBED = 'https://job-boards.greenhouse.io/embed/job_app';
@@ -310,7 +310,7 @@ export function createGreenhouseSite(deps: Partial<GreenhouseDeps> = {}): ApplyS
       return { kind: 'form' };
     },
 
-    async readStep(page): Promise<StepRead> {
+    readStep: (page) => siteLayoutErrors('Greenhouse', async (): Promise<StepRead> => {
       const api = apiOf(page);
       const mapped = mapGreenhouseQuestions(api);
       for (const question of mapped) {
@@ -319,15 +319,15 @@ export function createGreenhouseSite(deps: Partial<GreenhouseDeps> = {}): ApplyS
         }
       }
       return { questions: [...mapped, ...(await consentQuestions(page, allFieldNames(api)))], isLast: true };
-    },
+    }),
 
-    async fillStep(page, answers, files) {
+    fillStep: (page, answers, files) => siteLayoutErrors('Greenhouse', async () => {
       const byId = new Map(mapGreenhouseQuestions(apiOf(page)).map((q) => [q.id, q]));
       for (const answer of answers) {
         const question = byId.get(answer.questionId);
         if (!question) {
           const box = consentBox(page, answer.questionId);
-          if (await box.count()) await box.setChecked(answer.value === true || answer.value === 'true');
+          if (await box.count()) await box.setChecked(answer.value === true || answer.value === 'true', { timeout: stepMs });
           continue; // resposta de pergunta que não está na etapa: ignorada
         }
         const control = await findControl(page, question);
@@ -336,7 +336,7 @@ export function createGreenhouseSite(deps: Partial<GreenhouseDeps> = {}): ApplyS
           throw new SiteLayoutError(`a resposta para "${question.label}" não tem controle na página`);
         }
       }
-    },
+    }),
 
     async next() {
       throw new SiteLayoutError('o formulário da Greenhouse tem uma etapa só');

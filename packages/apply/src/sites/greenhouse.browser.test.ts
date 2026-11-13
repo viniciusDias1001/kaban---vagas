@@ -102,6 +102,13 @@ describe.skipIf(!recorded)('greenhouse site (needs the recorded form: run pnpm a
     expect(await page.getByLabel(text.label, { exact: true }).inputValue()).toBe('');
   });
 
+  it('a field the page will not let it fill is a layout error, not a passing error (C-4)', async () => {
+    await site.open(page, target);
+    page.setDefaultTimeout(800);
+    await page.getByLabel(text.label, { exact: true }).evaluate((el) => { (el as HTMLInputElement).disabled = true; });
+    await expect(site.fillStep(page, [ans(text.id, 'Ana')], files)).rejects.toBeInstanceOf(SiteLayoutError);
+  });
+
   it('empties a chosen option on null', async () => {
     await site.open(page, target);
     await site.fillStep(page, [ans(select.id, select.options[0])], files);

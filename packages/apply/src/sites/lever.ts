@@ -3,8 +3,8 @@ import type { Question, ResolvedAnswer } from '@kv/shared';
 import { SiteLayoutError } from '../types';
 import type { ApplyJob, ApplySite, ApplyTarget, StepRead } from '../types';
 import {
-  SITE_TIMEOUTS, buttonOnScreen, fieldErrorOnScreen, forgetSubmitClick, humanGateOf, leaveForm, matchOption, sleep, squash, submitAndWait,
-  typeWithSuggestions,
+  SITE_TIMEOUTS, buttonOnScreen, fieldErrorOnScreen, forgetSubmitClick, humanGateOf, leaveForm, matchOption, siteLayoutErrors, sleep, squash,
+  submitAndWait, typeWithSuggestions,
 } from './shared';
 
 const COMPANY = /^[A-Za-z0-9_-]+$/;
@@ -264,12 +264,12 @@ export function createLeverSite(deps: Partial<LeverDeps> = {}): ApplySite {
       return { kind: 'form' };
     },
 
-    async readStep(page): Promise<StepRead> {
+    readStep: (page) => siteLayoutErrors('Lever', async (): Promise<StepRead> => {
       const fields = await readFields(page);
       return { questions: fields.map((f) => f.question), isLast: true };
-    },
+    }),
 
-    async fillStep(page, answers, files) {
+    fillStep: (page, answers, files) => siteLayoutErrors('Lever', async () => {
       const fields = new Map((await readFields(page)).map((f) => [f.question.id, f]));
       // Tudo é conferido contra a página antes de tocar em qualquer campo.
       const entries: Entry[] = [];
@@ -318,7 +318,7 @@ export function createLeverSite(deps: Partial<LeverDeps> = {}): ApplySite {
       await sleep(settleMs);
       off = await differing(page, entries);
       if (off.length) throw new SiteLayoutError(`o Lever mudou o campo "${off[0].field.question.label}" depois de preenchido`);
-    },
+    }),
 
     async next() {
       throw new SiteLayoutError('o formulário do Lever tem uma etapa só');
