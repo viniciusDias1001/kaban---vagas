@@ -353,7 +353,9 @@ describe('actOnNext: replies', () => {
     expect(await replyForMessage(db, invite)).toBeNull();
     expect(await replyForMessage(db, request)).toBeNull();
     const alerts = await openAlerts(db);
-    expect(alerts.map((a) => [a.kind, a.replyId])).toEqual([['draft', null], ['interview', null]]);
+    expect(alerts.map((a) => [a.kind, a.replyId, a.payload.reason])).toEqual([
+      ['draft', null, 'Sem rascunho da IA. Responda você mesmo.'], ['interview', null, 'Sem rascunho da IA. Responda você mesmo.'],
+    ]);
     expect(calls).toEqual([]);
   });
 
@@ -362,7 +364,8 @@ describe('actOnNext: replies', () => {
     const invite = await classified('entrevista');
     expect(await actOnNext(deps)).toBe(true);
     expect(await replyForMessage(db, invite)).toBeNull();
-    expect((await openAlerts(db))[0]).toMatchObject({ kind: 'interview', replyId: null });
+    const noDraft = 'Sem rascunho da IA. Responda você mesmo.';
+    expect((await openAlerts(db))[0]).toMatchObject({ kind: 'interview', replyId: null, payload: { reason: noDraft } });
     expect(calls).toEqual([]);
 
     await db.execute(sql`truncate table ai_usage`);
@@ -370,6 +373,7 @@ describe('actOnNext: replies', () => {
     expect(await actOnNext(deps)).toBe(true);
     expect(calls).toEqual(['strong', 'strong']); // uma segunda tentativa levando as violações
     expect(await replyForMessage(db, forged)).toBeNull();
+    expect((await openAlerts(db)).find((a) => a.messageId === forged)).toMatchObject({ kind: 'interview', payload: { reason: noDraft } });
   });
 
   it('writes no reply for mail that takes none', async () => {

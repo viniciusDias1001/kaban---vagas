@@ -21,6 +21,7 @@ import type { MailWorkDeps } from './classify';
 
 export const NO_REPLY_REASON = 'Este e-mail não aceita resposta.';
 export const AMBIGUOUS_REPLY_REASON = 'Este e-mail pede resposta para mais de um endereço. Responda você mesmo.';
+export const NO_DRAFT_REASON = 'Sem rascunho da IA. Responda você mesmo.';
 
 interface JobInfo { id: number; company: string; title: string; country: 'BR' | 'INT' }
 
@@ -96,6 +97,8 @@ async function prepare(deps: MailWorkDeps, mail: MailMessageRow, config: EmailCo
     from: { address: mail.fromAddress, name: mail.fromName }, replyTo: mail.replyTo, autoSubmitted: mail.autoSubmitted, listId: mail.listId,
   });
   const noReply: AlertPayload = recipient.ok ? {} : { reason: reasonFor(recipient) };
+  // Alerta `draft` ou `interview` sem resposta: sempre com o motivo (não aceita resposta, endereço ambíguo, ou sem rascunho).
+  const withoutReply: AlertPayload = recipient.ok ? { reason: NO_DRAFT_REASON } : noReply;
   const profile = (await baseProfile(db))?.data ?? null;
   const lang: EmailLang = mail.lang ?? 'pt-BR';
 
@@ -103,10 +106,8 @@ async function prepare(deps: MailWorkDeps, mail: MailMessageRow, config: EmailCo
     const draft = recipient.ok && config.aiDrafts && profile
       ? await aiDraft(deps, mail, job, { profile, kind: 'entrevista', lang, requests: [] })
       : null;
-    return {
-      job, decisive, alert: { kind: 'interview', payload: noReply },
-      reply: draft === null || !recipient.ok ? null : draftReply(mail, recipient.address, draft, []),
-    };
+    const reply = draft === null || !recipient.ok ? null : draftReply(mail, recipient.address, draft, []);
+    return { job, decisive, alert: { kind: 'interview', payload: reply ? {} : withoutReply }, reply };
   }
 
   // Pedido. Sem perfil, nenhum fato pode ser respondido pelo código.
@@ -125,7 +126,7 @@ async function prepare(deps: MailWorkDeps, mail: MailMessageRow, config: EmailCo
     const draft = recipient.ok && config.aiDrafts && profile
       ? await aiDraft(deps, mail, job, { profile, kind: 'pedido', lang, requests })
       : null;
-    if (draft === null || !recipient.ok) return { ...NOTHING, job, alert: { kind: 'draft', payload: noReply } };
+    if (draft === null || !recipient.ok) return { ...NOTHING, job, alert: { kind: 'draft', payload: withoutReply } };
     return {
       ...NOTHING, job, alert: { kind: 'draft', payload: recipientNote(mail, recipient.address) },
       reply: draftReply(mail, recipient.address, draft, saved.map((s) => s.fact)),
@@ -135,7 +136,7 @@ async function prepare(deps: MailWorkDeps, mail: MailMessageRow, config: EmailCo
   const missing = known.filter((k) => k.value === null).map((k) => k.fact);
   if (missing.length > 0) return { ...NOTHING, job, alert: { kind: 'missing_fact', payload: { missing, ...noReply } } };
   if (config.factsMode === 'off') return { ...NOTHING, job };
-  if (!recipient.ok || !profile) return { ...NOTHING, job, alert: { kind: 'draft', payload: noReply } };
+  if (!recipient.ok || !profile) return { ...NOTHING, job, alert: { kind: 'draft', payload: withoutReply } };
 
   const items = saved.map((s) => s.fact);
   const composed = composeFactsReply({ lang, name: profile.contact.name, subject: mail.subject, items: saved });
