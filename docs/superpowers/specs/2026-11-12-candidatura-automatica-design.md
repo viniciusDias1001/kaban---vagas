@@ -1,7 +1,7 @@
 # Candidatura automática — Design (sub-projeto 3)
 
 Data: 2026-11-12
-Status: aguardando aprovação do dono
+Status: aprovado para planejamento
 Depende de: Core e IA de perfil (`2026-11-11-core-kanban-design.md`, `2026-11-11-ia-perfil-design.md`, com todos os adendos)
 
 ## Contexto
