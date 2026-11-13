@@ -251,6 +251,23 @@ describe('sendNext', () => {
     expect(await openAlerts(db)).toEqual([]);
   });
 
+  it('never sends twice a reply that was delivered, ended `falhou` and was approved again', async () => {
+    // O SMTP deu erro depois de o Gmail aceitar; a cópia em Enviados ainda não tinha aparecido.
+    const { mailbox, sends } = mailboxWith({
+      send: async (mail) => { await bed.mailbox.send(mail); throw new MailTransientError('tempo esgotado'); },
+      sentExists: async () => false,
+    });
+    await sendNext({ ...deps, mailbox });
+    expect(await replyById(db, replyId)).toMatchObject({ state: 'falhou', outMessageId: 'out-1@kanban-vagas.local' });
+    const state = readFakeMailbox(dir);
+    writeFakeMailbox(dir, { ...state, messages: state.messages.map((m) => (m.folder === 'sent' ? { ...m, date: MAIL_NOW } : m)) });
+    // O dono aprova de novo; agora a cópia está no fio.
+    await db.update(mailReplies).set({ state: 'aprovada', approvedBy: 'owner' }).where(eq(mailReplies.id, replyId));
+    await sendNext({ ...deps, mailbox });
+    expect(sends).toHaveLength(1);
+    expect(await replyById(db, replyId)).toMatchObject({ state: 'descartada', note: 'Você já respondeu este e-mail.' });
+  });
+
   /** Um segundo pedido no mesmo fio, um minuto depois do primeiro, com a resposta aprovada depois da primeira. */
   async function secondRequestInThread(): Promise<number> {
     const mail = bed.deliver({
@@ -295,6 +312,14 @@ describe('sendNext', () => {
     expect(await openAlerts(db)).toMatchObject([{ kind: 'draft', replyId }]);
     expect(await sendNext({ ...deps, mailbox, resume })).toBe(true);
     expect(await replyById(db, second)).toMatchObject({ state: 'enviada' });
+  });
+
+  it('raises no draft alert when the owner discarded the reply while it was being prepared', async () => {
+    await db.update(mailReplies).set({ attachResume: true }).where(eq(mailReplies.id, replyId));
+    const resume = async () => { await discardReply(db, replyId, null); return null; };
+    expect(await sendNext({ ...deps, resume })).toBe(true);
+    expect(await replyById(db, replyId)).toMatchObject({ state: 'descartada' });
+    expect(await openAlerts(db)).toEqual([]);
   });
 
   it('still lets a mailbox error through when preparing fails', async () => {

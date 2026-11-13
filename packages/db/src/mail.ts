@@ -3,7 +3,7 @@ import type { Column, EmailKind, EmailLang, EmailRequest, JobEmailsDto, MailIgno
 import { COLUMNS, isAppliedOrLater } from '@kv/shared';
 import type { Db } from './client';
 import { raiseAlert } from './mail-alerts';
-import { lockJobsForWrite, undoEmailMoveLocked } from './mail-board';
+import { lockJobsForWrite, undoThreadMovesLocked } from './mail-board';
 import { toMailReplyDto } from './mail-replies';
 import { alerts, applications, jobEvents, jobs, mailAccount, mailIgnored, mailMessages, mailReplies } from './schema';
 
@@ -213,7 +213,9 @@ export async function forceClassifyAll(db: Db): Promise<number> {
 
 /**
  * O dono ligou a mensagem a um card: o fio inteiro passa a ser dele (`linkedBy = 'owner'`), deixa de estar corrigido (um
- * "Não é desta vaga" anterior não vale para o card certo) e a mensagem volta a esperar ação.
+ * "Não é desta vaga" anterior não vale para o card certo) e a mensagem volta a esperar ação, junto com as outras recebidas
+ * e já classificadas do fio: cada uma age de novo para o card certo (movimento, alerta, resposta; a ação não repete o que
+ * já fez para este mesmo card).
  */
 export async function linkThreadToJob(db: Db, messageId: number, jobId: number, _now: number = Date.now()): Promise<boolean> {
   return db.transaction(async (tx) => {
@@ -221,13 +223,17 @@ export async function linkThreadToJob(db: Db, messageId: number, jobId: number, 
     if (!msg) return false;
     await tx.update(mailMessages).set({ jobId, linkedBy: 'owner', corrected: false }).where(eq(mailMessages.threadKey, msg.threadKey));
     await tx.update(mailMessages).set({ processedAt: null }).where(eq(mailMessages.id, messageId));
+    await tx
+      .update(mailMessages)
+      .set({ processedAt: null })
+      .where(and(eq(mailMessages.threadKey, msg.threadKey), eq(mailMessages.direction, 'in'), isNotNull(mailMessages.kind)));
     return true;
   });
 }
 
 /**
- * "Não é desta vaga", numa transação: desfaz o movimento que uma mensagem do fio fez no card quando ele ainda é o último
- * evento do card; resolve os alertas abertos das mensagens do fio e das respostas delas; deixa o fio sem vaga
+ * "Não é desta vaga", numa transação: desfaz os movimentos que as mensagens do fio fizeram no card enquanto são os últimos
+ * eventos do card, e marca todos eles `undone` (ver `undoThreadMovesLocked`); resolve os alertas abertos das mensagens do fio e das respostas delas; deixa o fio sem vaga
  * (`linkedBy = 'owner'`, `corrected = true`); e abre um alerta `unmatched` para a mensagem recebida mais nova do fio
  * (também na primeira leitura), que é o caminho para ligá-lo ao card certo. Devolve false se a mensagem não existe.
  */
@@ -243,8 +249,8 @@ export async function unlinkThread(db: Db, messageId: number, now: number = Date
       .where(eq(mailMessages.threadKey, msg.threadKey))
       .orderBy(desc(mailMessages.sentAt), desc(mailMessages.id));
     const ids = thread.map((m) => m.id);
-    // Só o último evento de um card pode ser desfeito; a mais nova primeiro.
-    for (const id of ids) await undoEmailMoveLocked(tx, id, now);
+    // Os movimentos do fio: desfeitos enquanto são os últimos do card, e todos marcados `undone`.
+    await undoThreadMovesLocked(tx, ids, now);
 
     const replyIds = (await tx.select({ id: mailReplies.id }).from(mailReplies).where(inArray(mailReplies.messageId, ids))).map((r) => r.id);
     await tx

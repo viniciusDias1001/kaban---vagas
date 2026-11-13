@@ -6,7 +6,8 @@ import {
   nextUnprocessed, pruneIgnored, reopenMessage, requestPromote, saveClassification, saveMailAccount, threadJobs, threadMessages,
   unlinkThread, updateMailAccount, jobEmails, listMailMessages, type NewIgnored, type NewMailMessage,
 } from './mail';
-import { asc, eq } from 'drizzle-orm';
+import { and, asc, eq } from 'drizzle-orm';
+import { appliedJobFacts } from './dashboard';
 import { openAlerts, raiseAlert, resolveAlerts } from './mail-alerts';
 import { moveCardByEmail } from './mail-board';
 import { createReply, markReplySending, markReplySent } from './mail-replies';
@@ -224,6 +225,71 @@ describe('stored messages', () => {
     const [row] = await db.select({ column: jobs.column }).from(jobs).where(eq(jobs.id, job.id));
     expect(row!.column).toBe('oferta');
     expect((await openAlerts(db)).map((a) => [a.kind, a.messageId])).toEqual([['unmatched', invite]]);
+  });
+
+  it('unlinking a thread that moved the card twice puts it back where it was before the first move', async () => {
+    const job = await seedJob({ column: 'aplicada' });
+    await db.insert(jobEvents).values({ jobId: job.id, fromColumn: 'selecionadas', toColumn: 'aplicada', actor: 'humano', createdAt: 50 });
+    const invite = (await insertMailMessage(db, msg({ messageId: 'a@x', threadKey: 't1', sentAt: 100, jobId: job.id, linkedBy: 'auto' }), 1))!;
+    const offer = (await insertMailMessage(db, msg({ messageId: 'b@x', threadKey: 't1', sentAt: 250, jobId: job.id, linkedBy: 'auto' }), 1))!;
+    await moveCardByEmail(db, { jobId: job.id, to: 'entrevista', messageId: invite }, 200);
+    await moveCardByEmail(db, { jobId: job.id, to: 'oferta', messageId: offer }, 300);
+    expect(await unlinkThread(db, offer, 1000)).toBe(true);
+    const [row] = await db.select({ column: jobs.column }).from(jobs).where(eq(jobs.id, job.id));
+    expect(row!.column).toBe('aplicada');
+    const events = await db.select().from(jobEvents).where(eq(jobEvents.jobId, job.id)).orderBy(asc(jobEvents.id));
+    expect(events.map((e) => [e.actor, e.fromColumn, e.toColumn, e.undone])).toEqual([
+      ['humano', 'selecionadas', 'aplicada', false], ['email', 'aplicada', 'entrevista', true], ['email', 'entrevista', 'oferta', true],
+      ['humano', 'oferta', 'aplicada', false],
+    ]);
+  });
+
+  it('unlinking stops at a move the owner made between two moves of the thread', async () => {
+    const job = await seedJob({ column: 'aplicada' });
+    const invite = (await insertMailMessage(db, msg({ messageId: 'a@x', threadKey: 't1', sentAt: 100, jobId: job.id, linkedBy: 'auto' }), 1))!;
+    const rejection = (await insertMailMessage(db, msg({ messageId: 'b@x', threadKey: 't1', sentAt: 350, jobId: job.id, linkedBy: 'auto' }), 1))!;
+    await moveCardByEmail(db, { jobId: job.id, to: 'entrevista', messageId: invite }, 200);
+    await db.update(jobs).set({ column: 'oferta' }).where(eq(jobs.id, job.id));
+    await db.insert(jobEvents).values({ jobId: job.id, fromColumn: 'entrevista', toColumn: 'oferta', actor: 'humano', createdAt: 300 });
+    await moveCardByEmail(db, { jobId: job.id, to: 'perdida', messageId: rejection }, 400);
+    expect(await unlinkThread(db, invite, 1000)).toBe(true);
+    const [row] = await db.select({ column: jobs.column }).from(jobs).where(eq(jobs.id, job.id));
+    expect(row!.column).toBe('oferta'); // onde o dono o pôs
+    const emailEvents = await db.select().from(jobEvents).where(and(eq(jobEvents.jobId, job.id), eq(jobEvents.actor, 'email')));
+    expect(emailEvents.map((e) => e.undone)).toEqual([true, true]);
+  });
+
+  it('after an unlink and a relink, the first card never counts the thread as an answer, even when moved back by hand', async () => {
+    const wrong = await seedJob({ column: 'aplicada' });
+    const right = await seedJob({ column: 'aplicada' });
+    for (const id of [wrong.id, right.id]) {
+      await db.insert(jobEvents).values({ jobId: id, fromColumn: 'selecionadas', toColumn: 'aplicada', actor: 'humano', createdAt: 50 });
+    }
+    const rejection = (await insertMailMessage(db, msg({ messageId: 'a@x', threadKey: 't1', sentAt: 100, jobId: wrong.id, linkedBy: 'auto' }), 1))!;
+    await moveCardByEmail(db, { jobId: wrong.id, to: 'perdida', messageId: rejection }, 200);
+    // O dono arrasta o card de volta à mão; depois diz "Não é desta vaga" e liga o fio ao card certo.
+    await db.update(jobs).set({ column: 'aplicada' }).where(eq(jobs.id, wrong.id));
+    await db.insert(jobEvents).values({ jobId: wrong.id, fromColumn: 'perdida', toColumn: 'aplicada', actor: 'humano', createdAt: 300 });
+    await unlinkThread(db, rejection, 400);
+    await linkThreadToJob(db, rejection, right.id, 500);
+    const emailEvent = (await db.select().from(jobEvents).where(and(eq(jobEvents.jobId, wrong.id), eq(jobEvents.actor, 'email'))))[0]!;
+    expect(emailEvent.undone).toBe(true);
+    const facts = await appliedJobFacts(db, null);
+    expect(facts.find((f) => f.jobId === wrong.id)).toMatchObject({ firstResponseAt: null, lostAt: null });
+  });
+
+  it('linking reopens every classified incoming mail of the thread, so each one acts for the new card', async () => {
+    const job = await seedJob();
+    const invite = (await insertMailMessage(db, msg({ messageId: 'a@x', threadKey: 't1', sentAt: 100 }), 1))!;
+    const offer = (await insertMailMessage(db, msg({ messageId: 'b@x', threadKey: 't1', sentAt: 200 }), 1))!;
+    const out = (await insertMailMessage(db, msg({ messageId: 'c@x', threadKey: 't1', sentAt: 150, direction: 'out', settled: true }), 5))!;
+    for (const id of [invite, offer]) {
+      await saveClassification(db, id, classification(null), 5);
+      await markProcessed(db, id, 6);
+    }
+    expect(await linkThreadToJob(db, offer, job.id, 9000)).toBe(true);
+    for (const id of [invite, offer]) expect(await mailMessageById(db, id)).toMatchObject({ jobId: job.id, processedAt: null });
+    expect((await mailMessageById(db, out))!.processedAt).toBe(5);
   });
 
   it('linking after an unlink clears the correction', async () => {

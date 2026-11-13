@@ -7,14 +7,14 @@
 import { randomUUID } from 'node:crypto';
 import {
   applicationForJob, baseProfile, discardReply, getMailAccount, insertMailMessage, jobs, mailMessageById, mailReplies, markReplyFailed,
-  markReplySending, markReplySent, nextApprovedReply, profileFor, raiseAlert, repliesInSending, resolveAlerts, returnReplyToDraft,
+  markReplySending, markReplySent, nextApprovedReply, profileFor, raiseAlert, repliesInSending, resolveAlerts, returnApprovedToDraft, returnReplyToDraft,
   type Db, type MailMessageRow, type MailReplyRow,
 } from '@kv/db';
 import { MailAuthError, MailTransientError, isTrustedRecipient, type Mailbox, type OutgoingMail, type RawMail } from '@kv/mail';
 import { renderResumePdf } from '@kv/resume';
 import type { SettingsService } from '@kv/settings';
 import type { EmailLang } from '@kv/shared';
-import { eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, ne } from 'drizzle-orm';
 import { baseResume, resumeFileName } from '../apply/resume';
 import { earlierThreadAddresses } from './act';
 import { withMailboxErrors } from './ingest';
@@ -41,10 +41,10 @@ const NO_COMPANY = 'Empresa';
 
 const defaultMessageId = (): string => `${randomUUID()}@kanban-vagas.local`;
 
-/** A resposta volta para o dono com a nota e um alerta `draft` com o motivo. */
+/** A resposta ainda `aprovada` volta para o dono com a nota e um alerta `draft` com o motivo; já mudou (descartada): nada. */
 async function handBack(deps: SendDeps, reply: MailReplyRow, note: string, why: string): Promise<true> {
   const { db, now, log } = deps;
-  await returnReplyToDraft(db, reply.id, note);
+  if (!(await returnApprovedToDraft(db, reply.id, note))) return true;
   await raiseAlert(db, { kind: 'draft', replyId: reply.id, payload: { reason: note } }, now());
   log(`[mail] resposta ${reply.id} voltou para rascunho: ${why}`);
   return true;
@@ -65,7 +65,7 @@ export async function sendNext(deps: SendDeps): Promise<boolean> {
   let mail: OutgoingMail;
   try {
     const thread = await withMailboxErrors(db, now, () => mailbox.fetchThread(origin.threadKey));
-    if (ownerAnswered(thread, account.address, origin.sentAt, await appReplyIds(db, thread))) {
+    if (ownerAnswered(thread, account.address, origin.sentAt, await appReplyIds(db, thread, reply.id))) {
       if (await discardReply(db, reply.id, ALREADY_ANSWERED, now())) {
         await resolveAlerts(db, { replyId: reply.id }, now());
         log(`[mail] resposta ${reply.id} descartada: o dono já respondeu no fio`);
@@ -174,11 +174,17 @@ function ownerAnswered(thread: RawMail[], ownAddress: string, after: number, app
   return thread.some((m) => m.from.address.trim().toLowerCase() === own && m.date > after && !appReplies.has(m.messageId));
 }
 
-/** Dos Message-IDs do fio, os que são de respostas enviadas pelo app (`out_message_id` de `mail_replies`). */
-async function appReplyIds(db: Db, thread: RawMail[]): Promise<Set<string>> {
+/**
+ * Dos Message-IDs do fio, os que são de outras respostas enviadas pelo app (`out_message_id` de `mail_replies`). A entrega
+ * anterior desta mesma resposta (um envio que ficou `falhou` com a cópia de Enviados atrasada) conta como já respondido.
+ */
+async function appReplyIds(db: Db, thread: RawMail[], replyId: number): Promise<Set<string>> {
   const ids = thread.map((m) => m.messageId);
   if (ids.length === 0) return new Set();
-  const rows = await db.select({ id: mailReplies.outMessageId }).from(mailReplies).where(inArray(mailReplies.outMessageId, ids));
+  const rows = await db
+    .select({ id: mailReplies.outMessageId })
+    .from(mailReplies)
+    .where(and(inArray(mailReplies.outMessageId, ids), ne(mailReplies.id, replyId)));
   return new Set(rows.flatMap((r) => (r.id === null ? [] : [r.id])));
 }
 

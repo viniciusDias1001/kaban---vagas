@@ -5,7 +5,7 @@ import { SAMPLE_PROFILE } from '@kv/ai/testing';
 import {
   applyAnswers, ensureSeedAnswers, getMailAccount, insertMailMessage, jobEvents, jobs, linkThreadToJob, mailMessageById, mailMessages,
   mailReplies, openAlerts,
-  recordUsage, replyForMessage, saveClassification, saveMailAccount, saveProfile, updateMailAccount, alerts as alertsTable,
+  recordUsage, replyForMessage, saveClassification, saveMailAccount, saveProfile, unlinkThread, updateMailAccount, alerts as alertsTable,
   type Db, type NewMailMessage,
 } from '@kv/db';
 import { resetTestDb } from '@kv/db/testing';
@@ -198,15 +198,53 @@ describe('actOnNext: moves and alerts', () => {
     expect(await openAlerts(db)).toEqual([]);
   });
 
-  it('acting again on a relinked mail raises no alert kind it already raised', async () => {
-    const invite = await classified('entrevista', {}, { jobId: null });
+  it('acting again on the same mail for the same card raises no alert kind it already raised', async () => {
+    const invite = await classified('entrevista');
     expect(await actOnNext(deps)).toBe(true);
     const interview = (await openAlerts(db)).find((a) => a.kind === 'interview')!;
     await db.update(alertsTable).set({ resolvedAt: MAIL_NOW }).where(eq(alertsTable.id, interview.id));
     await linkThreadToJob(db, invite, acme, MAIL_NOW);
     expect(await actOnNext(deps)).toBe(true);
-    expect(await column(acme)).toBe('entrevista');
     expect((await openAlerts(db)).filter((a) => a.kind === 'interview')).toEqual([]);
+    expect(await db.select().from(alertsTable).where(eq(alertsTable.kind, 'interview'))).toHaveLength(1);
+  });
+
+  it('linking a card-less invite gives its open alert the card and the draft instead of leaving it stale', async () => {
+    const invite = await classified('entrevista', {}, { jobId: null });
+    expect(await actOnNext(deps)).toBe(true);
+    await linkThreadToJob(db, invite, acme, MAIL_NOW);
+    expect(await actOnNext(deps)).toBe(true);
+    const reply = (await replyForMessage(db, invite))!;
+    const rows = await db.select().from(alertsTable).where(eq(alertsTable.kind, 'interview'));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ jobId: acme, replyId: reply.id, payload: {}, resolvedAt: null });
+  });
+
+  it('relinking to another card raises the alerts again for it, without ringing the phone twice', async () => {
+    const globex = await bed.seedAppliedJob('Globex', 'Engenheira de Dados', MAIL_NOW - 10 * DAY);
+    const invite = await classified('entrevista', {}, { jobId: globex });
+    expect(await actOnNext(deps)).toBe(true);
+    const first = (await openAlerts(db)).find((a) => a.kind === 'interview')!;
+    await db.update(alertsTable).set({ phoneSentAt: MAIL_NOW, phoneAttempts: 1 }).where(eq(alertsTable.id, first.id));
+    await unlinkThread(db, invite, MAIL_NOW);
+    await linkThreadToJob(db, invite, acme, MAIL_NOW);
+    expect(await actOnNext(deps)).toBe(true);
+    const open = (await openAlerts(db)).filter((a) => a.kind === 'interview');
+    expect(open).toEqual([expect.objectContaining({ jobId: acme, replyId: (await replyForMessage(db, invite))!.id })]);
+    const [row] = await db.select().from(alertsTable).where(eq(alertsTable.id, open[0]!.id));
+    expect(row!.phoneSentAt).not.toBeNull(); // o celular já tocou por este convite
+  });
+
+  it('in confirm mode, relinking to another card asks about the right card', async () => {
+    await deps.settings.update({ emailMoveMode: 'confirm' });
+    const globex = await bed.seedAppliedJob('Globex', 'Engenheira de Dados', MAIL_NOW - 10 * DAY);
+    const rejection = await classified('reprovacao', {}, { jobId: globex });
+    expect(await actOnNext(deps)).toBe(true);
+    expect((await openAlerts(db)).map((a) => [a.kind, a.jobId])).toEqual([['move_confirm', globex]]);
+    await unlinkThread(db, rejection, MAIL_NOW);
+    await linkThreadToJob(db, rejection, acme, MAIL_NOW);
+    expect(await actOnNext(deps)).toBe(true);
+    expect((await openAlerts(db)).filter((a) => a.kind === 'move_confirm').map((a) => [a.jobId, a.payload])).toEqual([[acme, { moveTo: 'perdida' }]]);
   });
 
   it('acting again links a new alert to the reply that already exists', async () => {

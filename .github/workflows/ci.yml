@@ -18,7 +18,8 @@ jobs:
   test:
     name: Typecheck, testes unitários e e2e
     runs-on: ubuntu-latest
-    # Cabe a soma dos passos com limite (testes 10, Chromium 10, navegador 10, e2e 15) mais instalação e build.
+    # Teto do job inteiro. Os limites dos passos (testes 10, Chromium 10, navegador 10, e2e 15) somam 45 e só param um passo
+    # travado; numa execução normal os passos levam bem menos, e os 30 minutos deixam o e2e usar os seus 15.
     timeout-minutes: 30
 
     # Postgres real só para o e2e; os testes unitários usam PGlite (em memória) e fixtures, sem rede.

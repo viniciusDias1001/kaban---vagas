@@ -16,7 +16,7 @@ import {
 import type {
   AlertKind, AlertPayload, CandidateProfile, DecisiveKind, EmailConfig, EmailKind, EmailLang, KnownFact,
 } from '@kv/shared';
-import { and, eq, gte, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, or, sql } from 'drizzle-orm';
 import type { MailWorkDeps } from './classify';
 
 export const NO_REPLY_REASON = 'Este e-mail não aceita resposta.';
@@ -39,24 +39,45 @@ interface Plan {
 const NOTHING: Plan = { job: null, decisive: null, alert: null, reply: null };
 
 /**
- * Abre o alerta, a menos que um do mesmo tipo já tenha sido aberto para esta mensagem (aberto ou não, direto ou pela
- * resposta dela): agir de novo sobre um e-mail religado não repete um aviso (nem a mensagem no celular). `missing_fact`
- * fica de fora: "Tentar de novo" sem o valor salvo precisa avisar outra vez.
+ * Abre o alerta de um e-mail, sabendo que ele pode já ter sido tratado antes (o dono o ligou ou religou a um card). Olha os
+ * alertas do mesmo tipo desta mensagem (direto ou pela resposta dela):
+ * - um ainda aberto (o convite sem card, por exemplo) recebe o card, a resposta e o motivo de agora, em vez de ficar velho;
+ * - um já fechado para este mesmo card: nada (o mesmo e-mail no mesmo card nunca avisa duas vezes);
+ * - só fechados, de outro card ou sem card: abre de novo para o card de agora, e se o celular já tocou por este e-mail, o
+ *   novo nasce com o aviso dado (uma mensagem por convite ou oferta).
+ * `missing_fact` fica de fora: "Tentar de novo" sem o valor salvo precisa avisar outra vez.
  */
 async function raiseOnce(tx: Db, input: Parameters<typeof raiseAlert>[1], now: number): Promise<void> {
-  if (input.kind !== 'missing_fact' && input.mailMessageId) {
-    const [seen] = await tx
-      .select({ id: alertsTable.id })
-      .from(alertsTable)
-      .leftJoin(mailReplies, eq(mailReplies.id, alertsTable.replyId))
-      .where(and(
-        eq(alertsTable.kind, input.kind),
-        or(eq(alertsTable.mailMessageId, input.mailMessageId), eq(mailReplies.messageId, input.mailMessageId)),
-      ))
-      .limit(1);
-    if (seen) return;
+  if (input.kind === 'missing_fact' || !input.mailMessageId) {
+    await raiseAlert(tx, input, now);
+    return;
   }
-  await raiseAlert(tx, input, now);
+  const jobId = input.jobId ?? null;
+  const replyId = input.replyId ?? null;
+  const earlier = await tx
+    .select({
+      id: alertsTable.id, jobId: alertsTable.jobId, resolvedAt: alertsTable.resolvedAt, dismissedAt: alertsTable.dismissedAt,
+      phoneSentAt: alertsTable.phoneSentAt,
+    })
+    .from(alertsTable)
+    .leftJoin(mailReplies, eq(mailReplies.id, alertsTable.replyId))
+    .where(and(
+      eq(alertsTable.kind, input.kind),
+      or(eq(alertsTable.mailMessageId, input.mailMessageId), eq(mailReplies.messageId, input.mailMessageId)),
+    ))
+    .orderBy(desc(alertsTable.id));
+  const open = earlier.find((a) => a.resolvedAt === null && a.dismissedAt === null);
+  if (open) {
+    await tx
+      .update(alertsTable)
+      .set({ jobId, replyId, mailMessageId: input.mailMessageId, payload: input.payload ?? {} })
+      .where(eq(alertsTable.id, open.id));
+    return;
+  }
+  if (earlier.some((a) => a.jobId === jobId)) return;
+  const id = await raiseAlert(tx, input, now);
+  const rang = earlier.find((a) => a.phoneSentAt !== null);
+  if (id !== null && rang) await tx.update(alertsTable).set({ phoneSentAt: rang.phoneSentAt }).where(eq(alertsTable.id, id));
 }
 
 /** Age sobre a mensagem classificada mais antiga, numa transação. Devolve se havia o que fazer. */

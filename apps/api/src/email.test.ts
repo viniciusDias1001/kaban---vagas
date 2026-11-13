@@ -107,6 +107,15 @@ describe('job mail', () => {
     expect((await mailMessageById(db, id))!).toMatchObject({ jobId: job.id, linkedBy: 'owner', processedAt: null });
   });
 
+  it('linking any mail of a thread closes the "sem vaga" alert of the whole thread', async () => {
+    const job = await seedJob(db);
+    const older = await seedMail({ kind: 'entrevista', threadKey: '<fio@acme.example>' });
+    const newer = await seedMail({ kind: 'oferta', threadKey: '<fio@acme.example>' });
+    await raiseAlert(db, { kind: 'unmatched', mailMessageId: newer }, NOW);
+    expect((await post(`/email/messages/${older}/link`, { jobId: job.id })).statusCode).toBe(200);
+    expect((await get('/alerts')).json().alerts).toEqual([]);
+  });
+
   it('refuses to link to a card or a mail that does not exist', async () => {
     const job = await seedJob(db);
     const id = await seedMail();

@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { closeDb, type Db } from './index';
 import {
   approveReply, createReply, discardReply, editReply, markReplyFailed, markReplySending, markReplySent, nextApprovedReply,
-  replyById, replyForMessage, repliesInSending, returnReplyToDraft, toMailReplyDto, type NewReply,
+  replyById, replyForMessage, repliesInSending, returnApprovedToDraft, returnReplyToDraft, toMailReplyDto, type NewReply,
 } from './mail-replies';
 import { mailMessages } from './schema';
 import { createTestDb, resetTestDb } from './testing';
@@ -106,6 +106,18 @@ describe('mail replies', () => {
     });
     await markReplySent(db, id, 3000); // não está mais em `enviando`
     expect((await replyById(db, id))!.state).toBe('rascunho');
+  });
+
+  it('returns only an approved reply to draft when asked to, and says whether it did', async () => {
+    const id = (await createReply(db, reply({ messageId, state: 'aprovada', approvedBy: 'auto' }), 1000))!;
+    expect(await markReplySending(db, id, 'out-1@kv', 2000)).toBe(true);
+    // Um envio em andamento nunca volta a rascunho por este caminho.
+    expect(await returnApprovedToDraft(db, id, 'A caixa foi desconectada antes do envio.')).toBe(false);
+    expect((await replyById(db, id))!).toMatchObject({ state: 'enviando', note: null });
+    const other = await seedMessage('<pedido-2@acme.example>');
+    const queued = (await createReply(db, reply({ messageId: other, state: 'aprovada', approvedBy: 'auto' }), 1000))!;
+    expect(await returnApprovedToDraft(db, queued, 'A caixa foi desconectada antes do envio.')).toBe(true);
+    expect((await replyById(db, queued))!).toMatchObject({ state: 'rascunho', approvedBy: null });
   });
 
   it('hands out the oldest approved reply', async () => {

@@ -116,6 +116,14 @@ export async function returnReplyToDraft(db: Db, id: number, note: string): Prom
   await transition(db, id, ['aprovada', 'enviando'], { state: 'rascunho', note, approvedBy: null, approvedAt: null });
 }
 
+/**
+ * Só `aprovada` -> `rascunho` com a nota; devolve se passou. Para quem leu a resposta como `aprovada` e decide devolvê-la
+ * ao dono: se o worker já a pôs em `enviando` (ou o dono a descartou) no meio, nada muda.
+ */
+export function returnApprovedToDraft(db: Db, id: number, note: string): Promise<boolean> {
+  return transition(db, id, ['aprovada'], { state: 'rascunho', note, approvedBy: null, approvedAt: null });
+}
+
 /** As respostas paradas em `enviando` (o worker caiu no meio do envio). */
 export function repliesInSending(db: Db): Promise<MailReplyRow[]> {
   return repliesInState(db, 'enviando');
