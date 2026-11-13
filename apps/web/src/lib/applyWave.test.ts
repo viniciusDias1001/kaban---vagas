@@ -51,9 +51,11 @@ describe('K1: a job already applied to is never applied to again', () => {
     expect(applySectionView(undefined)).toBe('hidden');
     expect(applySectionView(null)).toBe('hidden');
     expect(applySectionView(dto({ canApply: true }))).toBe('offer');
-    for (const reason of ['unsupported_site', 'already_applied', 'blocked', 'apply_unavailable', 'apply_disabled', 'already_exists'] as const) {
+    for (const reason of ['unsupported_site', 'already_applied', 'blocked', 'already_exists'] as const) {
       expect(applySectionView(dto({ site: null, cannotApplyReason: reason })), reason).toBe('hidden');
     }
+    // Desligada ou sem poder rodar: uma linha no lugar do botão (applyVerify.test.ts).
+    expect(applySectionView(dto({ cannotApplyReason: 'apply_disabled' }))).toBe('note');
     expect(applySectionView(dto({ application: app(), cannotApplyReason: 'already_exists' }))).toBe('application');
   });
 

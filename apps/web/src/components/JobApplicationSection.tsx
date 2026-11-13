@@ -4,12 +4,12 @@ import { AnimatePresence, motion } from 'motion/react';
 import { Dialog as DialogPrimitive } from 'radix-ui';
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import {
-  APPLY_SITE_LABELS, type ApplicationDto, type ApplicationReason, type ApplicationStatus, type JobDto, type ShotKind,
+  APPLY_SITE_LABELS, type ApplicationDto, type ApplicationReason, type ApplicationStatus, type JobDto, type JobListItemDto, type ShotKind,
 } from '@kv/shared/client';
 import { applicationResumeUrl, applicationShotUrl } from '../applyApi';
 import {
-  ANSWER_SOURCE_LABELS, RUNNING_STATUSES, STATUS_LABELS, SHOT_LABELS, UNCONFIRMED_TEXT, answerText, applicationActions, applySectionView,
-  liveWaitFor, markAppliedTarget, reasonText, statusLabel,
+  ANSWER_SOURCE_LABELS, RUNNING_STATUSES, STATUS_LABELS, SHOT_LABELS, UNCONFIRMED_TEXT, answerText, applicationActions, applicationHeadline,
+  applySectionNote, applySectionView, liveWaitFor, markAppliedPlan, queueBlockedReason, repeatsNotice, resumeLinkLabel, statusLabel,
 } from '../lib/apply';
 import { spring } from '../lib/motion';
 import { EYEBROW } from '../lib/styles';
@@ -61,6 +61,13 @@ function SubHeading({ children, aside }: { children: ReactNode; aside?: ReactNod
   );
 }
 
+/** Por que "Enviar de verdade" e "Tentar de novo" estão desligados: a candidatura automática não pode rodar agora. */
+function BlockedHint({ id, reason, className }: { id: string; reason: string; className?: string }) {
+  return (
+    <p id={id} data-testid="application-blocked" className={cn('break-words text-xs leading-snug text-faint', className)}>{reason}</p>
+  );
+}
+
 function Answers({ application }: { application: ApplicationDto }) {
   const title = application.status === 'dry_run_ready'
     ? 'O que o ensaio vai enviar'
@@ -108,8 +115,9 @@ function Shots({ application }: { application: ApplicationDto }) {
         ))}
       </ul>
       {/*
-        A foto é da página inteira (pode ter milhares de pixels de altura): abre na largura da caixa e quem rola é o véu,
-        como num visualizador de imagem (o conteúdo fica dentro do véu, que é o que o Radix deixa rolar).
+        A foto é da página inteira (pode ter milhares de pixels de altura): abre na largura da caixa, que ocupa a altura da
+        tela, e só a foto rola, embaixo do cabeçalho (título, nova aba, fechar), que fica sempre à vista. Quem rola está
+        dentro do conteúdo do diálogo: arrastar a barra de rolagem não conta como clique fora; clicar no escuro ao lado fecha.
       */}
       <DialogPrimitive.Root open={open !== null} onOpenChange={(o) => !o && setOpen(null)}>
         <AnimatePresence>
@@ -118,18 +126,18 @@ function Shots({ application }: { application: ApplicationDto }) {
               <DialogPrimitive.Overlay asChild forceMount>
                 <motion.div
                   data-testid="application-shot-overlay"
-                  className="fixed inset-0 z-[70] overflow-y-auto bg-[#03040a]/80"
+                  className="fixed inset-0 z-[70] bg-[#03040a]/80"
                   initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.18, ease: 'easeOut' }}
                 >
-                  <div className="flex min-h-full items-center justify-center p-4">
+                  <div className="flex h-full items-center justify-center p-4">
                     <DialogPrimitive.Content asChild forceMount aria-describedby={undefined}>
                       <motion.div
                         data-testid="application-shot-dialog"
-                        className="w-full max-w-5xl rounded-3xl border border-line-strong bg-surface p-3 shadow-pop outline-none"
+                        className="flex max-h-full w-full max-w-5xl flex-col rounded-3xl border border-line-strong bg-surface p-3 shadow-pop outline-none"
                         initial={{ opacity: 0, y: 10, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 6, scale: 0.98 }}
                         transition={spring}
                       >
-                        <div className="flex items-center justify-between gap-3 px-1.5 pb-2.5">
+                        <div className="flex shrink-0 items-center justify-between gap-3 px-1.5 pb-2.5">
                           <DialogPrimitive.Title className="text-sm font-semibold text-ink">{SHOT_LABELS[open]}</DialogPrimitive.Title>
                           <div className="flex items-center gap-1">
                             <Button asChild variant="ghost" size="sm">
@@ -142,10 +150,12 @@ function Shots({ application }: { application: ApplicationDto }) {
                             </DialogPrimitive.Close>
                           </div>
                         </div>
-                        <img
-                          src={applicationShotUrl(application.id, open)} alt={SHOT_LABELS[open]}
-                          className="block h-auto w-full rounded-2xl border border-line"
-                        />
+                        <div
+                          data-testid="application-shot-scroller" tabIndex={0}
+                          className="min-h-0 overflow-y-auto overscroll-contain rounded-2xl border border-line focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-accent/45"
+                        >
+                          <img src={applicationShotUrl(application.id, open)} alt={SHOT_LABELS[open]} className="block h-auto w-full" />
+                        </div>
                       </motion.div>
                     </DialogPrimitive.Content>
                   </div>
@@ -166,10 +176,7 @@ function Timeline({ application }: { application: ApplicationDto }) {
       <SubHeading>Linha do tempo</SubHeading>
       <ol data-testid="application-timeline" className="relative space-y-3 before:absolute before:bottom-2 before:left-[4.5px] before:top-2 before:w-px before:bg-line">
         {application.events.map((e, i) => {
-          // O motivo vai no último evento; o do envio não confirmado já está no aviso acima (e não se tenta de novo).
-          const why = i === last && e.status === application.status && application.reason !== 'confirm_submission'
-            ? reasonText(application.reason, application.detail)
-            : '';
+          // O porquê fica só na linha sob os selos (`applicationHeadline`): aqui, cada evento traz a própria mensagem.
           return (
             <li key={`${e.at}-${i}`} className="relative flex gap-3">
               <span
@@ -181,7 +188,6 @@ function Timeline({ application }: { application: ApplicationDto }) {
                   {i === last && e.status === application.status ? statusLabel(e.status, application.reason) : STATUS_LABELS[e.status]}
                 </p>
                 {e.message && <p className="break-words text-[13px] leading-snug text-ink-2">{e.message}</p>}
-                {why && <p className="break-words text-[13px] leading-snug text-ink-2">{why}</p>}
                 <p className="text-xs tabular-nums text-muted">{new Date(e.at).toLocaleString('pt-BR')}</p>
               </div>
             </li>
@@ -204,6 +210,8 @@ export function JobApplicationSection({ job, index }: { job: JobDto; index: numb
   const data = query.data;
   const application = data?.application ?? null;
   const view = applySectionView(data);
+  // Sem poder rodar agora: os botões que enfileiram trabalho ficam desligados, com o motivo embaixo deles.
+  const blocked = queueBlockedReason(status);
 
   // O painel aberto relê a vaga (selos, coluna, "precisa de você") quando o estado da candidatura muda.
   const stateKey = data === undefined ? undefined : application === null ? 'none' : `${application.status}:${application.reason}`;
@@ -242,23 +250,35 @@ export function JobApplicationSection({ job, index }: { job: JobDto; index: numb
       void qc.invalidateQueries({ queryKey: APPLY_KEYS.applications });
       void qc.invalidateQueries({ queryKey: APPLY_KEYS.status });
     };
-    const target = markAppliedTarget(job.column);
-    if (target.sameColumn) resendColumn(job.id, target.column, settled);
-    else moveTo(job.id, target.column, null, settled);
+    // O quadro em cache decide: o painel pode estar atrás dele, e um movimento à toa não chamaria a API.
+    const plan = markAppliedPlan(job.column, qc.getQueryData<JobListItemDto[]>(JOBS_KEY), job.id);
+    if (plan.action === 'resend') resendColumn(job.id, plan.column, settled);
+    else moveTo(job.id, plan.column, null, settled);
   };
 
-  // Sem candidatura e sem poder aplicar (site não atendido, vaga já aplicada, função desligada...): o painel fica como era.
+  // Sem candidatura e sem poder aplicar (site não atendido, vaga já aplicada, bloqueada): o painel fica como era.
   if (view === 'hidden' || (query.isError && !application)) return null;
 
   const waitText = liveWaitFor(status, job.id);
+  const note = applySectionNote(data, status);
+  /** A linha com o motivo está sob "Enviar de verdade" ou "Tentar de novo": uma recusa com o mesmo texto não repete. */
+  let hintShown = false;
   let body: ReactNode;
-  if (!application) {
+  if (note) {
+    // Função desligada ou sem poder rodar agora: uma linha no lugar do botão, para o dono saber por que ele não está aqui.
+    body = (
+      <p data-testid="apply-note" className="break-words text-[13px] leading-snug text-muted">{note}</p>
+    );
+  } else if (!application) {
     body = (
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2.5 rounded-2xl border border-dashed border-line px-3.5 py-3">
         <p className="min-w-48 flex-1 text-[13px] leading-snug text-muted">
           A IA ainda não se candidatou a esta vaga. Ela preenche o formulário em seu nome e para quando precisar de você.
         </p>
-        <Button type="button" variant="primary" size="sm" data-testid="apply-now" disabled={busy} onClick={() => run(actions.apply, job.id)}>
+        <Button
+          type="button" variant="primary" size="sm" data-testid="apply-now" disabled={busy || blocked !== null} title={blocked ?? undefined}
+          onClick={() => run(actions.apply, job.id)}
+        >
           {actions.apply.isPending ? <LoaderCircle aria-hidden className="animate-spin" /> : <Bot aria-hidden />} Aplicar com IA
         </Button>
       </div>
@@ -267,7 +287,10 @@ export function JobApplicationSection({ job, index }: { job: JobDto; index: numb
     const can = applicationActions(application, job);
     const unconfirmed = can.alreadyApplied;
     const asking = application.status === 'needs_human' && application.reason === 'question' && application.pendingQuestions.length > 0;
-    const reason = reasonText(application.reason, application.detail);
+    // O porquê, uma vez só: vazio quando as perguntas ou o aviso de envio não confirmado já dizem o mesmo.
+    const reason = applicationHeadline(application);
+    const blockedId = `${titleId}-blocked`;
+    hintShown = blocked !== null && (can.send || can.retry);
     body = (
       <div className="space-y-4">
         <div className="space-y-2">
@@ -281,7 +304,7 @@ export function JobApplicationSection({ job, index }: { job: JobDto; index: numb
               <Badge size="md" tone="outline" className="tabular-nums">Nota conferida: {application.gateScore}</Badge>
             )}
           </div>
-          {reason && !unconfirmed && <p className="break-words text-[13px] leading-relaxed text-ink-2">{reason}</p>}
+          {reason && <p data-testid="application-reason" className="break-words text-[13px] leading-relaxed text-ink-2">{reason}</p>}
           {application.confirmation && (
             <p className="flex items-start gap-2 break-words text-[13px] leading-relaxed text-ink-2">
               <CircleCheckBig aria-hidden className="mt-0.5 size-4 shrink-0 text-ok" />
@@ -321,7 +344,7 @@ export function JobApplicationSection({ job, index }: { job: JobDto; index: numb
           <Button asChild size="sm">
             <a href={applicationResumeUrl(application.id)} download data-testid="application-resume">
               <FileDown aria-hidden />
-              {application.status === 'dry_run_ready' ? 'Currículo que vai junto' : 'Currículo enviado'}
+              {resumeLinkLabel(application.status)}
               {application.resumeFileName && <span className="max-w-56 truncate font-normal text-muted">{application.resumeFileName}</span>}
             </a>
           </Button>
@@ -330,9 +353,13 @@ export function JobApplicationSection({ job, index }: { job: JobDto; index: numb
         {can.send && (
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-2xl border border-accent/25 bg-accent/7 px-3.5 py-3">
             <p className="min-w-48 flex-1 text-[13px] leading-snug text-ink-2">Envia a candidatura com exatamente estas respostas.</p>
-            <Button type="button" variant="primary" data-testid="application-send" disabled={busy} onClick={() => run(actions.send, application.id)}>
+            <Button
+              type="button" variant="primary" data-testid="application-send" disabled={busy || blocked !== null}
+              aria-describedby={blocked ? blockedId : undefined} title={blocked ?? undefined} onClick={() => run(actions.send, application.id)}
+            >
               {actions.send.isPending ? <LoaderCircle aria-hidden className="animate-spin" /> : <Send aria-hidden />} Enviar de verdade
             </Button>
+            {blocked && !can.retry && <BlockedHint id={blockedId} reason={blocked} className="basis-full" />}
           </div>
         )}
 
@@ -340,7 +367,10 @@ export function JobApplicationSection({ job, index }: { job: JobDto; index: numb
           <div className="space-y-1.5">
             <div className="flex flex-wrap items-center gap-2">
               {can.retry && (
-                <Button type="button" size="sm" data-testid="application-retry" disabled={busy} onClick={() => run(actions.retry, application.id)}>
+                <Button
+                  type="button" size="sm" data-testid="application-retry" disabled={busy || blocked !== null}
+                  aria-describedby={blocked ? blockedId : undefined} title={blocked ?? undefined} onClick={() => run(actions.retry, application.id)}
+                >
                   <RotateCw aria-hidden /> Tentar de novo
                 </Button>
               )}
@@ -353,6 +383,7 @@ export function JobApplicationSection({ job, index }: { job: JobDto; index: numb
                 </Button>
               )}
             </div>
+            {blocked && can.retry && <BlockedHint id={blockedId} reason={blocked} />}
             {can.cancelPending ? (
               <p className="text-xs leading-snug text-warn" role="status" data-testid="application-cancel-pending">
                 Cancelamento pedido; vale no próximo ponto seguro.
@@ -382,7 +413,9 @@ export function JobApplicationSection({ job, index }: { job: JobDto; index: numb
         {application && <span className="text-[11px] tabular-nums text-faint">desde {formatWhen(application.createdAt)}</span>}
       </div>
       {body}
-      {error && <Notice tone="bad" role="alert" className="mt-3" data-testid="application-error">{error}</Notice>}
+      {error && !(hintShown && repeatsNotice(error, blocked)) && (
+        <Notice tone="bad" role="alert" className="mt-3" data-testid="application-error">{error}</Notice>
+      )}
       {query.isError && application && <p className="mt-2 text-xs text-warn">Não foi possível atualizar a candidatura agora.</p>}
     </motion.section>
   );

@@ -2,11 +2,13 @@ import {
   NUMBER_FORMAT_PROBLEM,
   type AnswerScope, type AnswerSource, type AnswerValue, type ApplicationFilter, type ApplicationListItemDto, type ApplicationReason,
   type ApplicationStatus, type ApplicationDto, type ApplyAiAnswers, type ApplyAnswerDto, type ApplyStatusDto, type Column,
-  type JobApplicationDto, type PendingQuestion, type Question, type ShotKind, bankBoolean, bankList, bankText, isAppliedOrLater,
-  parseNumberAnswer,
+  type JobApplicationDto, type JobListItemDto, type PendingQuestion, type Question, type ShotKind, applyAvailability, bankBoolean, bankList,
+  bankText, isAppliedOrLater, parseNumberAnswer,
 } from '@kv/shared/client';
 import { errorMessage } from '../apiError';
 import type { ApplyAnswerInput } from '../applyApi';
+import { isNoopMove } from '../position';
+import { groupByColumn } from './board';
 
 /** Lógica pura das telas de candidatura automática (sem React). */
 
@@ -63,6 +65,30 @@ export function reasonText(reason: ApplicationReason | null, detail: string | nu
   const text = REASON_TEXT[reason];
   const extra = detail?.trim();
   return extra ? `${text.replace(/[.!?]$/, '')}: ${extra}` : text;
+}
+
+/** O porquê de uma candidatura: a frase do motivo; uma falha sem motivo diz o detalhe ("O que aconteceu: …"). */
+export function applicationReasonText(app: { status: ApplicationStatus; reason: ApplicationReason | null; detail: string | null }): string {
+  if (app.reason) return reasonText(app.reason, app.detail);
+  const detail = app.detail?.trim();
+  return app.status === 'failed' && detail ? `O que aconteceu: ${detail}` : '';
+}
+
+/**
+ * A linha sob os selos do painel, o único lugar onde o porquê aparece (a linha do tempo não repete). Fica vazia quando
+ * outro bloco já diz o mesmo: as perguntas do formulário e o aviso de envio não confirmado.
+ */
+export function applicationHeadline(app: Pick<ApplicationDto, 'status' | 'reason' | 'detail' | 'pendingQuestions'>): string {
+  if (app.status === 'needs_human' && app.reason === 'confirm_submission') return '';
+  if (app.status === 'needs_human' && app.reason === 'question' && app.pendingQuestions.length > 0) return '';
+  return applicationReasonText(app);
+}
+
+/** O texto do link do currículo: "enviado" só numa candidatura enviada. */
+export function resumeLinkLabel(status: ApplicationStatus): string {
+  if (status === 'submitted') return 'Currículo enviado';
+  if (status === 'dry_run_ready') return 'Currículo do ensaio';
+  return 'Currículo preparado';
 }
 
 /** Os rótulos dos filtros da aba (os filtros e os estados de cada um vêm de `@kv/shared`). */
@@ -279,17 +305,35 @@ export function applyErrorMessage(status: number, bodyText: string): string {
   return errorMessage(status, bodyText);
 }
 
+/** O motivo do HOST não local, o mesmo texto que a API e o worker publicam (a regra é a de `@kv/shared`). */
+const HOST_REASON = applyAvailability({ HOST: '0.0.0.0' }).reason;
+
+const UNAVAILABLE_FALLBACK = 'A candidatura automática não está disponível.';
+
 /**
- * O aviso de "não disponível" (Configurações e aba Candidaturas). Quando o motivo é o do worker (navegador ausente, por
- * exemplo), as configurações continuam editáveis; fora de endereço local, ficam travadas. Null quando está disponível.
+ * O aviso de "não disponível" (Configurações e aba Candidaturas). Só um problema do próprio worker (navegador ausente,
+ * por exemplo) deixa as configurações editáveis; o HOST não local, venha da API ou do worker, as trava. Null quando está
+ * disponível.
  */
 export function unavailableNotice(status: ApplyStatusDto | undefined): { title: string; reason: string; lockSettings: boolean } | null {
   if (!status || status.available) return null;
-  const reason = status.unavailableReason ?? 'A candidatura automática não está disponível.';
-  const fromWorker = status.worker !== null && !status.worker.available && status.worker.reason === status.unavailableReason;
+  const reason = status.unavailableReason ?? UNAVAILABLE_FALLBACK;
+  const fromWorker = status.worker !== null && !status.worker.available
+    && status.worker.reason !== HOST_REASON && status.unavailableReason !== HOST_REASON;
   return fromWorker
     ? { title: 'O worker não consegue se candidatar agora', reason, lockSettings: false }
     : { title: 'Indisponível neste endereço', reason, lockSettings: true };
+}
+
+/** Por que os botões que enfileiram trabalho (enviar, tentar de novo, aplicar) estão desligados; null quando podem rodar. */
+export function queueBlockedReason(status: ApplyStatusDto | undefined): string | null {
+  if (!status || status.available) return null;
+  return status.unavailableReason ?? UNAVAILABLE_FALLBACK;
+}
+
+/** A recusa só repete o motivo que a tela já mostra: não ganha uma segunda caixa. */
+export function repeatsNotice(message: string, shown: string | null): boolean {
+  return shown !== null && message.trim() === shown.trim();
 }
 
 /* ---- Aba Candidaturas e seção "Candidatura" do painel da vaga ---- */
@@ -338,12 +382,24 @@ export function applicationActions(
   };
 }
 
-/** O que a seção "Candidatura" do painel mostra: nada, o convite "Aplicar com IA" ou a candidatura. */
-export function applySectionView(data: JobApplicationDto | null | undefined): 'hidden' | 'offer' | 'application' {
+/**
+ * O que a seção "Candidatura" do painel mostra: nada, o convite "Aplicar com IA", uma linha discreta no lugar do botão
+ * (função desligada ou sem poder rodar agora: o dono precisa saber por que o botão sumiu) ou a candidatura.
+ */
+export function applySectionView(data: JobApplicationDto | null | undefined): 'hidden' | 'offer' | 'note' | 'application' {
   if (!data) return 'hidden'; // carregando, ou a vaga não existe mais
   if (data.application) return 'application';
-  // Site não atendido, vaga já aplicada, bloqueada, função desligada ou indisponível: o painel fica como era.
-  return data.canApply ? 'offer' : 'hidden';
+  if (data.canApply) return 'offer';
+  if (data.cannotApplyReason === 'apply_disabled' || data.cannotApplyReason === 'apply_unavailable') return 'note';
+  // Site não atendido, vaga já aplicada ou bloqueada: o painel fica como era.
+  return 'hidden';
+}
+
+/** A linha no lugar de "Aplicar com IA" quando a seção é `note`; null nos demais casos. */
+export function applySectionNote(data: JobApplicationDto | null | undefined, status: ApplyStatusDto | undefined): string | null {
+  if (applySectionView(data) !== 'note') return null;
+  if (data!.cannotApplyReason === 'apply_disabled') return 'Candidatura automática desligada em Configurações.';
+  return queueBlockedReason(status) ?? 'A candidatura automática não está disponível agora.';
 }
 
 /** A resposta da vaga com a candidatura devolvida por uma ação (a vaga passa a ter candidatura). */
@@ -357,6 +413,20 @@ export function withApplication(data: JobApplicationDto | null | undefined, appl
  */
 export function markAppliedTarget(column: Column): { column: Column; sameColumn: boolean } {
   return isAppliedOrLater(column) ? { column, sameColumn: true } : { column: 'aplicada', sameColumn: false };
+}
+
+/**
+ * O pedido de "Já apliquei por conta própria", com o quadro em cache (`board`): mover para o fim de Aplicada, ou mandar a
+ * coluna de novo. Um movimento que não mudaria nada (o painel está atrás do quadro, que já tem o card no fim de Aplicada)
+ * não chamaria a API: aí a coluna vai de novo, e a ação sempre termina.
+ */
+export function markAppliedPlan(
+  column: Column, board: readonly JobListItemDto[] | undefined, jobId: number,
+): { action: 'move' | 'resend'; column: Column } {
+  const target = markAppliedTarget(column);
+  if (target.sameColumn) return { action: 'resend', column: target.column };
+  if (board && isNoopMove(groupByColumn(board)[target.column], jobId, null)) return { action: 'resend', column: target.column };
+  return { action: 'move', column: target.column };
 }
 
 /** O passo pedido agora, no painel da vaga que tem a espera ao vivo; null nas demais. */
