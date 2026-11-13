@@ -1,4 +1,4 @@
-import { and, desc, eq, max, min, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, max, min, sql } from 'drizzle-orm';
 import type { Actor, Column } from '@kv/shared';
 import { JOBS_WRITE_LOCK, type Db } from './client';
 import { alerts, jobEvents, jobs, mailIgnored, mailMessages, mailReplies } from './schema';
@@ -89,6 +89,42 @@ export async function undoEmailMoveLocked(tx: Db, messageId: number, now: number
   await tx.update(jobEvents).set({ undone: true }).where(eq(jobEvents.id, event.id));
   await tx.update(mailMessages).set({ corrected: true }).where(eq(mailMessages.id, messageId));
   return true;
+}
+
+/**
+ * "Não é desta vaga" para as mensagens dadas (as de um fio), dentro de uma transação que já tem o lock de
+ * `JOBS_WRITE_LOCK`. Em cada card que elas moveram, desfaz os movimentos delas do mais novo para o mais antigo enquanto cada
+ * um é o evento mais recente do card: o card volta para onde estava antes do primeiro movimento do fio, ou para onde o
+ * dono o pôs se ele mexeu no meio, com um só evento `humano`. Todo evento `email` delas fica `undone = true`, mesmo os que
+ * não puderam ser desfeitos (o dono já arrastou o card de volta): nenhum conta mais no Painel daquele card.
+ */
+export async function undoThreadMovesLocked(tx: Db, messageIds: number[], now: number): Promise<void> {
+  if (messageIds.length === 0) return;
+  const mine = await tx
+    .select({ id: jobEvents.id, jobId: jobEvents.jobId })
+    .from(jobEvents)
+    .where(and(inArray(jobEvents.mailMessageId, messageIds), eq(jobEvents.actor, 'email')));
+  if (mine.length === 0) return;
+  const ids = new Set(mine.map((e) => e.id));
+  for (const jobId of new Set(mine.map((e) => e.jobId))) {
+    const [job] = await tx.select({ column: jobs.column }).from(jobs).where(eq(jobs.id, jobId)).for('update');
+    if (!job) continue;
+    const history = await tx
+      .select()
+      .from(jobEvents)
+      .where(eq(jobEvents.jobId, jobId))
+      .orderBy(desc(jobEvents.createdAt), desc(jobEvents.id));
+    // Do evento mais recente para trás, só enquanto é um movimento do fio que deixou o card onde o seguinte o pegou.
+    let back: Column | null = null;
+    let expected: Column = job.column;
+    for (const e of history) {
+      if (!ids.has(e.id) || e.toColumn !== expected || !e.fromColumn) break;
+      back = e.fromColumn;
+      expected = e.fromColumn;
+    }
+    if (back !== null && back !== job.column) await putOnTop(tx, jobId, job.column, back, 'humano', null, now);
+  }
+  await tx.update(jobEvents).set({ undone: true }).where(inArray(jobEvents.id, [...ids]));
 }
 
 /** Pega o lock de `JOBS_WRITE_LOCK` na transação dada (o primeiro lock de quem mexe em cards e alertas). */

@@ -3,7 +3,7 @@ import type { Column, EmailKind, EmailLang, EmailRequest, JobEmailsDto, MailIgno
 import { COLUMNS, isAppliedOrLater } from '@kv/shared';
 import type { Db } from './client';
 import { raiseAlert } from './mail-alerts';
-import { lockJobsForWrite, undoEmailMoveLocked } from './mail-board';
+import { lockJobsForWrite, undoThreadMovesLocked } from './mail-board';
 import { toMailReplyDto } from './mail-replies';
 import { alerts, applications, jobEvents, jobs, mailAccount, mailIgnored, mailMessages, mailReplies } from './schema';
 
@@ -226,8 +226,8 @@ export async function linkThreadToJob(db: Db, messageId: number, jobId: number, 
 }
 
 /**
- * "Não é desta vaga", numa transação: desfaz o movimento que uma mensagem do fio fez no card quando ele ainda é o último
- * evento do card; resolve os alertas abertos das mensagens do fio e das respostas delas; deixa o fio sem vaga
+ * "Não é desta vaga", numa transação: desfaz os movimentos que as mensagens do fio fizeram no card enquanto são os últimos
+ * eventos do card, e marca todos eles `undone` (ver `undoThreadMovesLocked`); resolve os alertas abertos das mensagens do fio e das respostas delas; deixa o fio sem vaga
  * (`linkedBy = 'owner'`, `corrected = true`); e abre um alerta `unmatched` para a mensagem recebida mais nova do fio
  * (também na primeira leitura), que é o caminho para ligá-lo ao card certo. Devolve false se a mensagem não existe.
  */
@@ -243,8 +243,8 @@ export async function unlinkThread(db: Db, messageId: number, now: number = Date
       .where(eq(mailMessages.threadKey, msg.threadKey))
       .orderBy(desc(mailMessages.sentAt), desc(mailMessages.id));
     const ids = thread.map((m) => m.id);
-    // Só o último evento de um card pode ser desfeito; a mais nova primeiro.
-    for (const id of ids) await undoEmailMoveLocked(tx, id, now);
+    // Os movimentos do fio: desfeitos enquanto são os últimos do card, e todos marcados `undone`.
+    await undoThreadMovesLocked(tx, ids, now);
 
     const replyIds = (await tx.select({ id: mailReplies.id }).from(mailReplies).where(inArray(mailReplies.messageId, ids))).map((r) => r.id);
     await tx
