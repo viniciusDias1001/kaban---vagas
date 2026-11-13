@@ -118,6 +118,8 @@ const SCAFFOLD_WORDS = new Set(
 const NEGATION = /\b(nao|not|never|nunca|nenhum|nenhuma|none|without|sem|nem|nor|neither|jamais|nada|nothing)\b|n't\b/;
 /** Opção que é exatamente um "não" simples ou zero: é uma negação. */
 const NEGATIVE_OPTION = /^(0|nao|no|nenhum|nenhuma|none|never|nunca)$/;
+/** Palavra de negação em qualquer lugar de uma opção a torna uma negação ("No experience", "Não tenho"). */
+const OPTION_NEGATION = new Set('nao no not nenhum nenhuma none never nunca sem without'.split(' '));
 const YES_OPTION = /^(sim|yes)$/;
 const COMPLETION = /\b(complet[oa]s?|concluid[oa]s?|formad[oa]s?|complete|completed|concluded|finished|graduated)\b/;
 const YEAR_WORD = /\b(anos?|years?|yrs?)\b/;
@@ -206,8 +208,10 @@ const fail = (why: string): Checked => ({ ok: false, why });
  * - Afirmação (`true`; opção que não é um "não" simples): `basis` não vazio; a pergunta tem radicais e não afirma anos;
  *   UM item citado contém todos os radicais da pergunta e da opção (sem números, faixas, "+" e palavras de ano). Opção com
  *   anos: o limite de baixo não passa dos anos da regra de números. "Completo/concluído/formado" só com item de formação
- *   ou experiência terminado (fim legível e passado).
- * - Negação (`false`; opção "0", "não", "nenhum"...; número 0): sempre recusada. Um "não" errado tira o dono de uma vaga
+ *   ou experiência terminado (fim legível e passado). Formação não terminada nunca sustenta nada. Opção sem palavra de
+ *   conteúdo só passa se, reduzida às palavras, é exatamente "sim"/"yes".
+ * - Negação (`false`; opção que, reduzida às palavras, é "0"/"não"/"nenhum"..., ou que tem palavra de negação em
+ *   qualquer lugar, ou cujos anos começam em zero; número 0): sempre recusada. Um "não" errado tira o dono de uma vaga
  *   que lhe serve, e nenhuma conferência de palavras o garante: o dono responde uma vez e o banco de respostas guarda.
  * - Número: só pergunta de anos de experiência; inteiro n entre 0 e `yearsCovered` das experiências citadas que contêm
  *   todos os radicais da pergunta (sem radicais, todas as citadas); n = 0 é uma negação.
@@ -253,6 +257,8 @@ export function verifyProfileFact(
     const end = monthIndex(item.end, 'end');
     return end !== null && end <= nowIndex(now);
   };
+  /** Formação sem fim, com fim no futuro ou ilegível não sustenta nada: o dono ainda não tem esse diploma. */
+  const mayVouch = (item: Item): boolean => item.kind !== 'education' || finished(item);
 
   /** Afirmação: UM item citado contém todos os radicais da pergunta e de `extra`. */
   const affirm = (extra: Token[], completion: boolean): string | null => {
@@ -260,7 +266,7 @@ export function verifyProfileFact(
     if (subject.length === 0) return 'a pergunta não diz sobre o que é';
     if (statesYears) return 'a pergunta afirma uma quantidade de anos';
     const need = [...subject, ...extra];
-    const support = cited.filter((i) => itemHasAll(i, need) && (!completion || finished(i)));
+    const support = cited.filter((i) => itemHasAll(i, need) && mayVouch(i) && (!completion || finished(i)));
     if (support.length === 0) {
       return completion
         ? 'nenhum item citado e terminado contém tudo o que a pergunta e a resposta afirmam'
@@ -291,20 +297,25 @@ export function verifyProfileFact(
       const matches = question.options.filter((o) => optionKey(o) === optionKey(answer));
       if (matches.length !== 1) return fail('a resposta não é uma das opções, ou a opção é ambígua');
       const option = matches[0];
-      const key = foldText(option).replace(/\s+/g, ' ').trim();
-      if (NEGATIVE_OPTION.test(key)) return deny();
-      const optionTokens = YES_OPTION.test(key) ? [] : contentTokens(option);
+      // A opção reduzida às suas palavras: "No." = "no", "(Sim)" = "sim".
+      const optionWords = tokenize(option).flatMap((t) => t.raw.split(/[-/]/));
+      const key = optionWords.join(' ');
+      if (NEGATIVE_OPTION.test(key) || optionWords.some((w) => OPTION_NEGATION.has(w)) || NEGATION.test(foldText(option))) return deny();
+      const yes = YES_OPTION.test(key);
+      const optionTokens = yes ? [] : contentTokens(option);
+      if (!yes && optionTokens.length === 0) return fail('a opção não diz nada que possa ser conferido e não é um "sim"');
       const numbers = optionTokens.filter((t) => NUMBER_TOKEN.test(t.raw));
       const words = optionTokens.filter((t) => !NUMBER_TOKEN.test(t.raw));
+      const lowest = Math.min(...numbers.flatMap((t) => t.raw.match(/\d+/g) ?? []).map(Number));
+      if (lowest === 0) return deny(); // "0 anos", "0-2 anos": a faixa admite nenhuma experiência
       const why = affirm(words, COMPLETION.test(`${foldedQuestion} ${foldText(option)}`));
       if (why !== null) return fail(why);
       if (numbers.length > 0) {
         // Os números da opção são anos se ela diz "anos", ou se é só número/faixa numa pergunta que diz "anos".
         const optionYears = YEAR_WORD.test(foldText(option)) || (words.length === 0 && YEAR_WORD.test(foldedQuestion));
         if (!optionYears) return fail('a opção traz um número que não é de anos');
-        const lower = Math.min(...numbers.flatMap((t) => t.raw.match(/\d+/g) ?? []).map(Number));
         const years = subjectYears();
-        if (lower > years) return fail(`a opção pede ${lower} anos e as experiências citadas que tratam do assunto cobrem ${years}`);
+        if (lowest > years) return fail(`a opção pede ${lowest} anos e as experiências citadas que tratam do assunto cobrem ${years}`);
       }
       return { ok: true, value: option };
     }
@@ -319,7 +330,7 @@ export function verifyProfileFact(
       if (need.length === 0) return fail('a resposta não tem conteúdo que possa ser conferido');
       const numbers = numberIds(answer);
       const support = cited.find((i) => {
-        if (!itemHasAll(i, need)) return false;
+        if (!itemHasAll(i, need) || !mayVouch(i)) return false;
         const allowed = allowedNumbers(i.texts);
         return numbers.every((id) => allowed.has(id));
       });

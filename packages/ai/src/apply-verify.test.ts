@@ -431,6 +431,60 @@ describe('verifyProfileFact: review round 3, the complete rule set', () => {
   });
 });
 
+describe('verifyProfileFact: review round 4', () => {
+  const ok = (p: CandidateProfile, q: Question, answer: string, basis: string[]) => verifyProfileFact(p, q, { answer, basis }, now).ok;
+  const withNao: CandidateProfile = { ...profile, experiences: [
+    { ...profile.experiences[0], achievements: [{ id: 'ach_nao00001', text: 'Não deixei nenhum bug de React em produção' }] },
+    profile.experiences[1]] };
+
+  it('1. a negative option with punctuation is a denial', () => {
+    expect(ok(profile, sel('Do you have React experience?', ['Yes.', 'No.']), 'No.', [react])).toBe(false);
+    expect(ok(profile, sel('Do you have React experience?', ['Yes.', 'No.']), 'Yes.', [react])).toBe(true);
+    expect(ok(profile, sel('Tem experiência com React?', ['Sim!', 'Não!']), 'Não!', [react])).toBe(false);
+    expect(ok(profile, sel('Tem experiência com React?', ['(Sim)', '(Não)']), '(Sim)', [react])).toBe(true);
+  });
+
+  it('2. an option with a negation word anywhere is a denial', () => {
+    const ask = (options: string[]) => sel('Experiência com React', options);
+    for (const option of ['No experience', 'I have no experience', 'Não tenho', 'Não.', 'Nenhuma experiência', 'Never used it', 'Sem experiência']) {
+      expect(ok(profile, ask(['Sim', option]), option, [react]), option).toBe(false);
+    }
+    for (const option of ['Não tenho', 'Não.', 'Nenhuma experiência']) {
+      expect(ok(withNao, ask(['Sim', option]), option, [exp1]), `${option} with "não" in the item`).toBe(false);
+    }
+  });
+
+  it('3. an option without content words passes only if it is exactly a yes word', () => {
+    const ask = (option: string) => sel('Tem experiência com React?', ['Sim', option]);
+    for (const option of ['Com certeza?', 'Ok', '-', 'Talvez', 'A', 'É']) {
+      expect(ok(profile, ask(option), option, [react]), option).toBe(false);
+    }
+    expect(ok(profile, sel('Tem experiência com React?', ['Yes', 'No']), 'Yes', [react])).toBe(true);
+    expect(ok(profile, sel('Tem experiência com React?', ['SIM', 'NÃO']), 'SIM', [react])).toBe(true);
+  });
+
+  it('4. an option whose years start at zero is a denial', () => {
+    const react5 = [react, exp1, exp2];
+    expect(ok(profile, sel('Experiência com React', ['0 anos', '3-5 anos']), '0 anos', react5)).toBe(false);
+    expect(ok(profile, sel('Experiência com React', ['0 years', '3-5 years']), '0 years', react5)).toBe(false);
+    expect(ok(profile, sel('Experiência com React', ['0-2 anos', '3-5 anos']), '0-2 anos', react5)).toBe(false);
+    expect(ok(profile, sel('Anos de experiência com React', ['0-2', '3-5']), '0-2', react5)).toBe(false);
+    expect(ok(profile, sel('Experiência com React', ['1-2 anos', '3-5 anos']), '1-2 anos', react5)).toBe(true);
+  });
+
+  it('5. an unfinished education item never supports holding that education', () => {
+    const edu = (end: string): CandidateProfile => ({ ...profile, education: [{ ...profile.education[0], degree: 'Graduação em Sistemas', end }] });
+    expect(ok(edu(''), bool('Possui graduação?'), 'true', [degree])).toBe(false);
+    expect(ok(edu('2030'), bool('Possui graduação em Sistemas?'), 'true', [degree])).toBe(false);
+    expect(ok(edu('em breve'), bool('Possui graduação?'), 'true', [degree])).toBe(false);
+    expect(ok(edu(''), sel('Formação', ['Graduação em Sistemas', 'Ensino médio']), 'Graduação em Sistemas', [degree])).toBe(false);
+    expect(ok(edu('2030'), text('Formação'), 'Graduação em Sistemas', [degree])).toBe(false);
+    expect(ok(edu('2019'), bool('Possui graduação?'), 'true', [degree])).toBe(true);
+    expect(ok(edu('2019'), bool('Possui graduação em Sistemas?'), 'true', [degree])).toBe(true);
+    expect(ok(edu('2019'), text('Formação'), 'Graduação em Sistemas', [degree])).toBe(true);
+  });
+});
+
 describe('verifyOpenAnswer: review round 2', () => {
   const run = (j: typeof job, t: string) => verifyOpenAnswer(profile, j, open(), t, now).map((v) => v.code);
   const ops = { ...job, description: 'Usamos Datadog e Grafana.' };
