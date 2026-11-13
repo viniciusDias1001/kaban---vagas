@@ -8,7 +8,7 @@
     "./testing": "./src/testing.ts"
   },
   "dependencies": {
-    "@fontsource/noto-sans": "^5.3.0",
+    "@fontsource/noto-serif": "^5.3.0",
     "@kv/shared": "workspace:*",
     "fflate": "^0.8.3",
     "fontkit": "^2.0.4",

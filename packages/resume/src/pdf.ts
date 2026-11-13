@@ -163,7 +163,7 @@ export function unsupportedPdfCharacters(resume: TailoredResume): string[] {
  * PDF do currículo adaptado, feito para sistemas de triagem (ATS): uma coluna, texto real e selecionável
  * na ordem de leitura, sem tabelas, sem imagens, sem cabeçalho ou rodapé. Recebe o conteúdo já revisado.
  *
- * Fontes: Noto Sans latino, latino estendido, vietnamita, cirílico e grego, trocadas por trecho conforme
+ * Fontes: Noto Serif latino, latino estendido, vietnamita, cirílico e grego, trocadas por trecho conforme
  * o texto pede. Nenhum caractere some em silêncio: se algum não tem glifo (CJK, árabe, emoji, "✓"...), a
  * promessa rejeita com `ResumePdfError` (`unsupported_characters`) dizendo quais. Também rejeita
  * (`too_long`) acima de `PDF_LIMITS.maxChars`. Caracteres de controle e invisíveis são descartados.

@@ -162,7 +162,7 @@ Tudo fica no **seu** banco de dados (o do `DATABASE_URL`); o app não tem servid
 
 **Currículo enviado: limites.** PDF ou DOCX, até 5 MB; o tipo é conferido pelo conteúdo do arquivo, não pela extensão. O PDF precisa ter texto selecionável: um currículo escaneado (só imagem) é recusado na hora, com a sugestão de exportar de novo ou enviar um DOCX. Também são recusados: PDF com mais de 30 páginas, arquivo protegido por senha, arquivo que leva mais de 15 s para ser lido e texto com mais de cerca de 6 páginas (o que o modelo lê de uma vez com folga para devolver o perfil). A recusa aparece no próprio cartão do idioma e o currículo anterior continua valendo.
 
-**PDF gerado.** Uma coluna, texto selecionável, sem tabelas nem imagens, na fonte Noto Sans embutida. Ela desenha o alfabeto latino com todos os acentos (português, espanhol, francês, alemão, polonês, tcheco, turco...), vietnamita, cirílico e grego. Não desenha chinês, japonês, coreano, árabe, hebraico, devanágari, emoji nem símbolos como "✓": se o currículo tiver um desses caracteres, o editor avisa quais são e o download só é liberado depois de trocá-los, em vez de gerar um PDF com buracos no texto.
+**PDF gerado.** Uma coluna, texto selecionável, sem tabelas nem imagens, na fonte Noto Serif embutida. Ela desenha o alfabeto latino com todos os acentos (português, espanhol, francês, alemão, polonês, tcheco, turco...), vietnamita, cirílico e grego. Não desenha chinês, japonês, coreano, árabe, hebraico, devanágari, emoji nem símbolos como "✓": se o currículo tiver um desses caracteres, o editor avisa quais são e o download só é liberado depois de trocá-los, em vez de gerar um PDF com buracos no texto.
 
 **Fila.** A IA roda no worker, em uma fila separada da busca de vagas: até 2 chamadas ao mesmo tempo, 3 tentativas com espera de 30 s e 120 s (o dobro em limite de taxa). Erro que repetir não resolve (resposta cortada, recusa do modelo, rascunho barrado pelo verificador, dado que falta) não é repetido. Lentidão ou falha do provedor não atrasa a busca. Nenhuma chamada de IA acontece dentro de uma requisição da API, exceto o "Testar conexão".
 
@@ -342,7 +342,7 @@ O alvo é **um serviço** construído pelo `Dockerfile`. Um container roda a API
 - **Uma réplica só.** O worker e as migrations do start não foram feitos para rodar em paralelo; com mais de uma réplica as buscas e as chamadas de IA rodariam em dobro, duas réplicas poderiam migrar ao mesmo tempo, e o limite de frequência do "Testar conexão" (que é por processo) deixaria de valer.
 - Se a API ou o worker cair, o container sai com erro e o Railway o reinicia.
 - **Indeed não funciona no container:** a imagem não tem Chromium. A fonte falha com erro claro na tela de saúde das fontes, e a análise das vagas do Indeed usa só título, empresa e local.
-- **Imagem:** as fontes do PDF (Noto Sans, do pacote `@fontsource/noto-sans`) e os leitores de PDF e DOCX vão dentro dela como dependências de produção; nada é baixado em runtime.
+- **Imagem:** as fontes do PDF (Noto Serif, do pacote `@fontsource/noto-serif`) e os leitores de PDF e DOCX vão dentro dela como dependências de produção; nada é baixado em runtime.
 
 O arquivo `.railway/railway.ts` descreve esse serviço como infraestrutura como código. **Ele nunca foi aplicado nem validado contra o Railway.** O primeiro passo, que só lê e não altera nada, é `railway config plan`; ele exige o pacote `railway` instalado no repo como dependência de desenvolvimento (`pnpm add -D -w railway`). Revise o plano antes de qualquer `railway config apply`.
 
@@ -366,4 +366,4 @@ Sem Docker, `pnpm --filter @kv/web build && pnpm start:prod` faz o mesmo no host
 
 Apache License 2.0. Veja o arquivo [`LICENSE`](LICENSE).
 
-Dependências acrescentadas pela IA de perfil e suas licenças: `@anthropic-ai/sdk`, `openai` e `@google/genai` (Apache-2.0); `@fastify/multipart`, `unpdf`, `fflate`, `pdfkit` e `fontkit` (MIT); `mammoth` (BSD-2-Clause); fonte Noto Sans, de `@fontsource/noto-sans` (OFL-1.1), embutida nos PDFs gerados. A cifra das chaves usa só o `node:crypto`.
+Dependências acrescentadas pela IA de perfil e suas licenças: `@anthropic-ai/sdk`, `openai` e `@google/genai` (Apache-2.0); `@fastify/multipart`, `unpdf`, `fflate`, `pdfkit` e `fontkit` (MIT); `mammoth` (BSD-2-Clause); fonte Noto Serif, de `@fontsource/noto-serif` (OFL-1.1), embutida nos PDFs gerados. A cifra das chaves usa só o `node:crypto`.

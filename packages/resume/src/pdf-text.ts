@@ -7,7 +7,7 @@ const require = createRequire(import.meta.url);
 export type Weight = 'regular' | 'bold';
 
 /**
- * Noto Sans (OFL-1.1) em subconjuntos, na ordem de preferência. O latino cobre o português e a pontuação
+ * Noto Serif (OFL-1.1) em subconjuntos, na ordem de preferência. O latino cobre o português e a pontuação
  * tipográfica; os demais entram só quando o texto pede (nomes poloneses, tchecos, turcos, vietnamitas,
  * cirílico, grego). O pdfkit embute só as fontes usadas, e de cada uma só os glifos usados.
  * Sem glifo em nenhuma: CJK, árabe, hebraico, devanágari, emoji e símbolos como "✓".
@@ -29,7 +29,7 @@ function face(subset: number, weight: Weight): Face {
   const name = `${weight}-${SUBSETS[subset]}`;
   let found = faces.get(name);
   if (!found) {
-    const path = require.resolve(`@fontsource/noto-sans/files/noto-sans-${SUBSETS[subset]}-${WEIGHTS[weight]}-normal.woff`);
+    const path = require.resolve(`@fontsource/noto-serif/files/noto-serif-${SUBSETS[subset]}-${WEIGHTS[weight]}-normal.woff`);
     const font = openSync(path);
     const characters = new Set(font.characterSet);
     const clean = new Map<number, boolean>();
@@ -60,7 +60,7 @@ export function allFaces(): { name: string; path: string }[] {
   return (Object.keys(WEIGHTS) as Weight[]).flatMap((weight) =>
     SUBSETS.map((subset) => ({
       name: `${weight}-${subset}`,
-      path: require.resolve(`@fontsource/noto-sans/files/noto-sans-${subset}-${WEIGHTS[weight]}-normal.woff`),
+      path: require.resolve(`@fontsource/noto-serif/files/noto-serif-${subset}-${WEIGHTS[weight]}-normal.woff`),
     })),
   );
 }
