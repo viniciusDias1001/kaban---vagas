@@ -1,10 +1,10 @@
 import { ArrowDownLeft, ArrowUpRight, Inbox, RotateCw, X } from 'lucide-react';
 import { motion, useReducedMotion } from 'motion/react';
-import { useId, useMemo, useState, type KeyboardEvent } from 'react';
+import { Fragment, useId, useMemo, useState, type KeyboardEvent } from 'react';
 import {
   EMAIL_KINDS, EMAIL_KIND_LABELS, periodSince, type DashboardPeriod, type EmailKind, type MailMessageDto, type MailReplyDto,
 } from '@kv/shared/client';
-import { mailActions, replyStateLabel } from '../lib/email';
+import { mailActions, replyStateLabel, threadConversation } from '../lib/email';
 import { useMediaQuery } from '../lib/hooks';
 import { spring } from '../lib/motion';
 import { CARD, EYEBROW } from '../lib/styles';
@@ -166,7 +166,10 @@ function ReplyBox({ r }: { r: MailReplyDto }) {
   );
 }
 
-/** O fio de uma vaga: as mensagens do mesmo fio, em ordem, e as respostas que ainda não saíram como e-mail. */
+/**
+ * O fio de uma vaga, como no painel da vaga: as mensagens do mesmo fio em ordem, cada resposta sob o e-mail a que responde
+ * (a enviada também, até a cópia dela ser guardada; aí ela aparece como o e-mail enviado).
+ */
 function JobThread({ mail, jobId }: { mail: MailMessageDto; jobId: number }) {
   const job = useJobEmails(jobId);
   if (job.isError) {
@@ -180,15 +183,16 @@ function JobThread({ mail, jobId }: { mail: MailMessageDto; jobId: number }) {
     );
   }
   if (!job.data) return <div aria-hidden className="space-y-3"><Skeleton className="h-24 rounded-2xl" /><Skeleton className="h-24 rounded-2xl" /></div>;
-  const thread = job.data.messages.filter((m) => m.threadKey === mail.threadKey).sort((a, b) => a.sentAt - b.sentAt);
-  const messages = thread.length > 0 ? thread : [mail];
-  const ids = new Set(messages.map((m) => m.id));
-  // Uma resposta enviada já aparece como e-mail enviado do fio.
-  const replies = job.data.replies.filter((r) => ids.has(r.messageId) && r.state !== 'enviada');
+  const thread = threadConversation(job.data, mail.threadKey);
   return (
     <div className="space-y-3" data-testid="painel-mail-thread">
-      {messages.map((m) => <Bubble key={m.id} m={m} />)}
-      {replies.map((r) => <ReplyBox key={r.id} r={r} />)}
+      {thread.length === 0 && <Bubble m={mail} />}
+      {thread.map(({ message, reply }) => (
+        <Fragment key={message.id}>
+          <Bubble m={message} />
+          {reply && <ReplyBox r={reply} />}
+        </Fragment>
+      ))}
     </div>
   );
 }

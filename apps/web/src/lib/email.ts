@@ -175,6 +175,15 @@ export function emailConversation({ messages, replies }: JobEmailsDto): Conversa
   });
 }
 
+/**
+ * Só o fio `threadKey` da conversa da vaga, do mais antigo ao mais novo, com as mesmas regras de `emailConversation`: uma
+ * resposta enviada aparece no lugar da cópia guardada, ou sob o e-mail recebido enquanto a cópia não chega.
+ */
+export function threadConversation(dto: JobEmailsDto, threadKey: string): ConversationItem[] {
+  const messages = [...dto.messages].sort((a, b) => a.sentAt - b.sentAt || a.id - b.id);
+  return emailConversation({ messages, replies: dto.replies }).filter((i) => i.message.threadKey === threadKey);
+}
+
 const sameAddress = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
 
 /**

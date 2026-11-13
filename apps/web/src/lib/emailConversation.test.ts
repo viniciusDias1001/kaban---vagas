@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { MailMessageDto, MailReplyDto } from '@kv/shared/client';
-import { emailConversation, historyMailLine, replyGoesElsewhere } from './email';
+import { emailConversation, historyMailLine, replyGoesElsewhere, threadConversation } from './email';
 
 const message = (over: Partial<MailMessageDto> = {}): MailMessageDto => ({
   id: 1, messageId: '<in-1@acme.example>', threadKey: 't1', direction: 'in', fromAddress: 'ana@acme.example', fromName: 'Ana',
@@ -88,5 +88,29 @@ describe('replyGoesElsewhere', () => {
     expect(replyGoesElsewhere(reply({ messageId: 1, toAddress: 'rh@globex.example' }), messages)).toBe(true);
     expect(replyGoesElsewhere(reply({ messageId: 99, toAddress: 'x@example.com' }), messages)).toBe(false);
     expect(replyGoesElsewhere(reply({ toAddress: 'x@example.com' }), undefined)).toBe(false);
+  });
+});
+
+describe('threadConversation', () => {
+  it('keeps only the thread, in order, and shows a sent reply whose copy is not stored yet', () => {
+    const asked = message({ id: 1, threadKey: 't1', sentAt: 1_000 });
+    const other = message({ id: 2, threadKey: 't2', sentAt: 500 });
+    const later = message({ id: 3, threadKey: 't1', sentAt: 3_000 });
+    const sent = reply({ id: 10, messageId: 1, state: 'enviada', outMessageId: '<out-a@kanban-vagas.local>' });
+
+    const items = threadConversation({ messages: [later, other, asked], replies: [sent] }, 't1');
+
+    expect(items.map((i) => i.message.id)).toEqual([1, 3]);
+    expect(items[0].reply).toMatchObject({ id: 10, state: 'enviada' });
+  });
+
+  it('shows the sent reply once, as its stored copy, when the copy is there', () => {
+    const asked = message({ id: 1, threadKey: 't1' });
+    const copy = out(2, '<out-a@kanban-vagas.local>', { threadKey: 't1' });
+    const sent = reply({ id: 10, messageId: 1, state: 'enviada', outMessageId: '<out-a@kanban-vagas.local>' });
+
+    const items = threadConversation({ messages: [asked, copy], replies: [sent] }, 't1');
+
+    expect(items.map((i) => [i.message.id, i.reply?.id ?? null, i.sentReply?.id ?? null])).toEqual([[1, null, null], [2, null, 10]]);
   });
 });
