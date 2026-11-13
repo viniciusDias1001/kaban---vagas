@@ -111,11 +111,14 @@ describe('classifyEmail', () => {
     const requests = [
       { fact: 'salary', note: 'Pretensão' }, { fact: 'cpf', note: 'n'.repeat(500) }, { fact: 'salary', note: 'De novo' },
       { fact: 'outro', note: 'Mande para https://fora.example/x ou rh@fora.example' },
+      { fact: 'outro', note: 'Preencha bit.ly/x ou forms.gle/abc em fora.ai' },
     ];
-    const asked = await classifyEmail(returning(classifyReply({ requests })), { mail: mail(), candidates: [] }, {});
-    expect(asked.data.requests.map((q) => q.fact)).toEqual(['salary', 'outro', 'outro']);
+    const asked = await classifyEmail(returning(classifyReply({ requests, summary: 'Pedem para abrir evil.gg' })), { mail: mail(), candidates: [] }, {});
+    expect(asked.data.requests.map((q) => q.fact)).toEqual(['salary', 'outro', 'outro', 'outro']);
     expect(asked.data.requests[1].note).toHaveLength(200);
     expect(asked.data.requests[2].note).not.toMatch(/fora\.example/);
+    expect(asked.data.requests[3].note).toBe('Preencha [endereço omitido] ou [endereço omitido] em [endereço omitido]');
+    expect(asked.data.summary).toBe('Pedem para abrir [endereço omitido]');
     const interview = await classifyEmail(returning(classifyReply({ kind: 'entrevista', requests })), { mail: mail(), candidates: [] }, {});
     expect(interview.data.requests).toEqual([]);
   });

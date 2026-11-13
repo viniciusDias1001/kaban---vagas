@@ -55,6 +55,16 @@ describe('verifyEmailDraft', () => {
 
   it('does not take technology names for links', () => {
     expect(verifyEmailDraft(base, sign('Trabalho com Node.js e Vue.js.'))).toEqual([]);
+    // "3.11" tem 3 dígitos e cai na regra de números; aqui só importa que nada vire link.
+    const flagged = verifyEmailDraft(base, sign('Usei Next.js, ASP.NET, Socket.io e Python 3.11 (v2.0 da API).'));
+    expect(flagged.filter((v) => v.startsWith('o link'))).toEqual([]);
+    expect(verifyEmailDraft(base, sign('Veja socket.io/docs'))).toHaveLength(1);
+  });
+
+  it('flags a bare host with any ending, with or without a path', () => {
+    for (const link of ['bit.ly/x', 'fora.ai', 'forms.gle/abc', 'evil.gg', 'x.de', 't.me/fora', 'fora.io']) {
+      expect(verifyEmailDraft(base, sign(`Veja ${link} para continuar.`)), link).toHaveLength(1);
+    }
   });
 
   it('wants the profile name in the last lines, in any case and accents', () => {

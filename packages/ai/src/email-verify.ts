@@ -10,9 +10,21 @@ import type { EmailDraftInput } from './email-tasks';
 
 const EMAIL = /[\p{L}\p{N}._%+-]+@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)+/gu;
 const URL = /(?:https?:\/\/|www\.)[^\s<>"'()[\]{}]+/giu;
-/** Domínio sem protocolo ("fora.com.br/form"): só com um destes finais, para "Node.js" e "Vue.js" não virarem link. */
-const BARE_HOST = /(?<![\p{L}\p{N}_.@/-])(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+([a-z]{2,})(?![\p{L}\p{N}_-])(?:\/[^\s<>"'()[\]{}]*)?/giu;
-const TLDS = new Set('com br net org io dev app co me info biz xyz tech site online jobs pt eu uk us'.split(' '));
+/**
+ * Domínio sem protocolo, com ou sem caminho ("bit.ly/x", "fora.ai", "fora.com.br/form"): toda palavra da forma
+ * `rótulo.rótulo[.rótulo…]` cujo último rótulo tem 2 ou mais letras. Na dúvida é link: um falso alarme custa uma nova
+ * tentativa do rascunho; um link que passa derruba a conferência. Números e versões ("3.11", "v2.0") não terminam em
+ * letras e ficam de fora pela própria forma.
+ */
+const BARE_HOST =
+  /(?<![\p{L}\p{N}_.@/-])((?:[\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?\.)+(\p{L}{2,}))(?![\p{L}\p{N}_-])(?:\/[^\s<>"'()[\]{}]*)?/gu;
+/** Finais que não são domínio de verdade e só aparecem em nome de tecnologia ("Node.js", "Vue.js", "app.ts"). */
+const TECH_ENDINGS = new Set(['js', 'ts', 'py', 'rb']);
+/** Nomes de tecnologia com final que também é domínio: a lista é curta de propósito. */
+const TECH_NAMES = new Set(['asp.net', 'ado.net', 'vb.net', 'socket.io']);
+/** Nada que tenha caminho escapa: "socket.io/x" é link. */
+const isTechName = (host: string, hasPath: boolean) =>
+  !hasPath && (TECH_ENDINGS.has(host.slice(host.lastIndexOf('.') + 1)) || TECH_NAMES.has(host));
 const TRAILING = /[.,;:!?…]+$/;
 
 /** Quantos dígitos um número precisa ter para ser conferido: "2 semanas" e "40%" são prosa, "987654" não. */
@@ -38,9 +50,9 @@ export function findContacts(text: string): Found[] {
     links.push({ kind: 'link', raw, start: m.index, end: m.index + raw.length });
   }
   for (const m of masked.matchAll(BARE_HOST)) {
-    if (!TLDS.has(m[1].toLowerCase())) continue;
     if (links.some((l) => m.index >= l.start && m.index < l.end)) continue;
     const raw = m[0].replace(TRAILING, '');
+    if (isTechName(m[1].toLowerCase(), raw.length > m[1].length)) continue;
     links.push({ kind: 'link', raw, start: m.index, end: m.index + raw.length });
   }
   return [...out, ...links].sort((a, b) => a.start - b.start);
