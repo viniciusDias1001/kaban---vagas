@@ -20,7 +20,7 @@ const alertNotFound = { error: 'not_found', message: 'alerta não encontrado' };
 
 const wrongState = { error: 'wrong_state', message: 'Esta resposta não pode mais ser aprovada ou descartada.' };
 const replyChanged = { error: 'reply_changed', message: 'O texto desta resposta mudou. Confira o texto atual antes de enviar.' };
-const alertClosed ={ error: 'alert_closed', message: 'Este alerta já foi resolvido ou dispensado.' };
+const alertClosed = { error: 'alert_closed', message: 'Este alerta já foi resolvido ou dispensado.' };
 
 /**
  * Mensagens, respostas e alertas do e-mail. Nada aqui chama a IA nem envia: aprovar só põe a resposta na fila do worker.
