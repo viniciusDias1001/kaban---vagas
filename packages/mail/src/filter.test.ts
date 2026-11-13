@@ -21,7 +21,8 @@ describe('filterMail', () => {
   });
   it('needs a hiring signal next to the company name', () => {
     const invoice = rawMail({ from: { address: 'faturas@acme.com', name: 'Acme' }, subject: 'Sua fatura de novembro', text: 'Segue o boleto.', bulk: true });
-    expect(filterMail(invoice, ctx)).toEqual({ pass: false, ignoredCompany: 'Acme' });
+    // Envio em massa sem sinal de vaga é boletim: não passa e não entra em "ignorados".
+    expect(filterMail(invoice, ctx)).toEqual({ pass: false, ignoredCompany: null });
     expect(filterMail({ ...invoice, subject: 'Sua candidatura na Acme' }, ctx)).toEqual({ pass: true, why: 'company' });
     expect(filterMail({ ...invoice, from: { address: 'careers@acme.com', name: 'Acme' } }, ctx)).toEqual({ pass: true, why: 'company' });
     expect(filterMail({ ...invoice, text: 'Sobre a vaga de Engenheira de Software' }, ctx)).toEqual({ pass: true, why: 'company' });
@@ -52,6 +53,13 @@ describe('filterMail', () => {
   });
   it('keeps the whole-word guard for hiring words', () => {
     const mail = rawMail({ from: { address: 'no-reply@acme.com', name: 'Acme' }, subject: 'Acme: you enrolled in our plan', text: 'Texto.', bulk: true });
-    expect(filterMail(mail, ctx)).toEqual({ pass: false, ignoredCompany: 'Acme' });
+    expect(filterMail(mail, ctx)).toEqual({ pass: false, ignoredCompany: null });
+    expect(filterMail({ ...mail, bulk: false, autoSubmitted: true }, ctx)).toEqual({ pass: false, ignoredCompany: 'Acme' });
+  });
+  it('keeps a bulletin out of the ignored list, but a bulk mail with a hiring signal still passes', () => {
+    const bulletin = rawMail({ from: { address: 'news@acme.com', name: 'Acme' }, subject: 'Novidades da Acme', text: 'Nosso blog.', bulk: true });
+    expect(filterMail(bulletin, ctx)).toEqual({ pass: false, ignoredCompany: null });
+    expect(filterMail({ ...bulletin, subject: 'Atualização da sua candidatura na Acme' }, ctx)).toEqual({ pass: true, why: 'company' });
+    expect(filterMail({ ...bulletin, threadKey: 't1' }, { ...ctx, knownThreads: new Set(['t1']) })).toEqual({ pass: true, why: 'thread' });
   });
 });

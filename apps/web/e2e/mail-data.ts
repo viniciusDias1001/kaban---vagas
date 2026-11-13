@@ -56,12 +56,13 @@ export const invite = (): Partial<RawMail> => ({
 });
 
 /**
- * Fatura da mesma empresa: cita a empresa do quadro (domínio e nome), mas não tem sinal de contratação; é envio em massa
- * (List-Unsubscribe), então nem o "escrito direto para você" conta. Fica em "E-mails ignorados", sem texto.
+ * Fatura da mesma empresa: cita a empresa do quadro (domínio e nome), mas não tem sinal de contratação; é mensagem
+ * automática (Auto-Submitted), então nem o "escrito direto para você" conta. Fica em "E-mails ignorados", sem texto.
+ * (Um envio em massa, com List-Unsubscribe, seria boletim: nem entraria nessa lista.)
  */
 export const invoice = (): Partial<RawMail> => ({
   from: { address: 'faturamento@fake.example', name: `${COMPANY} Faturamento` },
   subject: `Sua fatura de novembro - ${COMPANY}`,
   text: 'Olá, Maria.\n\nSegue a fatura do mês. Valor: R$ 99,90. Vencimento: dia 20.',
-  bulk: true,
+  autoSubmitted: true,
 });

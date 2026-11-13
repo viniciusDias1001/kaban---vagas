@@ -67,6 +67,17 @@ describe('verifyEmailDraft', () => {
     }
   });
 
+  it('flags control and format characters, but not line breaks or tabs', () => {
+    for (const c of ['\u0007', '\u001b', '​', '‎', '‮', '⁦', '﻿', '­']) {
+      expect(verifyEmailDraft(base, sign(`Minha pretensão${c} é R$ 20.000 por mês.`)), JSON.stringify(c)).toHaveLength(1);
+    }
+    expect(verifyEmailDraft(base, 'Olá,\r\n\r\n\tMinha pretensão é R$ 20.000 por mês.\r\n\r\nMaria Exemplo da Silva')).toEqual([]);
+  });
+
+  it('takes a .py ending for a link (it is a country domain)', () => {
+    expect(verifyEmailDraft(base, sign('Veja fora.py para continuar.'))).toHaveLength(1);
+  });
+
   it('wants the profile name in the last lines, in any case and accents', () => {
     expect(verifyEmailDraft(base, 'Olá,\n\nObrigada.\n\nAbraços,\nmaria exemplo da silva')).toEqual([]);
     expect(verifyEmailDraft(base, 'Maria Exemplo da Silva aqui.\n\nObrigada pelo contato.\n\nAbraços\n\nEquipe\n\nAté mais')).toHaveLength(1);

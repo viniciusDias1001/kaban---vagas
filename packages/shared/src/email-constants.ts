@@ -42,8 +42,11 @@ export const EMAIL_DEFAULTS: EmailConfig = { enabled: true, moveMode: 'auto', fa
 
 export const MAIL_LIMITS = { bodyChars: 12_000, subjectChars: 300, summaryChars: 200, draftChars: 4_000, candidates: 5,
   candidateDays: 120, backfillDays: 30, ignoredDays: 30, pollMs: 180_000, fetchBatch: 50 } as const;
-/** Lacuna que a IA deixa onde falta um dado; rascunho com lacuna não pode ser enviado. */
-export const DRAFT_PLACEHOLDER = /\[\[[^\]]*\]\]/;
+/**
+ * Lacuna que a IA deixa onde falta um dado; rascunho com lacuna não pode ser enviado. Qualquer `[[` conta, mesmo sem
+ * fechar ou com `]` dentro: na dúvida, o dono confere. Sem a flag `g` (o `test` não guarda posição entre chamadas).
+ */
+export const DRAFT_PLACEHOLDER = /\[\[/;
 
 export type SecretName = 'mail_password' | 'telegram_bot_token';
 

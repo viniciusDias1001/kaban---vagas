@@ -16,7 +16,9 @@ import { fileURLToPath } from 'node:url';
 import { classifyEmail, createProvider } from '../packages/ai/src/index';
 import { closeDb, createDb, getMailAccount, mailMatchPool, threadJobs } from '../packages/db/src/index';
 import { acceptMatch, createGmailMailbox, pickCandidates, type Mailbox } from '../packages/mail/src/index';
-import { SMOKE_DAYS, formatSmokeSummary, parseMailSmokeArgs, readRecentInbox, summarizeSmoke } from '../packages/mail/src/smoke';
+import {
+  SMOKE_DAYS, checkSmokeFolders, formatSmokeSummary, parseMailSmokeArgs, readRecentInbox, summarizeSmoke, terminalText,
+} from '../packages/mail/src/smoke';
 import { createSettingsService } from '../packages/settings/src/index';
 import { EMAIL_KIND_LABELS } from '../packages/shared/src/index';
 
@@ -32,6 +34,8 @@ const envFile = join(repoRoot, '.env');
 if (existsSync(envFile)) process.loadEnvFile(envFile);
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message.split('\n')[0]! : String(e));
+/** O assunto como o terminal pode mostrar: uma linha, sem caracteres de controle (um assunto hostil pode trazê-los). */
+const subjectLine = (subject: string) => terminalText(subject) || '(sem assunto)';
 
 /** Tudo o que abre algo roda aqui dentro; o código de saída é devolvido (nunca `process.exit`), então o `finally` sempre roda. */
 async function main(): Promise<number> {
@@ -74,6 +78,12 @@ async function main(): Promise<number> {
     );
     console.log('');
     for (const line of formatSmokeSummary(summary, SMOKE_DAYS)) console.log(line);
+    // A leitura do app busca o fio de cada mensagem que passa ("Todos os e-mails") e confere envios em Enviados.
+    const first = summary.passed[0];
+    if (first) {
+      console.log('');
+      for (const line of await checkSmokeFolders(mailbox, first.mail.threadKey)) console.log(line);
+    }
 
     if (provider && summary.passed.length > 0) {
       console.log('', `Classificação (até ${classify}):`);
@@ -86,9 +96,9 @@ async function main(): Promise<number> {
           });
           const jobId = acceptMatch(data.jobId, mail, candidates);
           const job = candidates.find((c) => c.jobId === jobId);
-          console.log(`- ${mail.subject.trim() || '(sem assunto)'} | ${EMAIL_KIND_LABELS[data.kind]} | ${job ? `${job.company} · ${job.title}` : 'sem vaga'}`);
+          console.log(`- ${subjectLine(mail.subject)} | ${EMAIL_KIND_LABELS[data.kind]} | ${job ? `${job.company} · ${job.title}` : 'sem vaga'}`);
         } catch (e) {
-          console.log(`- ${mail.subject.trim() || '(sem assunto)'} | a classificação falhou: ${errorText(e)}`);
+          console.log(`- ${subjectLine(mail.subject)} | a classificação falhou: ${terminalText(errorText(e))}`);
         }
       }
     }

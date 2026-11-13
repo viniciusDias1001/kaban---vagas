@@ -124,6 +124,25 @@ describe('job mail', () => {
     expect((await post('/email/messages/999/unlink')).statusCode).toBe(404);
   });
 
+  it('unlinking puts the card back, closes the alerts of the thread and lets the mail be linked to the right card', async () => {
+    const wrong = await seedJob(db, { column: 'perdida' });
+    const right = await seedJob(db, { column: 'aplicada' });
+    const id = await seedMail({ jobId: wrong.id, linkedBy: 'auto', kind: 'reprovacao' });
+    await db.insert(jobEvents).values({ jobId: wrong.id, fromColumn: 'aplicada', toColumn: 'perdida', actor: 'email', mailMessageId: id, createdAt: NOW - 1000 });
+    const draft = await draftFor(id);
+    await raiseAlert(db, { kind: 'draft', jobId: wrong.id, replyId: draft }, NOW - 1000);
+
+    expect((await post(`/email/messages/${id}/unlink`)).statusCode).toBe(200);
+    const [row] = await db.select().from(jobs).where(eq(jobs.id, wrong.id));
+    expect(row.column).toBe('aplicada');
+    const alerts = (await get('/alerts')).json().alerts;
+    expect(alerts).toEqual([expect.objectContaining({ kind: 'unmatched', messageId: id, jobId: null })]);
+
+    expect((await post(`/email/messages/${id}/link`, { jobId: right.id })).statusCode).toBe(200);
+    expect((await mailMessageById(db, id))!).toMatchObject({ jobId: right.id, corrected: false, processedAt: null });
+    expect((await get('/alerts')).json().alerts).toEqual([]);
+  });
+
   it('undoes a move made by mail once', async () => {
     const job = await seedJob(db, { column: 'perdida' });
     const id = await seedMail({ jobId: job.id, linkedBy: 'auto', kind: 'reprovacao' });

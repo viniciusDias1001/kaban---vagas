@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { asc } from 'drizzle-orm';
+import { asc, sql } from 'drizzle-orm';
 import {
   getMailAccount, insertMailMessage, mailIgnored, mailMessages, openAlerts, requestPromote, saveMailAccount, type Db,
 } from '@kv/db';
 import {
-  MailAuthError, MailTransientError, createFakeMailbox, readFakeMailbox, writeFakeMailbox, type Mailbox, type RawMail,
+  FOLDERS_HIDDEN_TEXT, MailAuthError, MailFolderError, MailTransientError, createFakeMailbox, readFakeMailbox, writeFakeMailbox, type Mailbox, type RawMail,
 } from '@kv/mail';
 import { ingestInbox, promoteNext, type IngestDeps } from './ingest';
 import { DAY, HOUR, MAIL_NOW, MINUTE, OWNER_ADDRESS, mailTestBed } from './test-helpers';
@@ -44,7 +44,7 @@ describe('ingestInbox', () => {
   it('stores job mail, lists the company mail without a hiring signal and drops the rest', async () => {
     await seedAppliedJob('Acme', 'Engenheira de Software', MAIL_NOW - DAY);
     deliver({ from: { address: 'careers@acme.com', name: 'Acme' }, subject: 'Sua candidatura na Acme', text: 'Recebemos sua candidatura.' });
-    deliver({ from: { address: 'faturas@acme.com', name: 'Acme' }, subject: 'Sua fatura', text: 'Segue o boleto.', bulk: true });
+    deliver({ from: { address: 'faturas@acme.com', name: 'Acme' }, subject: 'Sua fatura', text: 'Segue o boleto.', autoSubmitted: true });
     deliver({ from: { address: 'promo@loja.example', name: 'Loja' }, subject: 'Promoção', text: 'Compre já.' });
     const before = readFakeMailbox(dir);
     expect(await ingestInbox(deps)).toEqual({ stored: 1, ignored: 1, more: false });
@@ -61,7 +61,7 @@ describe('ingestInbox', () => {
   it('never stores the same message twice, also after UIDVALIDITY changes', async () => {
     await seedAppliedJob('Acme', 'Engenheira de Software', MAIL_NOW - DAY);
     deliver(acmeJobMail());
-    deliver({ from: { address: 'faturas@acme.com', name: 'Acme' }, subject: 'Sua fatura', text: 'Segue o boleto.', bulk: true });
+    deliver({ from: { address: 'faturas@acme.com', name: 'Acme' }, subject: 'Sua fatura', text: 'Segue o boleto.', autoSubmitted: true });
     expect(await ingestInbox(deps)).toEqual({ stored: 1, ignored: 1, more: false });
     writeFakeMailbox(dir, { ...readFakeMailbox(dir), uidValidity: 2 });
     expect(await ingestInbox(deps)).toEqual({ stored: 0, ignored: 0, more: false });
@@ -121,7 +121,8 @@ describe('ingestInbox', () => {
       ...bed.mailbox,
       fetchThread: async (key) => {
         calls += 1;
-        if (calls === 2) throw new Error('queda no meio do lote');
+        // A caixa de verdade só lança erros da caixa (`toMailError`); um erro qualquer agora pula só a mensagem.
+        if (calls === 2) throw new MailTransientError('queda no meio do lote');
         return bed.mailbox.fetchThread(key);
       },
     };
@@ -151,9 +152,37 @@ describe('ingestInbox', () => {
     expect(await getMailAccount(db)).toMatchObject({ error: null });
   });
 
+  it('records how to show the folders when All mail is hidden from IMAP', async () => {
+    deliver(acmeJobMail({ from: { address: 'no-reply@greenhouse.io', name: 'Acme' } }));
+    const hidden: Mailbox = { ...bed.mailbox, fetchThread: async () => { throw new MailFolderError(FOLDERS_HIDDEN_TEXT); } };
+    await expect(ingestInbox({ ...deps, mailbox: hidden })).rejects.toBeInstanceOf(MailFolderError);
+    expect(await getMailAccount(db)).toMatchObject({ paused: false, error: FOLDERS_HIDDEN_TEXT, lastUid: null });
+  });
+
+  it('skips a message that cannot be stored, logs only its UID and moves the reading point on', async () => {
+    await seedAppliedJob('Acme', 'Engenheira de Software', MAIL_NOW - DAY);
+    deliver(acmeJobMail({ subject: 'Sua candidatura na Acme: quebrada', messageId: 'quebrada@acme.com', threadKey: 'quebrada@acme.com' }));
+    deliver(acmeJobMail({ subject: 'Sua candidatura na Acme', messageId: 'boa@acme.com', threadKey: 'boa@acme.com' }));
+    await db.execute(sql.raw(`create or replace function kv_test_fail() returns trigger language plpgsql as $$
+      begin if new.subject like '%quebrada%' then raise exception 'falha simulada'; end if; return new; end $$`));
+    await db.execute(sql.raw('create trigger kv_test_fail before insert on mail_messages for each row execute function kv_test_fail()'));
+    const lines: string[] = [];
+    try {
+      expect(await ingestInbox({ ...deps, log: (m) => lines.push(m) })).toMatchObject({ stored: 1 });
+    } finally {
+      await db.execute(sql.raw('drop trigger kv_test_fail on mail_messages'));
+    }
+    expect((await stored()).map((m) => m.messageId)).toEqual(['boa@acme.com']);
+    expect(await getMailAccount(db)).toMatchObject({ lastUid: 2, error: null });
+    const skipped = lines.filter((l) => l.includes('UID 1'));
+    expect(skipped).toHaveLength(1);
+    expect(lines.join('\n')).not.toContain('quebrada');
+    expect(lines.join('\n')).not.toContain('careers@acme.com');
+  });
+
   it('deletes ignored lines older than 30 days', async () => {
     await seedAppliedJob('Acme', 'Engenheira de Software', MAIL_NOW - DAY);
-    deliver({ from: { address: 'faturas@acme.com', name: 'Acme' }, subject: 'Sua fatura', text: 'Segue o boleto.', bulk: true });
+    deliver({ from: { address: 'faturas@acme.com', name: 'Acme' }, subject: 'Sua fatura', text: 'Segue o boleto.', autoSubmitted: true });
     await ingestInbox({ ...deps, now: () => MAIL_NOW - 31 * DAY });
     expect(await db.select().from(mailIgnored)).toHaveLength(1);
     await ingestInbox(deps);
@@ -171,7 +200,7 @@ describe('ingestInbox', () => {
 describe('promoteNext', () => {
   it('promotes an ignored mail the owner marked', async () => {
     await seedAppliedJob('Acme', 'Engenheira de Software', MAIL_NOW - DAY);
-    deliver({ from: { address: 'faturas@acme.com', name: 'Acme' }, subject: 'Sua fatura', text: 'Segue o boleto.', bulk: true });
+    deliver({ from: { address: 'faturas@acme.com', name: 'Acme' }, subject: 'Sua fatura', text: 'Segue o boleto.', autoSubmitted: true });
     expect(await ingestInbox(deps)).toEqual({ stored: 0, ignored: 1, more: false });
     expect(await promoteNext(deps)).toBe(false);
     const [ign] = await db.select().from(mailIgnored);
@@ -184,7 +213,7 @@ describe('promoteNext', () => {
 
   it('drops the line when the mail is no longer in the inbox', async () => {
     await seedAppliedJob('Acme', 'Engenheira de Software', MAIL_NOW - DAY);
-    deliver({ from: { address: 'faturas@acme.com', name: 'Acme' }, subject: 'Sua fatura', text: 'Segue o boleto.', bulk: true });
+    deliver({ from: { address: 'faturas@acme.com', name: 'Acme' }, subject: 'Sua fatura', text: 'Segue o boleto.', autoSubmitted: true });
     await ingestInbox(deps);
     writeFakeMailbox(dir, { ...readFakeMailbox(dir), messages: [] });
     const [ign] = await db.select().from(mailIgnored);
@@ -196,7 +225,7 @@ describe('promoteNext', () => {
 
   it('pauses on a refused login', async () => {
     await seedAppliedJob('Acme', 'Engenheira de Software', MAIL_NOW - DAY);
-    deliver({ from: { address: 'faturas@acme.com', name: 'Acme' }, subject: 'Sua fatura', text: 'Segue o boleto.', bulk: true });
+    deliver({ from: { address: 'faturas@acme.com', name: 'Acme' }, subject: 'Sua fatura', text: 'Segue o boleto.', autoSubmitted: true });
     await ingestInbox(deps);
     const [ign] = await db.select().from(mailIgnored);
     await requestPromote(db, ign!.id);

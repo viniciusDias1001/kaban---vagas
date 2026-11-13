@@ -134,7 +134,7 @@ export function createMailQueue(deps: MailQueueDeps): MailQueue {
     }
     if (await guarded('agir sobre um e-mail', () => actOnNext(work))) return true;
     if (caughtUp && (await guarded('fechar a primeira leitura', () => finishBackfill(work)))) return true;
-    const sendDeps = (mailbox: Mailbox): SendDeps => ({ db, mailbox, now, log, resume: deps.resume });
+    const sendDeps = (mailbox: Mailbox): SendDeps => ({ db, mailbox, now, log, settings, resume: deps.resume });
     // Uma resposta em `enviando` (o envio caiu, ou ficou assim com a caixa pausada) é conferida em Enviados antes de
     // qualquer outro envio.
     if (await guarded('recuperar um envio interrompido', async () => {
@@ -196,7 +196,7 @@ export function createMailQueue(deps: MailQueueDeps): MailQueue {
     },
     async recoverInterrupted() {
       if (stopped || !(await usable()) || (await repliesInSending(db)).length === 0) return;
-      await withMailbox((mailbox) => recoverSending({ db, mailbox, now, log, resume: deps.resume }));
+      await withMailbox((mailbox) => recoverSending({ db, mailbox, now, log, settings, resume: deps.resume }));
     },
     stop() {
       stopped = true;

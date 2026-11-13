@@ -39,5 +39,7 @@ export function filterMail(mail: RawMail, ctx: FilterContext): FilterResult {
   const matched = ctx.companies.filter((c) => companyInHeaders(c.company, mail));
   if (matched.length === 0) return { pass: false, ignoredCompany: null };
   if (matched.some((c) => hasHiringSignal(mail, c.title, own))) return { pass: true, why: 'company' };
+  // Envio em massa da empresa sem sinal de vaga é boletim: nem passa nem entra em "ignorados".
+  if (mail.bulk) return { pass: false, ignoredCompany: null };
   return { pass: false, ignoredCompany: matched[0]!.company };
 }

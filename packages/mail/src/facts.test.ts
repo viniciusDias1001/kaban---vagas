@@ -51,6 +51,10 @@ describe('resolveFact', () => {
     expect(resolveFact('pronouns', { ...src, answers: [ans('pronouns', '   ')] })).toBeNull();
     expect(resolveFact('relocation', { ...src, answers: [ans('relocation', 'talvez', 'boolean')] })).toBeNull();
     expect(resolveFact('salary', { ...src, answers: [ans('salary_brl_month', '20.000', 'number')] })).toBeNull();
+    // Com centavos, o texto da resposta arredondaria para um valor que o dono não salvou.
+    expect(resolveFact('salary', { ...src, answers: [ans('salary_brl_month', '20000.5', 'number')] })).toBeNull();
+    expect(resolveFact('salary', { ...src, answers: [ans('salary_brl_month', '20000,50', 'number')] })).toBeNull();
+    expect(resolveFact('salary', { ...src, answers: [ans('salary_brl_month', '20000.00', 'number')] })).toEqual({ amount: 20000, unit: 'brl_month' });
   });
   it('ignores answers scoped to a company or to another country', () => {
     expect(resolveFact('work_authorization', { ...src, country: 'INT' })).toBeNull();

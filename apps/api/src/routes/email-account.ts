@@ -1,6 +1,9 @@
 import type { FastifyInstance } from 'fastify';
-import { baseProfile, deleteMailAccount, deleteMailData, getMailAccount, resolveAlerts, saveMailAccount, type Db } from '@kv/db';
-import { MailAuthError, PhoneAlertError, type Mailbox } from '@kv/mail';
+import {
+  baseProfile, deleteMailAccount, deleteMailData, getMailAccount, raiseAlert, repliesInState, resolveAlerts, returnReplyToDraft,
+  saveMailAccount, updateMailAccount, type Db,
+} from '@kv/db';
+import { FOLDERS_HIDDEN_TEXT, MailAuthError, MailFolderError, PhoneAlertError, type Mailbox } from '@kv/mail';
 import { SecretMissingError } from '@kv/settings';
 import { DisconnectQuerySchema, MailAccountInputSchema, PhoneTokenInputSchema, emailAvailability, type MailAccountDto } from '@kv/shared';
 import type { AiContext } from '../ai-context';
@@ -12,6 +15,7 @@ const PHONE_UNREACHABLE = 'Não foi possível falar com o Telegram agora.';
 const NO_CHAT = 'Mande uma mensagem para o seu bot no Telegram e tente de novo.';
 const NO_TOKEN = 'Grave o token do bot antes.';
 const NO_CHAT_YET = 'Aperte Achar meu chat antes de enviar o teste.';
+const DISCONNECTED = 'A caixa foi desconectada antes do envio.';
 
 /**
  * A caixa do dono: conectar (testa o login e guarda a senha de app cifrada), ver o estado e desconectar.
@@ -72,18 +76,42 @@ export function emailAccountRoutes(app: FastifyInstance, db: Db, ctx: AiContext)
       if (e instanceof SecretMissingError) return reply.code(409).send({ error: 'no_app_secret', message: e.message });
       throw e;
     }
-    await saveMailAccount(db, address, ctx.now());
+    // A mesma caixa (nova senha depois de uma pausa): só a pausa e o erro saem. A conexão, o ponto de leitura e a primeira
+    // leitura ficam, para o que chegou na pausa ser tratado como e-mail novo (com alerta e resposta). Outra caixa: começa do zero.
+    const current = await getMailAccount(db);
+    if (current && current.address.trim().toLowerCase() === address.trim().toLowerCase()) {
+      await updateMailAccount(db, { paused: false, error: null });
+    } else {
+      await saveMailAccount(db, address, ctx.now());
+    }
     // Login aceito: o aviso de "caixa com erro" (senha revogada, por exemplo) deixa de valer.
     await resolveAlerts(db, { kind: 'mailbox_error' }, ctx.now());
     return dto();
   });
 
-  /** Apaga a credencial e a conta; com `messages=delete`, também as mensagens, respostas e alertas do e-mail. */
+  /**
+   * Apaga a credencial e a conta; com `messages=delete`, também as mensagens, respostas e alertas do e-mail (isso só com
+   * host local: desconectar continua valendo de qualquer lugar). Mantendo as mensagens, os alertas da caixa são resolvidos
+   * e as respostas que esperavam o envio voltam a rascunho: não saem dias depois, numa reconexão.
+   */
   app.delete('/email/account', async (req, reply) => {
     const { messages } = DisconnectQuerySchema.parse(req.query);
+    if (messages === 'delete') {
+      const { available, reason } = emailAvailability(process.env);
+      if (!available) return reply.code(409).send({ error: 'email_unavailable', message: reason });
+    }
     await ctx.settings.deleteSecret('mail_password');
     await deleteMailAccount(db);
-    if (messages === 'delete') await deleteMailData(db);
+    if (messages === 'delete') {
+      await deleteMailData(db);
+      return reply.code(204).send();
+    }
+    const now = ctx.now();
+    for (const kind of ['mailbox_error', 'budget_waiting', 'backfill_summary'] as const) await resolveAlerts(db, { kind }, now);
+    for (const queued of await repliesInState(db, 'aprovada')) {
+      await returnReplyToDraft(db, queued.id, DISCONNECTED);
+      await raiseAlert(db, { kind: 'draft', replyId: queued.id, payload: { reason: DISCONNECTED } }, now);
+    }
     return reply.code(204).send();
   });
 
@@ -195,6 +223,8 @@ async function checkLogin(mailbox: Mailbox): Promise<LoginFailure | null> {
     return null;
   } catch (e) {
     if (e instanceof MailAuthError) return { status: 422, body: { error: 'mail_auth', message: e.message } };
+    // Pasta escondida do IMAP: a frase fixa do `MailFolderError` diz o que ativar no Gmail.
+    if (e instanceof MailFolderError) return { status: 502, body: { error: 'mail_unreachable', message: FOLDERS_HIDDEN_TEXT } };
     return { status: 502, body: { error: 'mail_unreachable', message: UNREACHABLE } };
   } finally {
     // Fechar uma sessão que nem abriu também pode falhar: isso não muda o resultado do teste.

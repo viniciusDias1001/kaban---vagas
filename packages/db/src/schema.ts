@@ -74,9 +74,11 @@ export const jobEvents = pgTable(
     actor: text('actor').$type<Actor>().notNull(),
     // E-mail que causou o movimento (só quando o autor é `email`); o evento sobrevive à mensagem.
     mailMessageId: integer('mail_message_id').references((): AnyPgColumn => mailMessages.id, { onDelete: 'set null' }),
+    // Movimento por e-mail desfeito pelo dono: não conta no Painel, mesmo depois que a mensagem é apagada.
+    undone: boolean('undone').notNull().default(false),
     createdAt: epochMs('created_at').notNull(),
   },
-  (t) => [index('job_events_job_idx').on(t.jobId)],
+  (t) => [index('job_events_job_idx').on(t.jobId), index('job_events_mail_message_idx').on(t.mailMessageId)],
 ).enableRLS();
 
 export const runs = pgTable(
@@ -464,7 +466,10 @@ export const mailReplies = pgTable('mail_replies', {
   createdAt: epochMs('created_at').notNull(),
   approvedAt: epochMs('approved_at'),
   sentAt: epochMs('sent_at'),
-}).enableRLS();
+}, (t) => [
+  // Texto da IA nunca sai sem aprovação do dono: uma resposta `ai` nunca é aprovada por `auto`.
+  check('mail_replies_ai_not_auto', sql`${t.origin} <> 'ai' OR ${t.approvedBy} IS DISTINCT FROM 'auto'`),
+]).enableRLS();
 
 /** E-mails fora do filtro de vaga: só o cabeçalho, guardado por 30 dias (sem corpo). */
 export const mailIgnored = pgTable('mail_ignored', {

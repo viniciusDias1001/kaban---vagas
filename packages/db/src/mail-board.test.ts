@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { desc, eq } from 'drizzle-orm';
 import type { Column } from '@kv/shared';
 import { deleteAllAiData } from './ai';
+import { appliedJobFacts } from './dashboard';
 import { closeDb, type Db } from './index';
 import { raiseAlert } from './mail-alerts';
 import { deleteMailData, moveCardByEmail, moveStateFor, undoEmailMove } from './mail-board';
@@ -141,6 +142,21 @@ describe('mail data deletion', () => {
     expect(await db.select().from(appSecrets)).toHaveLength(1);
     // O histórico do card fica, sem a ligação com o e-mail apagado.
     expect(await events(jobId)).toEqual([expect.objectContaining({ actor: 'email', toColumn: 'entrevista', mailMessageId: null })]);
+  });
+
+  it('keeps an undone move out of the Painel after the mail is deleted', async () => {
+    const jobId = await seedJob('a', 'aplicada');
+    await db.insert(jobEvents).values({ jobId, fromColumn: 'selecionadas', toColumn: 'aplicada', actor: 'humano', createdAt: 1000 });
+    const rejection = await seedMessage('<r@acme.example>', jobId, 4000);
+    await db.update(mailMessages).set({ kind: 'reprovacao' }).where(eq(mailMessages.id, rejection));
+    await moveCardByEmail(db, { jobId, to: 'perdida', messageId: rejection }, 5000);
+    expect(await undoEmailMove(db, rejection, 6000)).toBe(true);
+    expect((await events(jobId)).find((e) => e.actor === 'email')).toMatchObject({ undone: true });
+
+    await deleteMailData(db);
+    expect(await appliedJobFacts(db, null)).toEqual([
+      expect.objectContaining({ jobId, column: 'aplicada', appliedAt: 1000, firstResponseAt: null, lostAt: null }),
+    ]);
   });
 
   it('can run inside a transaction of the caller', async () => {

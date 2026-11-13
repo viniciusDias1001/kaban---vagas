@@ -50,6 +50,22 @@ function scripted(reply: () => unknown) {
 }
 
 describe('GET /settings and PATCH /settings', () => {
+  it('off a local host, refuses a patch with an e-mail or phone setting and still saves the others', async () => {
+    build({ APP_SECRET: TEST_SECRET });
+    vi.stubEnv('HOST', '0.0.0.0');
+    try {
+      for (const body of [{ emailFactsMode: 'auto' }, { emailEnabled: true }, { phoneAlertChannel: 'telegram' }, { telegramChatId: '7' }, { applyMinScore: 80, emailAiDrafts: false }]) {
+        const res = await patch(body);
+        expect(res.statusCode, JSON.stringify(body)).toBe(409);
+        expect(res.json()).toMatchObject({ error: 'email_unavailable' });
+      }
+      expect((await get()).email.factsMode).toEqual({ value: 'auto', source: 'default' });
+      expect((await patch({ applyMinScore: 80 })).statusCode).toBe(200);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('shows and saves the e-mail settings', async () => {
     build({ APP_SECRET: TEST_SECRET });
     expect((await get()).email).toEqual({

@@ -3,7 +3,8 @@ import { and, desc, eq, sql } from 'drizzle-orm';
 import { createFakeProvider, type AiConfig, type AiProvider } from '@kv/ai';
 import { SAMPLE_PROFILE } from '@kv/ai/testing';
 import {
-  applyAnswers, ensureSeedAnswers, getMailAccount, insertMailMessage, jobEvents, jobs, mailMessageById, mailMessages, mailReplies, openAlerts,
+  applyAnswers, ensureSeedAnswers, getMailAccount, insertMailMessage, jobEvents, jobs, linkThreadToJob, mailMessageById, mailMessages,
+  mailReplies, openAlerts,
   recordUsage, replyForMessage, saveClassification, saveMailAccount, saveProfile, updateMailAccount, alerts as alertsTable,
   type Db, type NewMailMessage,
 } from '@kv/db';
@@ -175,15 +176,49 @@ describe('actOnNext: moves and alerts', () => {
     expect((await mailMessageById(db, rejection))!.processedAt).toBe(MAIL_NOW);
   });
 
-  it('opens an unmatched alert for decisive mail without a card', async () => {
+  it('opens an unmatched alert for decisive mail without a card, and the invite or offer alert too', async () => {
     const invite = await classified('entrevista', {}, { jobId: null });
     await classified('outro', { sentAt: MAIL_NOW - 30 * 60_000 }, { jobId: null });
-    expect(await actOnNext(deps)).toBe(true);
-    expect(await actOnNext(deps)).toBe(true);
-    expect(await openAlerts(db)).toEqual([expect.objectContaining({ kind: 'unmatched', messageId: invite, jobId: null })]);
+    const rejection = await classified('reprovacao', { sentAt: MAIL_NOW - 20 * 60_000 }, { jobId: null });
+    const offer = await classified('oferta', { sentAt: MAIL_NOW - 10 * 60_000 }, { jobId: null });
+    for (let i = 0; i < 4; i++) expect(await actOnNext(deps)).toBe(true);
+    const byMessage = (id: number) => openAlerts(db).then((all) => all.filter((a) => a.messageId === id).map((a) => [a.kind, a.jobId]).sort());
+    expect(await byMessage(invite)).toEqual([['interview', null], ['unmatched', null]]);
+    expect((await openAlerts(db)).find((a) => a.kind === 'interview')!.payload).toEqual({ reason: 'Sem rascunho da IA. Responda você mesmo.' });
+    expect(await byMessage(rejection)).toEqual([['unmatched', null]]);
+    expect(await byMessage(offer)).toEqual([['offer', null], ['unmatched', null]]);
     expect(await replyForMessage(db, invite)).toBeNull();
     expect(await column(acme)).toBe('aplicada');
     expect(calls).toEqual([]);
+  });
+
+  it('first-read mail without a card raises nothing', async () => {
+    await classified('entrevista', { backfill: true, sentAt: CONNECTED_AT - DAY }, { jobId: null });
+    expect(await actOnNext(deps)).toBe(true);
+    expect(await openAlerts(db)).toEqual([]);
+  });
+
+  it('acting again on a relinked mail raises no alert kind it already raised', async () => {
+    const invite = await classified('entrevista', {}, { jobId: null });
+    expect(await actOnNext(deps)).toBe(true);
+    const interview = (await openAlerts(db)).find((a) => a.kind === 'interview')!;
+    await db.update(alertsTable).set({ resolvedAt: MAIL_NOW }).where(eq(alertsTable.id, interview.id));
+    await linkThreadToJob(db, invite, acme, MAIL_NOW);
+    expect(await actOnNext(deps)).toBe(true);
+    expect(await column(acme)).toBe('entrevista');
+    expect((await openAlerts(db)).filter((a) => a.kind === 'interview')).toEqual([]);
+  });
+
+  it('acting again links a new alert to the reply that already exists', async () => {
+    const request = await classified('pedido', {}, { requests: [req('salary')] });
+    expect(await actOnNext(deps)).toBe(true);
+    const reply = (await replyForMessage(db, request))!;
+    expect(reply).toMatchObject({ state: 'aprovada', approvedBy: 'auto' });
+    await deps.settings.update({ emailFactsMode: 'approve' });
+    await linkThreadToJob(db, request, acme, MAIL_NOW);
+    expect(await actOnNext(deps)).toBe(true);
+    expect(await db.select().from(mailReplies)).toHaveLength(1);
+    expect(await openAlerts(db)).toEqual([expect.objectContaining({ kind: 'draft', replyId: reply.id })]);
   });
 
   it('does nothing for an acknowledgement or other mail', async () => {
@@ -295,6 +330,16 @@ describe('actOnNext: replies', () => {
     expect((await openAlerts(db))[0]).toMatchObject({ kind: 'draft', payload: { recipient: 'dados@fora.example' } });
   });
 
+  it('never sends on its own to a look-alike company domain', async () => {
+    const messageId = await classified('pedido', { replyTo: 'x@acme.phish.io' }, { requests: [req('salary'), req('email'), req('resume')] });
+    expect(await actOnNext(deps)).toBe(true);
+    const reply = await replyForMessage(db, messageId);
+    expect(reply).toMatchObject({ state: 'rascunho', toAddress: 'x@acme.phish.io', approvedBy: null });
+    expect(await openAlerts(db)).toEqual([
+      expect.objectContaining({ kind: 'draft', replyId: reply!.id, payload: { recipient: 'x@acme.phish.io' } }),
+    ]);
+  });
+
   it('sends on its own to an address the owner already wrote to in the thread', async () => {
     await insertMailMessage(db, {
       messageId: 'antes@ats.example', threadKey: 'fio', direction: 'out', uid: null, fromAddress: OWNER_ADDRESS, fromName: 'Maria',
@@ -343,7 +388,9 @@ describe('actOnNext: replies', () => {
     expect(await replyForMessage(db, invite)).toBeNull();
     expect(await replyForMessage(db, request)).toBeNull();
     const alerts = await openAlerts(db);
-    expect(alerts.map((a) => [a.kind, a.replyId])).toEqual([['draft', null], ['interview', null]]);
+    expect(alerts.map((a) => [a.kind, a.replyId, a.payload.reason])).toEqual([
+      ['draft', null, 'Sem rascunho da IA. Responda você mesmo.'], ['interview', null, 'Sem rascunho da IA. Responda você mesmo.'],
+    ]);
     expect(calls).toEqual([]);
   });
 
@@ -352,7 +399,8 @@ describe('actOnNext: replies', () => {
     const invite = await classified('entrevista');
     expect(await actOnNext(deps)).toBe(true);
     expect(await replyForMessage(db, invite)).toBeNull();
-    expect((await openAlerts(db))[0]).toMatchObject({ kind: 'interview', replyId: null });
+    const noDraft = 'Sem rascunho da IA. Responda você mesmo.';
+    expect((await openAlerts(db))[0]).toMatchObject({ kind: 'interview', replyId: null, payload: { reason: noDraft } });
     expect(calls).toEqual([]);
 
     await db.execute(sql`truncate table ai_usage`);
@@ -360,6 +408,7 @@ describe('actOnNext: replies', () => {
     expect(await actOnNext(deps)).toBe(true);
     expect(calls).toEqual(['strong', 'strong']); // uma segunda tentativa levando as violações
     expect(await replyForMessage(db, forged)).toBeNull();
+    expect((await openAlerts(db)).find((a) => a.messageId === forged)).toMatchObject({ kind: 'interview', payload: { reason: noDraft } });
   });
 
   it('writes no reply for mail that takes none', async () => {
@@ -418,6 +467,24 @@ describe('first read', () => {
     }, MAIL_NOW);
     await updateMailAccount(db, { lastReadAt: MAIL_NOW });
     expect(await finishBackfill(deps)).toBe(false);
+  });
+
+  it('sums up only the first read of the current connection', async () => {
+    // De uma conexão anterior (outra caixa): já tratada, ou ainda esperando tipo. Nenhuma das duas entra no resumo.
+    const old = await classified('reprovacao', { backfill: true, sentAt: CONNECTED_AT - 40 * DAY });
+    await insertMailMessage(db, {
+      messageId: 'parado@acme.com', threadKey: 'p', direction: 'in', uid: 99, fromAddress: 'joana@acme.com', fromName: 'Joana',
+      toAddress: OWNER_ADDRESS, replyTo: null, subject: 'Sua candidatura na Acme', sentAt: CONNECTED_AT - 40 * DAY, body: 'x',
+      inReplyTo: null, refs: [], autoSubmitted: false, listId: false, backfill: true,
+    }, CONNECTED_AT - 30 * DAY);
+    await db.update(mailMessages).set({ createdAt: CONNECTED_AT - 30 * DAY, processedAt: CONNECTED_AT - 30 * DAY }).where(eq(mailMessages.id, old));
+    await classified('entrevista', { backfill: true, sentAt: CONNECTED_AT - 2 * DAY });
+    await updateMailAccount(db, { lastReadAt: MAIL_NOW });
+    expect(await actOnNext(deps)).toBe(true);
+    expect(await finishBackfill(deps)).toBe(true);
+    expect(await openAlerts(db)).toEqual([
+      expect.objectContaining({ kind: 'backfill_summary', payload: { total: 1, counts: { entrevista: 1 } } }),
+    ]);
   });
 });
 

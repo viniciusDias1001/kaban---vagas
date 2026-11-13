@@ -6,8 +6,8 @@
  */
 import { draftEmailReply, verifyEmailDraft, type EmailDraftInput, type EmailForAi } from '@kv/ai';
 import {
-  JOBS_WRITE_LOCK, baseProfile, createReply, getMailAccount, jobs, listApplyAnswers, mailMessages, markProcessed, moveCardByEmail,
-  moveStateFor, nextUnprocessed, raiseAlert, threadMessages, updateMailAccount, type Db, type MailMessageRow, type NewReply,
+  JOBS_WRITE_LOCK, alerts as alertsTable, baseProfile, createReply, getMailAccount, jobs, listApplyAnswers, mailMessages, mailReplies, markProcessed, moveCardByEmail,
+  moveStateFor, nextUnprocessed, raiseAlert, replyForMessage, threadMessages, updateMailAccount, type Db, type MailMessageRow, type NewReply,
 } from '@kv/db';
 import {
   chooseRecipient, composeFactsReply, decideMove, isTrustedRecipient, replySubject, resolveFact, type FactSources, type FactValue,
@@ -16,11 +16,12 @@ import {
 import type {
   AlertKind, AlertPayload, CandidateProfile, DecisiveKind, EmailConfig, EmailKind, EmailLang, KnownFact,
 } from '@kv/shared';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, gte, or, sql } from 'drizzle-orm';
 import type { MailWorkDeps } from './classify';
 
 export const NO_REPLY_REASON = 'Este e-mail não aceita resposta.';
 export const AMBIGUOUS_REPLY_REASON = 'Este e-mail pede resposta para mais de um endereço. Responda você mesmo.';
+export const NO_DRAFT_REASON = 'Sem rascunho da IA. Responda você mesmo.';
 
 interface JobInfo { id: number; company: string; title: string; country: 'BR' | 'INT' }
 
@@ -30,10 +31,33 @@ interface Plan {
   /** O tipo que pode mover o card. */
   decisive: DecisiveKind | null;
   alert: { kind: AlertKind; payload: AlertPayload } | null;
+  /** Um segundo alerta: o convite ou a oferta de um e-mail sem card, além do `unmatched`. */
+  also?: { kind: AlertKind; payload: AlertPayload };
   reply: Omit<NewReply, 'messageId'> | null;
 }
 
 const NOTHING: Plan = { job: null, decisive: null, alert: null, reply: null };
+
+/**
+ * Abre o alerta, a menos que um do mesmo tipo já tenha sido aberto para esta mensagem (aberto ou não, direto ou pela
+ * resposta dela): agir de novo sobre um e-mail religado não repete um aviso (nem a mensagem no celular). `missing_fact`
+ * fica de fora: "Tentar de novo" sem o valor salvo precisa avisar outra vez.
+ */
+async function raiseOnce(tx: Db, input: Parameters<typeof raiseAlert>[1], now: number): Promise<void> {
+  if (input.kind !== 'missing_fact' && input.mailMessageId) {
+    const [seen] = await tx
+      .select({ id: alertsTable.id })
+      .from(alertsTable)
+      .leftJoin(mailReplies, eq(mailReplies.id, alertsTable.replyId))
+      .where(and(
+        eq(alertsTable.kind, input.kind),
+        or(eq(alertsTable.mailMessageId, input.mailMessageId), eq(mailReplies.messageId, input.mailMessageId)),
+      ))
+      .limit(1);
+    if (seen) return;
+  }
+  await raiseAlert(tx, input, now);
+}
 
 /** Age sobre a mensagem classificada mais antiga, numa transação. Devolve se havia o que fazer. */
 export async function actOnNext(deps: MailWorkDeps): Promise<boolean> {
@@ -67,12 +91,16 @@ async function act(tx: Db, mail: MailMessageRow, plan: Plan, config: EmailConfig
     const to = state ? decideMove(plan.decisive, mail.sentAt, state) : null;
     if (to !== null && config.moveMode === 'auto') await moveCardByEmail(tx, { jobId: job.id, to, messageId: mail.id }, now);
     if (to !== null && config.moveMode === 'confirm') {
-      await raiseAlert(tx, { kind: 'move_confirm', jobId: job.id, mailMessageId: mail.id, payload: { moveTo: to } }, now);
+      await raiseOnce(tx, { kind: 'move_confirm', jobId: job.id, mailMessageId: mail.id, payload: { moveTo: to } }, now);
     }
   }
-  const replyId = plan.reply ? await createReply(tx, { ...plan.reply, messageId: mail.id }, now) : null;
-  if (plan.alert) {
-    await raiseAlert(tx, { kind: plan.alert.kind, jobId: job?.id ?? null, mailMessageId: mail.id, replyId, payload: plan.alert.payload }, now);
+  // Uma resposta por mensagem: agindo de novo (e-mail religado), o alerta aponta para a que já existe.
+  const replyId = plan.reply
+    ? (await createReply(tx, { ...plan.reply, messageId: mail.id }, now)) ?? (await replyForMessage(tx, mail.id))?.id ?? null
+    : null;
+  for (const alert of [plan.alert, plan.also]) {
+    if (!alert) continue;
+    await raiseOnce(tx, { kind: alert.kind, jobId: job?.id ?? null, mailMessageId: mail.id, replyId, payload: alert.payload }, now);
   }
   await markProcessed(tx, mail.id, now);
 }
@@ -86,16 +114,23 @@ async function prepare(deps: MailWorkDeps, mail: MailMessageRow, config: EmailCo
   const kind: EmailKind = mail.kind === 'pedido' && mail.requests.length === 0 ? 'outro' : mail.kind!;
   if (kind === 'recebimento' || kind === 'outro') return NOTHING;
   const job = mail.jobId === null ? null : await jobInfo(db, mail.jobId);
-  if (!job) return mail.backfill ? NOTHING : { ...NOTHING, alert: { kind: 'unmatched', payload: {} } };
-  const decisive = isDecisive(kind) ? kind : null;
-  // A primeira leitura só põe os cards onde estão: sem alerta, sem resposta.
-  if (mail.backfill || kind === 'reprovacao') return { ...NOTHING, job, decisive };
-  if (kind === 'oferta') return { ...NOTHING, job, decisive, alert: { kind: 'offer', payload: {} } };
-
   const recipient = chooseRecipient({
     from: { address: mail.fromAddress, name: mail.fromName }, replyTo: mail.replyTo, autoSubmitted: mail.autoSubmitted, listId: mail.listId,
   });
   const noReply: AlertPayload = recipient.ok ? {} : { reason: reasonFor(recipient) };
+  // Alerta `draft` ou `interview` sem resposta: sempre com o motivo (não aceita resposta, endereço ambíguo, ou sem rascunho).
+  const withoutReply: AlertPayload = recipient.ok ? { reason: NO_DRAFT_REASON } : noReply;
+  if (!job) {
+    if (mail.backfill) return NOTHING;
+    // Convite ou oferta sem card: além de pedir o card, avisa (no sino, no navegador e no celular, só com o tipo).
+    const also = kind === 'entrevista' ? { kind: 'interview' as const, payload: withoutReply }
+      : kind === 'oferta' ? { kind: 'offer' as const, payload: {} } : undefined;
+    return { ...NOTHING, alert: { kind: 'unmatched', payload: {} }, ...(also ? { also } : {}) };
+  }
+  const decisive = isDecisive(kind) ? kind : null;
+  // A primeira leitura só põe os cards onde estão: sem alerta, sem resposta.
+  if (mail.backfill || kind === 'reprovacao') return { ...NOTHING, job, decisive };
+  if (kind === 'oferta') return { ...NOTHING, job, decisive, alert: { kind: 'offer', payload: {} } };
   const profile = (await baseProfile(db))?.data ?? null;
   const lang: EmailLang = mail.lang ?? 'pt-BR';
 
@@ -103,10 +138,8 @@ async function prepare(deps: MailWorkDeps, mail: MailMessageRow, config: EmailCo
     const draft = recipient.ok && config.aiDrafts && profile
       ? await aiDraft(deps, mail, job, { profile, kind: 'entrevista', lang, requests: [] })
       : null;
-    return {
-      job, decisive, alert: { kind: 'interview', payload: noReply },
-      reply: draft === null || !recipient.ok ? null : draftReply(mail, recipient.address, draft, []),
-    };
+    const reply = draft === null || !recipient.ok ? null : draftReply(mail, recipient.address, draft, []);
+    return { job, decisive, alert: { kind: 'interview', payload: reply ? {} : withoutReply }, reply };
   }
 
   // Pedido. Sem perfil, nenhum fato pode ser respondido pelo código.
@@ -125,7 +158,7 @@ async function prepare(deps: MailWorkDeps, mail: MailMessageRow, config: EmailCo
     const draft = recipient.ok && config.aiDrafts && profile
       ? await aiDraft(deps, mail, job, { profile, kind: 'pedido', lang, requests })
       : null;
-    if (draft === null || !recipient.ok) return { ...NOTHING, job, alert: { kind: 'draft', payload: noReply } };
+    if (draft === null || !recipient.ok) return { ...NOTHING, job, alert: { kind: 'draft', payload: withoutReply } };
     return {
       ...NOTHING, job, alert: { kind: 'draft', payload: recipientNote(mail, recipient.address) },
       reply: draftReply(mail, recipient.address, draft, saved.map((s) => s.fact)),
@@ -135,7 +168,7 @@ async function prepare(deps: MailWorkDeps, mail: MailMessageRow, config: EmailCo
   const missing = known.filter((k) => k.value === null).map((k) => k.fact);
   if (missing.length > 0) return { ...NOTHING, job, alert: { kind: 'missing_fact', payload: { missing, ...noReply } } };
   if (config.factsMode === 'off') return { ...NOTHING, job };
-  if (!recipient.ok || !profile) return { ...NOTHING, job, alert: { kind: 'draft', payload: noReply } };
+  if (!recipient.ok || !profile) return { ...NOTHING, job, alert: { kind: 'draft', payload: withoutReply } };
 
   const items = saved.map((s) => s.fact);
   const composed = composeFactsReply({ lang, name: profile.contact.name, subject: mail.subject, items: saved });
@@ -177,7 +210,7 @@ async function jobInfo(db: Db, jobId: number): Promise<JobInfo | null> {
  * Os endereços que já apareceram no fio antes desta mensagem: quem escreveu ao dono e para quem o dono (ou o app)
  * escreveu. O `Reply-To` de uma mensagem anterior não entra: é o campo que um e-mail forjado usaria.
  */
-async function earlierThreadAddresses(db: Db, mail: MailMessageRow): Promise<string[]> {
+export async function earlierThreadAddresses(db: Db, mail: MailMessageRow): Promise<string[]> {
   const before = (await threadMessages(db, mail.threadKey)).filter(
     (m) => m.id !== mail.id && (m.sentAt < mail.sentAt || (m.sentAt === mail.sentAt && m.id < mail.id)),
   );
@@ -241,10 +274,13 @@ export async function finishBackfill(deps: MailWorkDeps): Promise<boolean> {
   const account = await getMailAccount(db);
   // Antes da primeira leitura não há o que resumir: "nenhuma pendente" ainda não quer dizer "terminou".
   if (!account || account.backfillDone || account.lastReadAt === null) return false;
+  // Só a primeira leitura desta conexão: as guardadas desde `connectedAt` (as de uma caixa anterior ficam de fora).
   const rows = await db
     .select({ kind: mailMessages.kind, processedAt: mailMessages.processedAt })
     .from(mailMessages)
-    .where(and(eq(mailMessages.direction, 'in'), eq(mailMessages.backfill, true)));
+    .where(and(
+      eq(mailMessages.direction, 'in'), eq(mailMessages.backfill, true), gte(mailMessages.createdAt, account.connectedAt),
+    ));
   if (rows.some((r) => r.processedAt === null)) return false;
   const counts: Partial<Record<EmailKind, number>> = {};
   let total = 0;

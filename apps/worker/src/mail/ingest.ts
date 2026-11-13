@@ -48,20 +48,27 @@ export async function ingestInbox(deps: IngestDeps): Promise<IngestResult> {
     const storedNow = new Set<string>();
     for (const mail of fresh) {
       if (storedNow.has(mail.messageId)) continue;
-      const verdict = filterMail(mail, ctx);
-      if (verdict.pass) {
-        const thread = await mailbox.fetchThread(mail.threadKey);
-        const ids = await storeJobThread(db, account, mail, thread, now());
-        ids.forEach((id) => storedNow.add(id));
-        stored += ids.length;
-        knownThreads.add(mail.threadKey);
-      } else if (verdict.ignoredCompany !== null) {
-        // Só remetente, assunto e data: o texto de quem não passou no filtro nunca é guardado.
-        await insertIgnored(db, {
-          messageId: mail.messageId, uid: mail.uid, fromAddress: mail.from.address, fromName: mail.from.name,
-          subject: mail.subject, sentAt: mail.date, company: verdict.ignoredCompany,
-        }, now());
-        ignored += 1;
+      // Uma mensagem que não pode ser guardada não para a leitura: fica no log (só o UID) e a rodada segue. Erro da caixa
+      // (login, rede, pasta escondida) sobe e para a rodada, como antes.
+      try {
+        const verdict = filterMail(mail, ctx);
+        if (verdict.pass) {
+          const thread = await mailbox.fetchThread(mail.threadKey);
+          const ids = await storeJobThread(db, account, mail, thread, now());
+          ids.forEach((id) => storedNow.add(id));
+          stored += ids.length;
+          knownThreads.add(mail.threadKey);
+        } else if (verdict.ignoredCompany !== null) {
+          // Só remetente, assunto e data: o texto de quem não passou no filtro nunca é guardado.
+          await insertIgnored(db, {
+            messageId: mail.messageId, uid: mail.uid, fromAddress: mail.from.address, fromName: mail.from.name,
+            subject: mail.subject, sentAt: mail.date, company: verdict.ignoredCompany,
+          }, now());
+          ignored += 1;
+        }
+      } catch (e) {
+        if (e instanceof MailAuthError || e instanceof MailTransientError) throw e;
+        log(`[mail] a mensagem de UID ${mail.uid} não pôde ser guardada e foi pulada`);
       }
     }
 

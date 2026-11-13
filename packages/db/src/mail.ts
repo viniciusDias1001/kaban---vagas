@@ -2,6 +2,8 @@ import { and, asc, count, desc, eq, gte, inArray, isNotNull, isNull, lt, or, sql
 import type { Column, EmailKind, EmailLang, EmailRequest, JobEmailsDto, MailIgnoredDto, MailMessageDto } from '@kv/shared';
 import { COLUMNS, isAppliedOrLater } from '@kv/shared';
 import type { Db } from './client';
+import { raiseAlert } from './mail-alerts';
+import { lockJobsForWrite, undoEmailMoveLocked } from './mail-board';
 import { toMailReplyDto } from './mail-replies';
 import { alerts, applications, jobEvents, jobs, mailAccount, mailIgnored, mailMessages, mailReplies } from './schema';
 
@@ -209,23 +211,53 @@ export async function forceClassifyAll(db: Db): Promise<number> {
   return rows.length;
 }
 
-/** O dono ligou a mensagem a um card: o fio inteiro passa a ser dele (`linkedBy = 'owner'`) e a mensagem volta a esperar ação. */
+/**
+ * O dono ligou a mensagem a um card: o fio inteiro passa a ser dele (`linkedBy = 'owner'`), deixa de estar corrigido (um
+ * "Não é desta vaga" anterior não vale para o card certo) e a mensagem volta a esperar ação.
+ */
 export async function linkThreadToJob(db: Db, messageId: number, jobId: number, _now: number = Date.now()): Promise<boolean> {
   return db.transaction(async (tx) => {
     const [msg] = await tx.select({ threadKey: mailMessages.threadKey }).from(mailMessages).where(eq(mailMessages.id, messageId));
     if (!msg) return false;
-    await tx.update(mailMessages).set({ jobId, linkedBy: 'owner' }).where(eq(mailMessages.threadKey, msg.threadKey));
+    await tx.update(mailMessages).set({ jobId, linkedBy: 'owner', corrected: false }).where(eq(mailMessages.threadKey, msg.threadKey));
     await tx.update(mailMessages).set({ processedAt: null }).where(eq(mailMessages.id, messageId));
     return true;
   });
 }
 
-/** "Não é desta vaga": o fio fica sem vaga, `linkedBy = 'owner'`, `corrected = true`. */
-export async function unlinkThread(db: Db, messageId: number): Promise<boolean> {
+/**
+ * "Não é desta vaga", numa transação: desfaz o movimento que uma mensagem do fio fez no card quando ele ainda é o último
+ * evento do card; resolve os alertas abertos das mensagens do fio e das respostas delas; deixa o fio sem vaga
+ * (`linkedBy = 'owner'`, `corrected = true`); e abre um alerta `unmatched` para a mensagem recebida mais nova do fio
+ * (também na primeira leitura), que é o caminho para ligá-lo ao card certo. Devolve false se a mensagem não existe.
+ */
+export async function unlinkThread(db: Db, messageId: number, now: number = Date.now()): Promise<boolean> {
   return db.transaction(async (tx) => {
+    // Os locks na ordem de todos: vagas, depois alertas (`raiseAlert`).
+    await lockJobsForWrite(tx);
     const [msg] = await tx.select({ threadKey: mailMessages.threadKey }).from(mailMessages).where(eq(mailMessages.id, messageId));
     if (!msg) return false;
+    const thread = await tx
+      .select({ id: mailMessages.id, direction: mailMessages.direction })
+      .from(mailMessages)
+      .where(eq(mailMessages.threadKey, msg.threadKey))
+      .orderBy(desc(mailMessages.sentAt), desc(mailMessages.id));
+    const ids = thread.map((m) => m.id);
+    // Só o último evento de um card pode ser desfeito; a mais nova primeiro.
+    for (const id of ids) await undoEmailMoveLocked(tx, id, now);
+
+    const replyIds = (await tx.select({ id: mailReplies.id }).from(mailReplies).where(inArray(mailReplies.messageId, ids))).map((r) => r.id);
+    await tx
+      .update(alerts)
+      .set({ resolvedAt: now })
+      .where(and(
+        isNull(alerts.resolvedAt), isNull(alerts.dismissedAt),
+        replyIds.length > 0 ? or(inArray(alerts.mailMessageId, ids), inArray(alerts.replyId, replyIds)) : inArray(alerts.mailMessageId, ids),
+      ));
+
     await tx.update(mailMessages).set({ jobId: null, linkedBy: 'owner', corrected: true }).where(eq(mailMessages.threadKey, msg.threadKey));
+    const newestIn = thread.find((m) => m.direction === 'in');
+    if (newestIn) await raiseAlert(tx, { kind: 'unmatched', mailMessageId: newestIn.id }, now);
     return true;
   });
 }

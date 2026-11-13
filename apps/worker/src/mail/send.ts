@@ -6,18 +6,22 @@
  */
 import { randomUUID } from 'node:crypto';
 import {
-  applicationForJob, baseProfile, discardReply, getMailAccount, insertMailMessage, jobs, mailMessageById, markReplyFailed,
+  applicationForJob, baseProfile, discardReply, getMailAccount, insertMailMessage, jobs, mailMessageById, mailReplies, markReplyFailed,
   markReplySending, markReplySent, nextApprovedReply, profileFor, raiseAlert, repliesInSending, resolveAlerts, returnReplyToDraft,
   type Db, type MailMessageRow, type MailReplyRow,
 } from '@kv/db';
-import type { Mailbox, OutgoingMail, RawMail } from '@kv/mail';
+import { MailAuthError, MailTransientError, isTrustedRecipient, type Mailbox, type OutgoingMail, type RawMail } from '@kv/mail';
 import { renderResumePdf } from '@kv/resume';
+import type { SettingsService } from '@kv/settings';
 import type { EmailLang } from '@kv/shared';
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import { baseResume, resumeFileName } from '../apply/resume';
+import { earlierThreadAddresses } from './act';
 import { withMailboxErrors } from './ingest';
 
 export interface SendDeps { db: Db; mailbox: Mailbox; now: () => number; log: (msg: string) => void;
+  /** As configurações de agora: o modo de "Respostas com fatos salvos" é conferido de novo antes de um envio automático. */
+  settings: Pick<SettingsService, 'emailConfig'>;
   /** PDF a anexar: o da candidatura da vaga; sem ele, o currículo base no idioma da resposta. Null se não há perfil. */
   resume: (jobId: number | null, lang: EmailLang) => Promise<{ fileName: string; content: Buffer } | null>;
   /** Gera o Message-ID da resposta (sem os sinais de menor e maior). Trocado nos testes. */
@@ -28,12 +32,23 @@ const ALREADY_ANSWERED = 'Você já respondeu este e-mail.';
 const NO_RESUME = 'Não há currículo para anexar.';
 const SEND_FAILED = 'O envio falhou. Tente de novo.';
 const INTERRUPTED = 'O envio foi interrompido e o e-mail não está em Enviados. Confira e aprove de novo.';
+const PREPARE_FAILED = 'Não foi possível preparar o envio. Confira a resposta e aprove de novo.';
+const AUTO_CHANGED = 'As condições do envio automático mudaram. Confira e aprove.';
 /** Idioma de um e-mail que a IA ainda não classificou. */
 const DEFAULT_LANG: EmailLang = 'pt-BR';
 /** Empresa no nome do arquivo quando o e-mail não está ligado a um card. */
 const NO_COMPANY = 'Empresa';
 
 const defaultMessageId = (): string => `${randomUUID()}@kanban-vagas.local`;
+
+/** A resposta volta para o dono com a nota e um alerta `draft` com o motivo. */
+async function handBack(deps: SendDeps, reply: MailReplyRow, note: string, why: string): Promise<true> {
+  const { db, now, log } = deps;
+  await returnReplyToDraft(db, reply.id, note);
+  await raiseAlert(db, { kind: 'draft', replyId: reply.id, payload: { reason: note } }, now());
+  log(`[mail] resposta ${reply.id} voltou para rascunho: ${why}`);
+  return true;
+}
 
 /** Envia a resposta aprovada mais antiga. Devolve se havia o que fazer. */
 export async function sendNext(deps: SendDeps): Promise<boolean> {
@@ -45,35 +60,47 @@ export async function sendNext(deps: SendDeps): Promise<boolean> {
   // A resposta é apagada junto com a mensagem (chave estrangeira em cascata): a origem sempre existe.
   const origin = (await mailMessageById(db, reply.messageId))!;
 
-  const thread = await withMailboxErrors(db, now, () => mailbox.fetchThread(origin.threadKey));
-  if (ownerAnswered(thread, account.address, origin.sentAt)) {
-    if (await discardReply(db, reply.id, ALREADY_ANSWERED, now())) await resolveAlerts(db, { replyId: reply.id }, now());
-    log(`[mail] resposta ${reply.id} descartada: o dono já respondeu no fio`);
-    return true;
-  }
-
-  let attachment: OutgoingMail['attachment'] = null;
-  if (reply.attachResume) {
-    attachment = await deps.resume(origin.jobId, origin.lang ?? DEFAULT_LANG);
-    if (!attachment) {
-      await returnReplyToDraft(db, reply.id, NO_RESUME);
-      await raiseAlert(db, { kind: 'draft', replyId: reply.id, payload: { reason: NO_RESUME } }, now());
-      log(`[mail] resposta ${reply.id} voltou para rascunho: não há currículo para anexar`);
+  // Tudo antes de `enviando`: uma falha que não seja da caixa (o PDF que não sai, por exemplo) devolve a resposta ao dono,
+  // em vez de deixá-la `aprovada` à frente de todas as outras para sempre.
+  let mail: OutgoingMail;
+  try {
+    const thread = await withMailboxErrors(db, now, () => mailbox.fetchThread(origin.threadKey));
+    if (ownerAnswered(thread, account.address, origin.sentAt, await appReplyIds(db, thread))) {
+      if (await discardReply(db, reply.id, ALREADY_ANSWERED, now())) {
+        await resolveAlerts(db, { replyId: reply.id }, now());
+        log(`[mail] resposta ${reply.id} descartada: o dono já respondeu no fio`);
+      }
       return true;
     }
+
+    let attachment: OutgoingMail['attachment'] = null;
+    if (reply.attachResume) {
+      attachment = await deps.resume(origin.jobId, origin.lang ?? DEFAULT_LANG);
+      if (!attachment) return handBack(deps, reply, NO_RESUME, 'não há currículo para anexar');
+    }
+    mail = {
+      messageId: (deps.newMessageId ?? defaultMessageId)(),
+      from: account.address,
+      fromName: await ownerName(db),
+      // Só o destinatário escolhido quando a resposta foi criada: sem Cc nem Cco.
+      to: reply.toAddress,
+      subject: reply.subject,
+      text: reply.body,
+      inReplyTo: origin.messageId,
+      references: referencesOf(origin),
+      attachment,
+    };
+
+    // A decisão de enviar sem o dono foi tomada quando a resposta nasceu; ela pode ter esperado muito (caixa pausada,
+    // worker parado). Conferida de novo agora.
+    if (reply.approvedBy === 'auto' && !(await stillAutomatic(deps, reply))) {
+      return handBack(deps, reply, AUTO_CHANGED, 'as condições do envio automático mudaram');
+    }
+  } catch (e) {
+    if (e instanceof MailTransientError || e instanceof MailAuthError) throw e;
+    log(`[mail] não foi possível preparar a resposta ${reply.id}: ${e instanceof Error ? e.message : String(e)}`);
+    return handBack(deps, reply, PREPARE_FAILED, 'falha ao preparar o envio');
   }
-  const mail: OutgoingMail = {
-    messageId: (deps.newMessageId ?? defaultMessageId)(),
-    from: account.address,
-    fromName: await ownerName(db),
-    // Só o destinatário escolhido quando a resposta foi criada: sem Cc nem Cco.
-    to: reply.toAddress,
-    subject: reply.subject,
-    text: reply.body,
-    inReplyTo: origin.messageId,
-    references: referencesOf(origin),
-    attachment,
-  };
 
   if (!(await markReplySending(db, reply.id, mail.messageId, now()))) return true;
   try {
@@ -141,10 +168,34 @@ export function resumeForReply(db: Db): SendDeps['resume'] {
   };
 }
 
-/** O dono escreveu no fio depois da mensagem a que a resposta responde. */
-function ownerAnswered(thread: RawMail[], ownAddress: string, after: number): boolean {
+/** O dono escreveu no fio depois da mensagem a que a resposta responde. As respostas que o próprio app enviou não contam. */
+function ownerAnswered(thread: RawMail[], ownAddress: string, after: number, appReplies: ReadonlySet<string>): boolean {
   const own = ownAddress.trim().toLowerCase();
-  return thread.some((m) => m.from.address.trim().toLowerCase() === own && m.date > after);
+  return thread.some((m) => m.from.address.trim().toLowerCase() === own && m.date > after && !appReplies.has(m.messageId));
+}
+
+/** Dos Message-IDs do fio, os que são de respostas enviadas pelo app (`out_message_id` de `mail_replies`). */
+async function appReplyIds(db: Db, thread: RawMail[]): Promise<Set<string>> {
+  const ids = thread.map((m) => m.messageId);
+  if (ids.length === 0) return new Set();
+  const rows = await db.select({ id: mailReplies.outMessageId }).from(mailReplies).where(inArray(mailReplies.outMessageId, ids));
+  return new Set(rows.flatMap((r) => (r.id === null ? [] : [r.id])));
+}
+
+/**
+ * Uma resposta aprovada por `auto` ainda pode sair sem o dono: o modo de "Respostas com fatos salvos" ainda é automático,
+ * o e-mail de origem ainda está ligado a um card, e o destinatário ainda é confiável para a empresa desse card.
+ */
+async function stillAutomatic(deps: SendDeps, reply: MailReplyRow): Promise<boolean> {
+  const { db } = deps;
+  if ((await deps.settings.emailConfig()).factsMode !== 'auto') return false;
+  const origin = await mailMessageById(db, reply.messageId);
+  if (!origin || origin.jobId === null) return false;
+  const [job] = await db.select({ company: jobs.company }).from(jobs).where(eq(jobs.id, origin.jobId));
+  if (!job) return false;
+  return isTrustedRecipient(reply.toAddress, {
+    sender: origin.fromAddress, company: job.company, threadAddresses: await earlierThreadAddresses(db, origin),
+  });
 }
 
 function referencesOf(origin: MailMessageRow): string[] {

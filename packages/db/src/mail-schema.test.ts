@@ -76,6 +76,22 @@ describe('mail tables', () => {
     expect(events[0].mailMessageId).toBeNull();
   });
 
+  it('refuses an AI reply approved by auto', async () => {
+    const [m] = await db.insert(mailMessages).values(message('<d@x>')).returning();
+    await expect(db.insert(mailReplies).values({ ...reply(m.id), origin: 'ai', state: 'aprovada', approvedBy: 'auto' })).rejects.toThrow();
+    // Aprovada pelo dono, ou montada pelo código e aprovada por `auto`: aceitas.
+    const [ok] = await db.insert(mailReplies).values({ ...reply(m.id), origin: 'ai', state: 'aprovada', approvedBy: 'owner' }).returning();
+    await expect(db.update(mailReplies).set({ approvedBy: 'auto' }).where(eq(mailReplies.id, ok.id))).rejects.toThrow();
+    const [n] = await db.insert(mailMessages).values(message('<e@x>')).returning();
+    await db.insert(mailReplies).values({ ...reply(n.id), state: 'aprovada', approvedBy: 'auto' });
+  });
+
+  it('indexes the card events by their mail', async () => {
+    const result = await db.execute(sql`select indexname from pg_indexes where tablename = 'job_events'`);
+    const rows = ((result as { rows?: unknown[] }).rows ?? (result as unknown as unknown[])) as { indexname: string }[];
+    expect(rows.map((r) => r.indexname)).toContain('job_events_mail_message_idx');
+  });
+
   it('has row level security on every new table', async () => {
     const names = ['alerts', 'app_secrets', 'mail_account', 'mail_ignored', 'mail_messages', 'mail_replies'];
     const result = await db.execute(

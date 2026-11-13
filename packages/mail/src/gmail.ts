@@ -2,8 +2,8 @@ import type { Readable } from 'node:stream';
 import { ImapFlow, type FetchMessageObject, type FetchQueryObject, type ImapFlowOptions, type ListResponse, type SearchObject } from 'imapflow';
 import { createTransport } from 'nodemailer';
 import { MAIL_LIMITS } from '@kv/shared';
-import { clipBody, htmlToText, pickTextPart, syntheticMessageId, threadKeyFromHeaders } from './text';
-import { MailAuthError, MailTransientError, type Mailbox, type OutgoingMail, type RawMail } from './types';
+import { clipBody, htmlToText, pickTextPart, stripNul, syntheticMessageId, threadKeyFromHeaders } from './text';
+import { MailAuthError, MailFolderError, MailTransientError, type Mailbox, type OutgoingMail, type RawMail } from './types';
 
 export const GMAIL = { imapHost: 'imap.gmail.com', imapPort: 993, smtpHost: 'smtp.gmail.com', smtpPort: 465 } as const;
 
@@ -14,6 +14,7 @@ export const BODY_MAX_BYTES = 4 * MAIL_LIMITS.bodyChars;
 
 export const AUTH_FAILED_TEXT = 'O Gmail recusou o login. Confira o endereço e a senha de app.';
 export const TRANSIENT_TEXT = 'Não foi possível falar com o Gmail agora.';
+export const FOLDERS_HIDDEN_TEXT = "Ative 'Mostrar em IMAP' para 'Todos os e-mails' e 'Enviados' nas configurações do Gmail (Marcadores).";
 
 /**
  * O que se pede de cada mensagem: envelope, estrutura MIME, id do fio e só estes cabeçalhos.
@@ -84,7 +85,8 @@ export function sendOptions(mail: OutgoingMail) {
   return {
     messageId: mail.messageId,
     from: { name: mail.fromName, address: mail.from },
-    to: mail.to,
+    // Objeto, não texto: o nodemailer não reinterpreta o endereço (vírgula, aspas, sinais de menor e maior).
+    to: { name: '', address: mail.to },
     subject: mail.subject,
     text: mail.text,
     inReplyTo: mail.inReplyTo,
@@ -119,6 +121,16 @@ export function findSpecialUse(
   return found ? found.path : null;
 }
 
+/** A pasta de uso especial; sem ela (escondida do IMAP nas configurações do Gmail), `MailFolderError` dizendo como mostrá-la. */
+export function requireSpecialUse(
+  list: Pick<ListResponse, 'path' | 'flags' | 'specialUse' | 'specialUseSource'>[],
+  use: '\\All' | '\\Sent',
+): string {
+  const path = findSpecialUse(list, use);
+  if (!path) throw new MailFolderError(FOLDERS_HIDDEN_TEXT);
+  return path;
+}
+
 /** Id de fio do Gmail (X-GM-THRID, só dígitos); outra chave é um Message-ID, procurado nos cabeçalhos. */
 export function threadSearch(threadKey: string): SearchObject {
   if (/^\d+$/.test(threadKey)) return { threadId: threadKey };
@@ -129,7 +141,7 @@ export function threadSearch(threadKey: string): SearchObject {
 export function parseHeaderBlock(block: Buffer | undefined): Map<string, string> {
   const out = new Map<string, string>();
   if (!block) return out;
-  for (const line of block.toString('utf8').replace(/\r?\n[ \t]+/g, ' ').split(/\r?\n/)) {
+  for (const line of stripNul(block.toString('utf8')).replace(/\r?\n[ \t]+/g, ' ').split(/\r?\n/)) {
     const colon = line.indexOf(':');
     if (colon <= 0) continue;
     const name = line.slice(0, colon).trim().toLowerCase();
@@ -157,13 +169,23 @@ function replyToAddresses(list: { address?: string }[] | undefined): string | nu
   return addresses.length ? addresses.join(', ') : null;
 }
 
+/** O envelope com todo texto sem NUL (o Postgres recusa 0x00 em texto); datas e o resto ficam como vieram. */
+function withoutNul<T>(value: T): T {
+  if (typeof value === 'string') return stripNul(value) as T;
+  if (Array.isArray(value)) return value.map(withoutNul) as T;
+  if (value && typeof value === 'object' && !(value instanceof Date)) {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, withoutNul(v)])) as T;
+  }
+  return value;
+}
+
 /** Uma mensagem buscada com HEAD_QUERY, mais o texto já extraído, vira RawMail. */
 export function toRawMail(
   msg: Pick<FetchMessageObject, 'uid' | 'threadId' | 'envelope' | 'headers' | 'internalDate'>,
   text: string,
   uidValidity: number,
 ): RawMail {
-  const env = msg.envelope ?? {};
+  const env = withoutNul(msg.envelope ?? {});
   const h = parseHeaderBlock(msg.headers);
   const messageId = messageIds(env.messageId)[0] ?? syntheticMessageId(uidValidity, msg.uid);
   const inReplyTo = messageIds(env.inReplyTo)[0] ?? messageIds(h.get('in-reply-to'))[0] ?? null;
@@ -180,7 +202,8 @@ export function toRawMail(
     // Grupo vazio vem com endereço vazio e não conta; vários endereços ficam todos, para não parecer um só.
     replyTo: h.has('reply-to') ? replyToAddresses(env.replyTo) : null,
     subject: env.subject ?? '',
-    date: epochMs(env.date) ?? epochMs(msg.internalDate) ?? 0,
+    // A data em que o Gmail recebeu (INTERNALDATE), que o remetente não escolhe; o cabeçalho Date só na falta dela.
+    date: epochMs(msg.internalDate) ?? epochMs(env.date) ?? 0,
     inReplyTo,
     references,
     autoSubmitted: autoSubmitted !== undefined && autoSubmitted.trim().toLowerCase() !== 'no',
@@ -264,9 +287,7 @@ class GmailMailbox implements Mailbox {
   }
 
   private async specialFolder(use: '\\All' | '\\Sent'): Promise<string> {
-    const path = findSpecialUse(await (await this.client()).list(), use);
-    if (!path) throw new MailTransientError(TRANSIENT_TEXT);
-    return path;
+    return requireSpecialUse(await (await this.client()).list(), use);
   }
 
   private async search(client: ImapFlow, query: SearchObject): Promise<number[]> {
@@ -295,9 +316,12 @@ class GmailMailbox implements Mailbox {
     return mails;
   }
 
+  /** Login e as duas pastas de que a leitura precisa ("Todos os e-mails" para o fio, "Enviados" para conferir um envio). */
   check(): Promise<void> {
     return this.run(async () => {
-      await this.client();
+      const list = await (await this.client()).list();
+      requireSpecialUse(list, '\\All');
+      requireSpecialUse(list, '\\Sent');
     });
   }
 

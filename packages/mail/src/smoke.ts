@@ -90,8 +90,41 @@ export function summarizeSmoke(mails: readonly RawMail[], ctx: FilterContext, tr
   return summary;
 }
 
-const sender = (m: RawMail) => (m.from.name.trim() ? `${m.from.name.trim()} <${m.from.address}>` : m.from.address);
-const oneLine = (s: string) => s.replace(/\s+/g, ' ').trim() || '(sem assunto)';
+const firstLine = (e: unknown) => (e instanceof Error ? e.message : String(e)).split('\n')[0]!;
+
+/**
+ * As duas chamadas que a leitura do app faz depois do filtro, ambas só de leitura: o fio de uma mensagem que passa (pede
+ * "Todos os e-mails") e a busca em Enviados (pede "Enviados"). Uma linha para cada: "ok" ou "falhou: <frase>".
+ */
+export async function checkSmokeFolders(mailbox: Pick<Mailbox, 'fetchThread' | 'sentExists'>, threadKey: string): Promise<string[]> {
+  const line = async (label: string, call: () => Promise<unknown>): Promise<string> => {
+    try {
+      await call();
+      return `${label}: ok`;
+    } catch (e) {
+      return `${label}: falhou: ${firstLine(e)}`;
+    }
+  };
+  return [
+    await line('fio', () => mailbox.fetchThread(threadKey)),
+    await line('Enviados', () => mailbox.sentExists('mail-smoke-check@invalid')),
+  ];
+}
+
+/**
+ * Texto de um e-mail pronto para o terminal: numa linha só e sem caracteres de controle ou invisíveis (`\p{C}`), para um
+ * assunto hostil não mandar sequências de escape ao terminal do dono.
+ */
+export function terminalText(s: string): string {
+  return s.replace(/\s+/g, ' ').replace(/\p{C}/gu, '').trim();
+}
+
+const sender = (m: RawMail) => {
+  const name = terminalText(m.from.name);
+  const address = terminalText(m.from.address);
+  return name ? `${name} <${address}>` : address;
+};
+const oneLine = (s: string) => terminalText(s) || '(sem assunto)';
 
 /** O que o comando imprime: só contagens e, por mensagem que passa, remetente, assunto e a regra. Nunca o texto. */
 export function formatSmokeSummary(s: SmokeSummary, days: number = SMOKE_DAYS): string[] {

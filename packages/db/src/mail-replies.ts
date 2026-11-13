@@ -118,7 +118,12 @@ export async function returnReplyToDraft(db: Db, id: number, note: string): Prom
 
 /** As respostas paradas em `enviando` (o worker caiu no meio do envio). */
 export function repliesInSending(db: Db): Promise<MailReplyRow[]> {
-  return db.select().from(mailReplies).where(eq(mailReplies.state, 'enviando')).orderBy(asc(mailReplies.id));
+  return repliesInState(db, 'enviando');
+}
+
+/** As respostas num estado, da mais antiga para a mais nova. */
+export function repliesInState(db: Db, state: ReplyState): Promise<MailReplyRow[]> {
+  return db.select().from(mailReplies).where(eq(mailReplies.state, state)).orderBy(asc(mailReplies.id));
 }
 
 export const toMailReplyDto = (r: MailReplyRow): MailReplyDto => ({

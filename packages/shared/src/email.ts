@@ -29,9 +29,11 @@ export const PhoneTokenInputSchema = z.strictObject({
 export const ReplyEditSchema = z.strictObject({ body: z.string().trim().min(1).max(MAIL_LIMITS.draftChars) });
 /** POST /email/replies/:id/approve: o texto que o dono vê, comparado sem mudança nenhuma com o guardado. */
 export const ReplyApproveSchema = z.strictObject({ body: z.string() });
-export const LinkMessageSchema = z.strictObject({ jobId: z.number().int().positive() });
+/** Ids e datas dentro do que o banco guarda (int4; a maior data que um `Date` representa): fora disso, 400 e não 500. */
+export const LinkMessageSchema = z.strictObject({ jobId: z.number().int().positive().max(2_147_483_647) });
 export const AlertMoveSchema = z.strictObject({ accept: z.boolean() });
 export const MailMessagesQuerySchema = z.object({
-  kind: z.enum(EMAIL_KINDS).optional(), unmatched: z.literal('1').optional(), since: z.coerce.number().optional(),
+  kind: z.enum(EMAIL_KINDS).optional(), unmatched: z.literal('1').optional(),
+  since: z.coerce.number().int().min(0).max(8.64e15).optional(),
 });
 export const DisconnectQuerySchema = z.object({ messages: z.enum(['keep', 'delete']).default('keep') });

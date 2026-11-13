@@ -3,10 +3,13 @@ import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SAMPLE_PROFILE } from '@kv/ai/testing';
 import {
-  closeDb, getMailAccount, insertMailMessage, mailMessages, openAlerts, raiseAlert, saveMailAccount, saveProfile, type Db,
+  closeDb, createReply, getMailAccount, insertMailMessage, mailMessages, openAlerts, raiseAlert, replyById, saveMailAccount, saveProfile,
+  updateMailAccount, type Db,
 } from '@kv/db';
 import { createTestDb, resetTestDb } from '@kv/db/testing';
-import { FAKE_TELEGRAM_CHAT_ID, MailTransientError, PhoneAlertError, fakeMailDir, type Mailbox } from '@kv/mail';
+import {
+  FAKE_TELEGRAM_CHAT_ID, FOLDERS_HIDDEN_TEXT, MailFolderError, MailTransientError, PhoneAlertError, fakeMailDir, type Mailbox,
+} from '@kv/mail';
 import { createSettingsService } from '@kv/settings';
 import { TEST_DATA_DIR, TEST_SECRET, testAi } from './ai-testing';
 import { buildApp } from './app';
@@ -117,6 +120,20 @@ describe('PUT /email/account', () => {
     expect(await settings().hasSecret('mail_password')).toBe(false);
   });
 
+  it('says how to show the folders when All mail or Sent is hidden from IMAP, and stores nothing', async () => {
+    const hidden = (): Mailbox =>
+      ({
+        async check() { throw new MailFolderError(FOLDERS_HIDDEN_TEXT); },
+        async close() {},
+      }) as unknown as Mailbox;
+    build({ env: { APP_SECRET: TEST_SECRET }, mailbox: hidden });
+    const res = await put('/email/account', { address: 'maria@example.com', password: PASSWORD });
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toEqual({ error: 'mail_unreachable', message: FOLDERS_HIDDEN_TEXT });
+    expect(await getMailAccount(db)).toBeNull();
+    expect(await settings().hasSecret('mail_password')).toBe(false);
+  });
+
   it('closes the mailbox after a successful check', async () => {
     let closed = 0;
     const ok = (): Mailbox =>
@@ -170,6 +187,28 @@ describe('PUT /email/account', () => {
     expect(await openAlerts(db)).toEqual([]);
   });
 
+  it('reconnecting the same address keeps the reading point and the first read, and clears only the pause and the error', async () => {
+    await saveMailAccount(db, 'maria@example.com', NOW - 2 * 86_400_000);
+    await updateMailAccount(db, {
+      uidValidity: 7, lastUid: 42, lastReadAt: NOW - 86_400_000, backfillDone: true, paused: true, error: 'O Gmail recusou o login.',
+    });
+    expect((await put('/email/account', { address: 'Maria@Example.com', password: PASSWORD })).statusCode).toBe(200);
+    expect(await getMailAccount(db)).toMatchObject({
+      address: 'maria@example.com', connectedAt: NOW - 2 * 86_400_000, uidValidity: 7, lastUid: 42, lastReadAt: NOW - 86_400_000,
+      backfillDone: true, paused: false, error: null,
+    });
+    expect(await settings().readSecret('mail_password')).toEqual({ value: STORED });
+  });
+
+  it('connecting a different address starts over', async () => {
+    await saveMailAccount(db, 'outra@example.com', NOW - 2 * 86_400_000);
+    await updateMailAccount(db, { uidValidity: 7, lastUid: 42, backfillDone: true, paused: true, error: 'x' });
+    expect((await put('/email/account', { address: 'maria@example.com', password: PASSWORD })).statusCode).toBe(200);
+    expect(await getMailAccount(db)).toMatchObject({
+      address: 'maria@example.com', connectedAt: NOW, uidValidity: null, lastUid: null, backfillDone: false, paused: false, error: null,
+    });
+  });
+
   it('never prints the password, on a refused or a successful login', async () => {
     const lines: string[] = [];
     const capture = (...args: unknown[]) => {
@@ -217,6 +256,36 @@ describe('DELETE /email/account', () => {
     expect((await del('/email/account?messages=tudo')).statusCode).toBe(400);
     expect(await getMailAccount(db)).not.toBeNull();
     expect((await del('/email/account')).statusCode).toBe(204);
+    expect(await getMailAccount(db)).toBeNull();
+    expect(await db.select().from(mailMessages)).toHaveLength(1);
+  });
+
+  it('keeping the messages closes the mailbox alerts and sends queued replies back to draft', async () => {
+    await saveMailAccount(db, 'maria@example.com', NOW);
+    const messageId = (await seedMessage())!;
+    const replyId = (await createReply(db, {
+      messageId, origin: 'facts', items: ['salary'], toAddress: 'rh@acme.example', subject: 'Re: x', body: 'Olá', attachResume: false,
+      state: 'aprovada', approvedBy: 'auto',
+    }, NOW))!;
+    await raiseAlert(db, { kind: 'mailbox_error', payload: { reason: 'O Gmail recusou o login.' } }, NOW);
+    await raiseAlert(db, { kind: 'budget_waiting', payload: { waiting: 2 } }, NOW);
+    await raiseAlert(db, { kind: 'backfill_summary', payload: { total: 1, counts: { recebimento: 1 } } }, NOW);
+
+    expect((await del('/email/account?messages=keep')).statusCode).toBe(204);
+    const note = 'A caixa foi desconectada antes do envio.';
+    expect(await replyById(db, replyId)).toMatchObject({ state: 'rascunho', note, approvedBy: null });
+    expect(await openAlerts(db)).toEqual([expect.objectContaining({ kind: 'draft', replyId, payload: { reason: note } })]);
+  });
+
+  it('off a local host, disconnects but refuses to delete the messages', async () => {
+    await saveMailAccount(db, 'maria@example.com', NOW);
+    await seedMessage();
+    vi.stubEnv('HOST', '0.0.0.0');
+    const refused = await del('/email/account?messages=delete');
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json()).toMatchObject({ error: 'email_unavailable' });
+    expect(await getMailAccount(db)).not.toBeNull();
+    expect((await del('/email/account?messages=keep')).statusCode).toBe(204);
     expect(await getMailAccount(db)).toBeNull();
     expect(await db.select().from(mailMessages)).toHaveLength(1);
   });

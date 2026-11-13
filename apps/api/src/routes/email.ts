@@ -20,7 +20,7 @@ const alertNotFound = { error: 'not_found', message: 'alerta não encontrado' };
 
 const wrongState = { error: 'wrong_state', message: 'Esta resposta não pode mais ser aprovada ou descartada.' };
 const replyChanged = { error: 'reply_changed', message: 'O texto desta resposta mudou. Confira o texto atual antes de enviar.' };
-const alertClosed ={ error: 'alert_closed', message: 'Este alerta já foi resolvido ou dispensado.' };
+const alertClosed = { error: 'alert_closed', message: 'Este alerta já foi resolvido ou dispensado.' };
 
 /**
  * Mensagens, respostas e alertas do e-mail. Nada aqui chama a IA nem envia: aprovar só põe a resposta na fila do worker.
@@ -62,11 +62,14 @@ export function emailRoutes(app: FastifyInstance, db: Db, ctx: AiContext) {
     return { ok: true };
   });
 
-  /** "Não é desta vaga". */
+  /**
+   * "Não é desta vaga": o movimento que o fio fez no card é desfeito (se ainda é o último), os alertas do fio somem e um
+   * alerta de "e-mail sem vaga" pede o card certo.
+   */
   app.post('/email/messages/:id/unlink', async (req, reply) => {
     if (await refuseOffLocalHost(reply)) return reply;
     const id = idParam(req);
-    if (id === null || !(await unlinkThread(db, id))) return reply.code(404).send(messageNotFound);
+    if (id === null || !(await unlinkThread(db, id, ctx.now()))) return reply.code(404).send(messageNotFound);
     return { ok: true };
   });
 

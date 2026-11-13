@@ -3,9 +3,9 @@ import { describe, expect, it } from 'vitest';
 import { MAIL_LIMITS } from '@kv/shared';
 import {
   BODY_MAX_BYTES, GMAIL, HEAD_QUERY, TIMEOUT_MS, findSpecialUse, imapOptions, inboxSearch, parseHeaderBlock, pickNewUids,
-  readCapped, sendOptions, smtpOptions, threadSearch, toMailError, toRawMail,
+  readCapped, requireSpecialUse, sendOptions, smtpOptions, threadSearch, toMailError, toRawMail, FOLDERS_HIDDEN_TEXT,
 } from './gmail';
-import { MailAuthError, MailTransientError } from './types';
+import { MailAuthError, MailFolderError, MailTransientError } from './types';
 
 const creds = { address: 'maria@example.com', password: 'abcdefghijklmnop' };
 
@@ -81,6 +81,22 @@ describe('search and selection', () => {
     expect(findSpecialUse(list, '\\Sent')).toBe('[Gmail]/Enviados');
     expect(findSpecialUse([list[3]!], '\\Sent')).toBeNull();
   });
+  it('says how to show a folder hidden from IMAP when All mail or Sent is missing', () => {
+    const inbox = { path: 'INBOX', flags: new Set<string>(), specialUse: '\\Inbox', specialUseSource: 'extension' as const };
+    const sent = { path: '[Gmail]/Enviados', flags: new Set(['\\Sent']), specialUse: '\\Sent', specialUseSource: 'extension' as const };
+    const all = { path: '[Gmail]/Todos os e-mails', flags: new Set(['\\All']), specialUse: '\\All', specialUseSource: 'extension' as const };
+    expect(requireSpecialUse([inbox, sent, all], '\\All')).toBe('[Gmail]/Todos os e-mails');
+    expect(requireSpecialUse([inbox, sent, all], '\\Sent')).toBe('[Gmail]/Enviados');
+    for (const [list, use] of [[[inbox, sent], '\\All'], [[inbox, all], '\\Sent']] as const) {
+      let thrown: unknown = null;
+      try { requireSpecialUse([...list], use); } catch (e) { thrown = e; }
+      expect(thrown).toBeInstanceOf(MailFolderError);
+      expect(thrown).toBeInstanceOf(MailTransientError); // a fila trata como as outras falhas da caixa
+      expect((thrown as Error).message).toBe(FOLDERS_HIDDEN_TEXT);
+    }
+    expect(FOLDERS_HIDDEN_TEXT).toBe("Ative 'Mostrar em IMAP' para 'Todos os e-mails' e 'Enviados' nas configurações do Gmail (Marcadores).");
+    expect(toMailError(new MailFolderError(FOLDERS_HIDDEN_TEXT))).toBeInstanceOf(MailFolderError);
+  });
   it('searches a thread by the Gmail thread id, or by the headers for other keys', () => {
     expect(threadSearch('1789123456789012345')).toEqual({ threadId: '1789123456789012345' });
     expect(threadSearch('a@x')).toEqual({ or: [{ header: { 'message-id': 'a@x' } }, { header: { references: 'a@x' } }] });
@@ -116,6 +132,26 @@ describe('headers and messages', () => {
     });
   });
 
+  it('dates a message by when Gmail received it, and by its Date header only without that', () => {
+    const base = { seq: 1, uid: 3, envelope: { date: new Date(1000), from: [{ address: 'joana@acme.com' }] }, headers: Buffer.from('') };
+    expect(toRawMail({ ...base, internalDate: new Date(9000) }, '', 1).date).toBe(9000);
+    expect(toRawMail(base, '', 1).date).toBe(1000);
+  });
+
+  it('drops NUL characters from the subject, names and addresses', () => {
+    const msg = {
+      seq: 1, uid: 5,
+      envelope: {
+        subject: 'Entre\u0000vista', messageId: '<n@x>',
+        from: [{ name: 'Joana\u0000 Lima', address: 'joana@acme.com\u0000' }], to: [{ address: 'maria@example.com\u0000' }],
+      },
+      headers: Buffer.from(''),
+    };
+    expect(toRawMail(msg, 'Olá', 1)).toMatchObject({
+      subject: 'Entrevista', from: { name: 'Joana Lima', address: 'joana@acme.com' }, to: ['maria@example.com'],
+    });
+  });
+
   it('fills what the server left out', () => {
     // O ENVELOPE repete o From em Reply-To quando o cabeçalho não existe: sem cabeçalho, sem Reply-To.
     const msg = {
@@ -147,7 +183,7 @@ describe('headers and messages', () => {
       text: 'Segue.', inReplyTo: 'b@x', references: ['a@x', 'b@x'], attachment: { fileName: 'curriculo.pdf', content: Buffer.from('%PDF') },
     });
     expect(opts).toEqual({
-      messageId: 'out-1@kv', from: { name: 'Maria Exemplo da Silva', address: 'maria@example.com' }, to: 'joana@acme.com', subject: 'Re: Vaga',
+      messageId: 'out-1@kv', from: { name: 'Maria Exemplo da Silva', address: 'maria@example.com' }, to: { name: '', address: 'joana@acme.com' }, subject: 'Re: Vaga',
       text: 'Segue.', inReplyTo: 'b@x', references: ['a@x', 'b@x'], attachments: [{ filename: 'curriculo.pdf', content: Buffer.from('%PDF') }],
     });
     expect(opts).not.toHaveProperty('html');

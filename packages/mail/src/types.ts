@@ -9,7 +9,7 @@ export interface RawMail {
   /** Endereço do Reply-To, em minúsculas; null sem o cabeçalho ou sem endereço não vazio. Com mais de um endereço, todos, separados por `, ` (nunca reduzido a um). */
   replyTo: string | null;
   subject: string;
-  /** Data do cabeçalho Date, em epoch ms. */
+  /** Quando o servidor recebeu a mensagem (INTERNALDATE), em epoch ms; sem ela, o cabeçalho Date. */
   date: number;
   inReplyTo: string | null;
   references: string[];
@@ -29,6 +29,8 @@ export interface OutgoingMail {
 }
 export class MailAuthError extends Error {}       // login recusado: senha revogada ou errada
 export class MailTransientError extends Error {}  // rede, tempo esgotado, servidor ocupado
+/** "Todos os e-mails" ou "Enviados" escondida do IMAP: a leitura para até o dono mostrar a pasta; a mensagem diz como. */
+export class MailFolderError extends MailTransientError {}
 export interface Mailbox {
   /** Abre a sessão e confere o login. */
   check(): Promise<void>;

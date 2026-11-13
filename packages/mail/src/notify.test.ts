@@ -104,7 +104,8 @@ describe('findTelegramChatId', () => {
       return new Response(JSON.stringify(updates));
     };
     expect(await findTelegramChatId({ token: TOKEN, fetch })).toBe('7');
-    expect(urls).toEqual(['https://api.telegram.org/bot123:ABC/getUpdates']);
+    // offset=-1: o Telegram devolve a atualização mais recente, mesmo com mais de 100 na fila.
+    expect(urls).toEqual(['https://api.telegram.org/bot123:ABC/getUpdates?offset=-1']);
   });
 
   it('fails without leaking the token', async () => {

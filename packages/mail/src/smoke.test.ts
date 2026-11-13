@@ -4,10 +4,11 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createFakeMailbox, deliverFakeMail } from './fake';
 import {
-  SMOKE_MAX_CLASSIFY, formatSmokeSummary, parseMailSmokeArgs, readRecentInbox, summarizeSmoke,
+  SMOKE_MAX_CLASSIFY, checkSmokeFolders, formatSmokeSummary, parseMailSmokeArgs, readRecentInbox, summarizeSmoke, terminalText,
 } from './smoke';
+import { FOLDERS_HIDDEN_TEXT } from './gmail';
 import { rawMail } from './testing';
-import type { Mailbox } from './types';
+import { MailFolderError, type Mailbox } from './types';
 
 const DAY = 86_400_000;
 const NOW = 1_800_000_000_000;
@@ -83,7 +84,40 @@ describe('readRecentInbox', () => {
       },
     });
     await readRecentInbox(spy, NOW);
+    expect(calls).toContain('fetchInbox');
     expect(calls.every((c) => c === 'fetchInbox')).toBe(true);
+  });
+});
+
+describe('checkSmokeFolders', () => {
+  let dir: string | null = null;
+  afterEach(() => {
+    if (dir) rmSync(dir, { recursive: true, force: true });
+    dir = null;
+  });
+
+  it('reads the thread and searches Sent, both read-only, and says ok', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'kv-mail-smoke-'));
+    const folder = dir;
+    const box = createFakeMailbox(dir, { address: 'maria@example.com', password: 'qualquer' });
+    const mail = deliverFakeMail(folder, { subject: 'uma', date: NOW - DAY });
+    const calls: string[] = [];
+    const spy = new Proxy(box, {
+      get: (target, key: string) => {
+        const value = target[key as keyof Mailbox];
+        return typeof value === 'function' ? (...args: unknown[]) => { calls.push(key); return (value as (...a: unknown[]) => unknown).apply(target, args); } : value;
+      },
+    });
+    expect(await checkSmokeFolders(spy, mail.threadKey)).toEqual(['fio: ok', 'Enviados: ok']);
+    expect(calls.sort()).toEqual(['fetchThread', 'sentExists']);
+  });
+
+  it('says which call failed, with the sentence of the error', async () => {
+    const broken = {
+      fetchThread: async () => { throw new MailFolderError(FOLDERS_HIDDEN_TEXT); },
+      sentExists: async () => { throw new Error('linha 1\nlinha 2'); },
+    } as unknown as Mailbox;
+    expect(await checkSmokeFolders(broken, 't')).toEqual([`fio: falhou: ${FOLDERS_HIDDEN_TEXT}`, 'Enviados: falhou: linha 1']);
   });
 });
 
@@ -97,7 +131,7 @@ describe('summarizeSmoke and formatSmokeSummary', () => {
     rawMail({ uid: 1, messageId: 'a@x', threadKey: 'a@x', from: { address: 'joana@acme.com', name: 'Joana Lima' }, subject: 'Sua candidatura na Acme', text: 'Olá' }),
     rawMail({ uid: 2, messageId: 'b@x', threadKey: 'b@x', from: { address: 'no-reply@greenhouse.io', name: '' }, subject: 'Application received' }),
     rawMail({ uid: 3, messageId: 'c@x', threadKey: 'known@example.com', from: { address: 'pessoa@globex.com', name: 'Pessoa' }, subject: 'Re: conversa' }),
-    rawMail({ uid: 4, messageId: 'd@x', threadKey: 'd@x', from: { address: 'fatura@acme.com', name: 'Acme' }, subject: 'Sua fatura', text: 'Valor', bulk: true }),
+    rawMail({ uid: 4, messageId: 'd@x', threadKey: 'd@x', from: { address: 'fatura@acme.com', name: 'Acme' }, subject: 'Sua fatura', text: 'Valor', autoSubmitted: true }),
     rawMail({ uid: 5, messageId: 'e@x', threadKey: 'e@x', from: { address: 'news@loja.com', name: 'Loja' }, subject: 'Promoção', text: 'Compre' }),
     rawMail({ uid: 6, messageId: 'f@x', threadKey: 'f@x', from: { address: 'maria@example.com', name: 'Maria' }, subject: 'Nota para mim' }),
   ];
@@ -124,6 +158,16 @@ describe('summarizeSmoke and formatSmokeSummary', () => {
     expect(all).not.toContain('Sua fatura');
     expect(all).not.toContain('Promoção');
     expect(all).not.toContain('Olá');
+  });
+
+  it('never prints control or invisible characters from a mail', () => {
+    const hostile = rawMail({
+      uid: 9, messageId: 'h@x', threadKey: 'h@x', from: { address: 'joana@acme.com', name: 'Joana\u001b[31m Lima' },
+      subject: 'Sua candidatura\u001b]0;título\u0007 na Acme‮​', text: 'Olá',
+    });
+    const line = formatSmokeSummary(summarizeSmoke([hostile], ctx)).at(-1)!;
+    expect(line).toBe('- Joana[31m Lima <joana@acme.com> | Sua candidatura]0;título na Acme | regra: empresa do quadro com sinal de vaga');
+    expect(terminalText('\u0000\u001b\u0007  \t ')).toBe('');
   });
 
   it('says when the reading stopped at the cap, and prints no list when nothing passes', () => {

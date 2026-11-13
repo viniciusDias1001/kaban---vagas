@@ -6,7 +6,9 @@ import {
   nextUnprocessed, pruneIgnored, reopenMessage, requestPromote, saveClassification, saveMailAccount, threadJobs, threadMessages,
   unlinkThread, updateMailAccount, jobEmails, listMailMessages, type NewIgnored, type NewMailMessage,
 } from './mail';
-import { raiseAlert, resolveAlerts } from './mail-alerts';
+import { asc, eq } from 'drizzle-orm';
+import { openAlerts, raiseAlert, resolveAlerts } from './mail-alerts';
+import { moveCardByEmail } from './mail-board';
 import { createReply, markReplySending, markReplySent } from './mail-replies';
 import { applications, jobEvents, jobs } from './schema';
 import { createTestDb, resetTestDb } from './testing';
@@ -174,6 +176,57 @@ describe('stored messages', () => {
     for (const id of [a, b]) expect(await mailMessageById(db, id)).toMatchObject({ jobId: null, linkedBy: 'owner', corrected: true });
     expect(await threadJobs(db, ['t1'])).toEqual(new Map([['t1', null]]));
     expect(await unlinkThread(db, 9999)).toBe(false);
+  });
+
+  it('unlinking undoes the move the thread made, closes its alerts and asks for a card for the newest incoming mail', async () => {
+    const job = await seedJob({ column: 'aplicada' });
+    await db.insert(jobEvents).values({ jobId: job.id, fromColumn: 'selecionadas', toColumn: 'aplicada', actor: 'humano', createdAt: 50 });
+    const invite = (await insertMailMessage(db, msg({ messageId: 'a@x', threadKey: 't1', sentAt: 100, jobId: job.id, linkedBy: 'auto', backfill: true }), 1))!;
+    const later = (await insertMailMessage(db, msg({ messageId: 'b@x', threadKey: 't1', sentAt: 300, jobId: job.id, linkedBy: 'auto', backfill: true }), 1))!;
+    await insertMailMessage(db, msg({ messageId: 'c@x', threadKey: 't1', sentAt: 400, direction: 'out', jobId: job.id, linkedBy: 'auto' }), 1);
+    await moveCardByEmail(db, { jobId: job.id, to: 'entrevista', messageId: invite }, 200);
+    const replyId = (await createReply(db, {
+      messageId: invite, origin: 'ai', items: [], toAddress: 'rh@acme.example', subject: 'Re: x', body: 'Olá', attachResume: false, state: 'rascunho',
+    }, 200))!;
+    await raiseAlert(db, { kind: 'interview', jobId: job.id, mailMessageId: invite }, 200);
+    await raiseAlert(db, { kind: 'draft', jobId: job.id, replyId }, 200);
+    await raiseAlert(db, { kind: 'move_confirm', jobId: job.id, mailMessageId: later, payload: { moveTo: 'perdida' } }, 300);
+    const other = (await insertMailMessage(db, msg({ messageId: 'z@x', threadKey: 't9', jobId: job.id, linkedBy: 'auto' }), 1))!;
+    await raiseAlert(db, { kind: 'interview', jobId: job.id, mailMessageId: other }, 200);
+
+    expect(await unlinkThread(db, invite, 1000)).toBe(true);
+    const [row] = await db.select({ column: jobs.column }).from(jobs).where(eq(jobs.id, job.id));
+    expect(row!.column).toBe('aplicada');
+    const events = await db.select().from(jobEvents).where(eq(jobEvents.jobId, job.id)).orderBy(asc(jobEvents.id));
+    expect(events.map((e) => [e.actor, e.toColumn, e.undone])).toEqual([
+      ['humano', 'aplicada', false], ['email', 'entrevista', true], ['humano', 'aplicada', false],
+    ]);
+    const open = await openAlerts(db);
+    expect(open.map((a) => [a.kind, a.messageId])).toEqual([['unmatched', later], ['interview', other]]);
+    expect(open[0]!.jobId).toBeNull();
+    for (const id of [invite, later]) expect(await mailMessageById(db, id)).toMatchObject({ jobId: null, linkedBy: 'owner', corrected: true });
+  });
+
+  it('unlinking leaves the card alone when something moved it after the mail', async () => {
+    const job = await seedJob({ column: 'aplicada' });
+    const invite = (await insertMailMessage(db, msg({ messageId: 'a@x', threadKey: 't1', sentAt: 100, jobId: job.id, linkedBy: 'auto' }), 1))!;
+    await moveCardByEmail(db, { jobId: job.id, to: 'entrevista', messageId: invite }, 200);
+    await db.update(jobs).set({ column: 'oferta' }).where(eq(jobs.id, job.id));
+    await db.insert(jobEvents).values({ jobId: job.id, fromColumn: 'entrevista', toColumn: 'oferta', actor: 'humano', createdAt: 300 });
+    expect(await unlinkThread(db, invite, 1000)).toBe(true);
+    const [row] = await db.select({ column: jobs.column }).from(jobs).where(eq(jobs.id, job.id));
+    expect(row!.column).toBe('oferta');
+    expect((await openAlerts(db)).map((a) => [a.kind, a.messageId])).toEqual([['unmatched', invite]]);
+  });
+
+  it('linking after an unlink clears the correction', async () => {
+    const wrong = await seedJob();
+    const right = await seedJob();
+    const a = (await insertMailMessage(db, msg({ messageId: 'a@x', threadKey: 't1', jobId: wrong.id, linkedBy: 'auto' }), 1))!;
+    const b = (await insertMailMessage(db, msg({ messageId: 'b@x', threadKey: 't1', jobId: wrong.id, linkedBy: 'auto' }), 1))!;
+    await unlinkThread(db, a, 10);
+    expect(await linkThreadToJob(db, b, right.id, 20)).toBe(true);
+    for (const id of [a, b]) expect(await mailMessageById(db, id)).toMatchObject({ jobId: right.id, linkedBy: 'owner', corrected: false });
   });
 
   it('a later automatic classification does not overrule the owner link', async () => {
