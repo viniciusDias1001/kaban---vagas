@@ -217,7 +217,11 @@ test('settings from the screen, write-only key, resume upload, score, analysis, 
   const extracted = await extractResumeText(pdf, 'pdf');
   expect(extracted.ok, 'o PDF baixado tem texto extraível').toBe(true);
   const text = (extracted.ok ? extracted.text : '').replace(/\s+/g, ' ');
-  expect(text).toContain('Maria Exemplo da Silva');
+  expect(text).toContain('MARIA EXEMPLO DA SILVA'); // cabeçalho
+  expect(text).toContain('DESENVOLVEDORA FRONT-END'); // título profissional, copiado do perfil
+  expect(text).toContain('Front-end: React'); // competência no grupo
+  expect(text).toContain('Maria Exemplo da Silva • 1'); // rodapé
+  expect(text).toContain('EXPERIÊNCIA PROFISSIONAL');
   expect(text).toContain(REVISED_SUMMARY);
   expect(text).toContain('Empresa Fictícia Ltda');
   expect(text).toContain('Reduzi o tempo de build em 40% com a migração para Vite');
