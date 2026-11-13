@@ -1,9 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { MailAccountInputSchema } from './email';
+import { LinkMessageSchema, MailAccountInputSchema, MailMessagesQuerySchema } from './email';
 import { AI_LAYERS } from './ai-constants';
 import { DRAFT_PLACEHOLDER, EMAIL_KIND_LABELS, EMAIL_KINDS, KNOWN_FACT_LABELS, KNOWN_FACTS, emailAvailability } from './email-constants';
 
 describe('e-mail contract', () => {
+  it('bounds the card id and the date filter to what the database holds', () => {
+    expect(LinkMessageSchema.parse({ jobId: 2_147_483_647 })).toEqual({ jobId: 2_147_483_647 });
+    expect(LinkMessageSchema.safeParse({ jobId: 2_147_483_648 }).success).toBe(false);
+    expect(MailMessagesQuerySchema.parse({ since: '0' })).toEqual({ since: 0 });
+    expect(MailMessagesQuerySchema.parse({ since: '8640000000000000' })).toEqual({ since: 8.64e15 });
+    for (const since of ['-1', '8640000000000001', '1e20', '1.5', 'abc']) {
+      expect(MailMessagesQuerySchema.safeParse({ since }).success, since).toBe(false);
+    }
+  });
+
   it('strips the spaces Google shows in an app password', () => {
     expect(MailAccountInputSchema.parse({ address: ' Maria@Example.com ', password: 'abcd efgh ijkl mnop' }))
       .toEqual({ address: 'maria@example.com', password: 'abcdefghijklmnop' });
