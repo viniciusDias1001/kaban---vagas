@@ -127,7 +127,7 @@ async function prepare(deps: MailWorkDeps, mail: MailMessageRow, config: EmailCo
       : null;
     if (draft === null || !recipient.ok) return { ...NOTHING, job, alert: { kind: 'draft', payload: noReply } };
     return {
-      ...NOTHING, job, alert: { kind: 'draft', payload: { recipient: recipient.address } },
+      ...NOTHING, job, alert: { kind: 'draft', payload: recipientNote(mail, recipient.address) },
       reply: draftReply(mail, recipient.address, draft, saved.map((s) => s.fact)),
     };
   }
@@ -150,9 +150,15 @@ async function prepare(deps: MailWorkDeps, mail: MailMessageRow, config: EmailCo
       origin: 'facts', items, toAddress: recipient.address, subject: composed.subject, body: composed.body,
       attachResume: items.includes('resume'), state: auto ? 'aprovada' : 'rascunho', approvedBy: auto ? 'auto' : null,
     },
-    // Sem aprovação automática, o dono vê para quem a resposta iria.
-    alert: auto ? null : { kind: 'draft', payload: { recipient: recipient.address } },
+    // Sem aprovação automática, o dono vê para quem a resposta iria quando não é quem mandou o e-mail.
+    alert: auto ? null : { kind: 'draft', payload: recipientNote(mail, recipient.address) },
   };
+}
+
+/** O alerta só nomeia o destinatário quando a resposta não vai para quem mandou o e-mail. */
+function recipientNote(mail: MailMessageRow, address: string): AlertPayload {
+  const same = address.trim().toLowerCase() === mail.fromAddress.trim().toLowerCase();
+  return same ? {} : { recipient: address };
 }
 
 function reasonFor(recipient: Extract<Recipient, { ok: false }>): string {
