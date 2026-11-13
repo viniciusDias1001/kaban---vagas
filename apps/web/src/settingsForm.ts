@@ -39,6 +39,11 @@ export interface SettingsForm {
   applyBlockedCompaniesDraft: string;
   applyBlockedTerms: string[];
   applyBlockedTermsDraft: string;
+  /**
+   * Sites em que o dono já confirmou a troca para "Enviar" nesta edição. Só da tela: nunca vai no PATCH e volta
+   * vazio quando o formulário é descartado ou relido, então o aviso reaparece se o modo não foi salvo.
+   */
+  applyRealConfirmed: ApplySiteId[];
 }
 
 export const APPLY_CAP_KEYS = ['linkedin', 'greenhouse', 'lever', 'fake', 'total', 'linkedinViews'] as const satisfies readonly (keyof ApplyDailyCaps)[];
@@ -71,6 +76,7 @@ export function formFromSettings(dto: SettingsDto): SettingsForm {
     applyBlockedCompaniesDraft: '',
     applyBlockedTerms: [...dto.apply.blockedTerms.value],
     applyBlockedTermsDraft: '',
+    applyRealConfirmed: [],
   };
 }
 
@@ -172,11 +178,7 @@ export function validateSettings(form: SettingsForm): SettingsFormErrors {
 
   const score = parseWhole(form.applyMinScore);
   if (score === null || score > 100) errors.applyMinScore = 'Informe uma nota de 0 a 100.';
-  const badCap = APPLY_CAP_KEYS.find((k) => {
-    const n = parseWhole(form.applyDailyCaps[k]);
-    return n === null || n > APPLY_SETTINGS_LIMITS.maxCap;
-  });
-  if (badCap) errors.applyDailyCaps = `Cada limite diário vai de 0 a ${APPLY_SETTINGS_LIMITS.maxCap}.`;
+  if (badDailyCap(form)) errors.applyDailyCaps = `Cada limite diário vai de 0 a ${APPLY_SETTINGS_LIMITS.maxCap}.`;
   const companyCap = parseWhole(form.applyCompanyCap);
   if (companyCap === null || companyCap < 1 || companyCap > APPLY_SETTINGS_LIMITS.maxCompanyCap) {
     errors.applyCompanyCap = `Informe de 1 a ${APPLY_SETTINGS_LIMITS.maxCompanyCap} candidaturas por empresa.`;

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { APPLICATION_STATUSES, NEEDS_HUMAN_REASONS, SKIP_REASONS, type AnswerSource, type ApplicationListItemDto, type ApplicationStatus, type ApplyStatusDto, type PendingQuestion, type Question } from '@kv/shared';
 import {
   AI_ANSWER_LABELS, FILTER_LABELS, PENDING_KIND_LABELS, type ApplicationFilter, ANSWER_SOURCE_LABELS, STATUS_LABELS, applyErrorMessage, applyPollMs, cardBadge, filterApplications,
-  filterCounts, reasonText, toPendingAnswersBody, validatePendingDrafts, type PendingDraft,
+  accountFeedback, filterCounts, reasonText, toPendingAnswersBody, validatePendingDrafts, type AccountAction, type AccountMutationView, type PendingDraft,
 } from './apply';
 
 const item = (id: number, status: ApplicationStatus): ApplicationListItemDto => ({
@@ -130,5 +130,30 @@ describe('pending answers', () => {
     expect(validatePendingDrafts(pending, [
       draft('a', { value: 'ok' }), draft('s', { value: 'Sim' }), draft('m', { value: ['x'] }), draft('n', { value: '3,5' }),
     ])).toEqual({});
+  });
+});
+
+describe('accountFeedback', () => {
+  const idleM: AccountMutationView = { isPending: false, isSuccess: false, isError: false, error: null, variables: undefined };
+  const states = (over: Partial<Record<AccountAction, Partial<AccountMutationView>>> = {}) => ({
+    open: { ...idleM, ...over.open }, check: { ...idleM, ...over.check }, logout: { ...idleM, ...over.logout },
+  });
+
+  it('shows nothing before a click', () => {
+    expect(accountFeedback(null, 'linkedin', states())).toEqual({ kind: 'idle' });
+  });
+
+  it('shows only the last clicked action: a later success hides an earlier error', () => {
+    const s = states({
+      open: { isError: true, error: { message: 'falhou' }, variables: 'linkedin' },
+      check: { isSuccess: true, variables: 'linkedin' },
+    });
+    expect(accountFeedback('check', 'linkedin', s)).toEqual({ kind: 'sent' });
+    expect(accountFeedback('open', 'linkedin', s)).toEqual({ kind: 'error', message: 'falhou' });
+  });
+
+  it('shows pending while the last action runs, and ignores a mutation used for another site', () => {
+    expect(accountFeedback('logout', 'linkedin', states({ logout: { isPending: true, variables: 'linkedin' } }))).toEqual({ kind: 'pending' });
+    expect(accountFeedback('check', 'linkedin', states({ check: { isSuccess: true, variables: 'greenhouse' } }))).toEqual({ kind: 'idle' });
   });
 });

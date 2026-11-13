@@ -154,6 +154,32 @@ export function validatePendingDrafts(pending: PendingQuestion[], drafts: Pendin
   return errors;
 }
 
+/** Os pedidos de conta que a linha de um site faz ao worker. */
+export type AccountAction = 'open' | 'check' | 'logout';
+
+/** O que importa de uma mutação do React Query para a resposta ao clique. */
+export interface AccountMutationView {
+  isPending: boolean; isSuccess: boolean; isError: boolean; error: { message: string } | null; variables: unknown;
+}
+
+export type AccountFeedback = { kind: 'idle' } | { kind: 'pending' } | { kind: 'sent' } | { kind: 'error'; message: string };
+
+/**
+ * A resposta mostrada na linha do site: só a do último botão clicado. Cada mutação guarda o próprio erro; sem isto,
+ * um erro antigo de "Abrir" esconderia o "Pedido enviado." de um "Verificar" que deu certo depois.
+ */
+export function accountFeedback(
+  last: AccountAction | null, site: string, states: Record<AccountAction, AccountMutationView>,
+): AccountFeedback {
+  if (!last) return { kind: 'idle' };
+  const m = states[last];
+  if (m.variables !== site) return { kind: 'idle' };
+  if (m.isPending) return { kind: 'pending' };
+  if (m.isError) return { kind: 'error', message: m.error?.message ?? 'Não foi possível enviar o pedido.' };
+  if (m.isSuccess) return { kind: 'sent' };
+  return { kind: 'idle' };
+}
+
 /** Mensagens em pt-BR dos códigos `{ error }` que as rotas de candidatura devolvem. */
 const ERROR_CODE_MESSAGES: Record<string, string> = {
   in_progress: 'A candidatura está em andamento agora. Espere terminar ou cancele antes de tentar de novo.',

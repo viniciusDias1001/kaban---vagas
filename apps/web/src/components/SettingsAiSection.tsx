@@ -66,8 +66,9 @@ function Block({ title, children, first }: { title: string; children: ReactNode;
   );
 }
 
-export function ToggleRow({ testId, label, off, checked, onChange, source, changed }: {
-  testId: string; label: string; off: string; checked: boolean; onChange: (v: boolean) => void; source: SettingSource; changed: boolean;
+/** Interruptor com rótulo e o sentido de "desligada"; com `on`, a dica acompanha o estado ("Ligada: ..."). */
+export function ToggleRow({ testId, label, off, on, checked, onChange, source, changed }: {
+  testId: string; label: string; off: string; on?: string; checked: boolean; onChange: (v: boolean) => void; source: SettingSource; changed: boolean;
 }) {
   const id = useId();
   const hintId = useId();
@@ -76,7 +77,7 @@ export function ToggleRow({ testId, label, off, checked, onChange, source, chang
       <Switch id={id} data-testid={testId} checked={checked} onCheckedChange={onChange} aria-describedby={hintId} className="mt-0.5" />
       <div className="min-w-0 flex-1">
         <label htmlFor={id} className="block cursor-pointer text-[13px] font-medium leading-snug text-ink">{label}</label>
-        <p id={hintId} className={cn(HINT, 'mt-0.5')}>Desligada: {off}</p>
+        <p id={hintId} className={cn(HINT, 'mt-0.5')}>{on && checked ? `Ligada: ${on}` : `Desligada: ${off}`}</p>
       </div>
       <SourceTag source={source} changed={changed} />
     </div>

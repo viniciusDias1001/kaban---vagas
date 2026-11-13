@@ -1,11 +1,11 @@
-import { CircleCheck, CircleDashed, CircleOff, Clock, LoaderCircle, LogIn, LogOut, Plus, Play, RefreshCw, Send, ShieldAlert } from 'lucide-react';
+import { CircleCheck, CircleDashed, CircleOff, Clock, LoaderCircle, LogIn, LogOut, Plus, Play, RefreshCw, RotateCw, Send, ShieldAlert } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useId, useState, type ReactNode } from 'react';
 import {
-  APPLY_AI_ANSWER_MODES, APPLY_DEFAULTS, APPLY_SETTINGS_LIMITS, APPLY_TIMING, type ApplyDailyCaps, type ApplyMode, type ApplyResumeMode,
-  type ApplySiteId, type ApplySiteStateDto, type ApplyStatusDto, type SettingSource, type SettingsDto, type SitePauseReason, type SiteSession,
+  APPLY_AI_ANSWER_MODES, APPLY_DEFAULTS, APPLY_SITE_IDS, APPLY_SITE_LABELS, APPLY_SETTINGS_LIMITS, APPLY_TIMING, type ApplyDailyCaps, type ApplyMode, type ApplyResumeMode,
+  type ApplySiteStateDto, type ApplyStatusDto, type SettingSource, type SettingsDto, type SitePauseReason, type SiteSession,
 } from '@kv/shared/client';
-import { AI_ANSWER_LABELS } from '../lib/apply';
+import { AI_ANSWER_LABELS, accountFeedback, type AccountAction } from '../lib/apply';
 import { spring } from '../lib/motion';
 import { cn } from '../lib/utils';
 import { badDailyCap, collectBlockItems, type SettingsForm, type SettingsFormErrors } from '../settingsForm';
@@ -34,9 +34,6 @@ const PAUSE_TEXT: Record<SitePauseReason, string> = {
   restricted: 'Pausado porque o site restringiu a conta. Confira a conta no site antes de retomar.',
   owner_away: `Pausado porque ${APPLY_TIMING.ownerAwayAfter} esperas por você passaram do prazo.`,
 };
-
-/** Sites que já tiveram a troca para "Enviar" confirmada nesta sessão do navegador: o aviso aparece uma vez só. */
-const confirmedReal = new Set<ApplySiteId>();
 
 const time = (ms: number) => new Date(ms).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 const sameList = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((x, i) => x === b[i]);
@@ -96,13 +93,13 @@ function SiteRow({ site, form, errors, capId, onChange }: {
   const loginHint = useId();
   const actions = useApplyActions();
   const [asking, setAsking] = useState(false);
-  const [sent, setSent] = useState<string | null>(null);
+  const [lastAction, setLastAction] = useState<AccountAction | null>(null);
   const mode = form.applySiteModes[id];
   const capKey = id as keyof ApplyDailyCaps;
   const capError = badDailyCap(form) === capKey ? errors.applyDailyCaps : undefined;
 
   const setMode = (next: ApplyMode) => {
-    if (next === 'real' && site.mode !== 'real' && !confirmedReal.has(id)) {
+    if (next === 'real' && site.mode !== 'real' && !form.applyRealConfirmed.includes(id)) {
       setAsking(true);
       return;
     }
@@ -110,9 +107,8 @@ function SiteRow({ site, form, errors, capId, onChange }: {
     onChange({ applySiteModes: { ...form.applySiteModes, [id]: next } });
   };
   const confirmReal = () => {
-    confirmedReal.add(id);
     setAsking(false);
-    onChange({ applySiteModes: { ...form.applySiteModes, [id]: 'real' } });
+    onChange({ applySiteModes: { ...form.applySiteModes, [id]: 'real' }, applyRealConfirmed: [...form.applyRealConfirmed, id] });
   };
 
   // Ações do worker: a API só enfileira o pedido; o estado mostrado segue o que /apply/status informa.
@@ -121,8 +117,8 @@ function SiteRow({ site, form, errors, capId, onChange }: {
     { key: 'check', label: 'Verificar', icon: <RefreshCw aria-hidden />, m: actions.checkSession },
     { key: 'logout', label: 'Desconectar', icon: <LogOut aria-hidden />, m: actions.logout },
   ] as const;
-  const accountError = account.map((a) => a.m).find((m) => m.isError && m.variables === id)?.error;
-  const busy = account.some((a) => a.m.isPending && a.m.variables === id);
+  const feedback = accountFeedback(lastAction, id, { open: actions.openLogin, check: actions.checkSession, logout: actions.logout });
+  const busy = feedback.kind === 'pending';
   const resuming = actions.resumeSite.isPending && actions.resumeSite.variables === id;
   const resumeError = actions.resumeSite.isError && actions.resumeSite.variables === id ? actions.resumeSite.error : null;
   const session = SESSION_BADGE[site.session];
@@ -196,26 +192,29 @@ function SiteRow({ site, form, errors, capId, onChange }: {
         <div className="mt-3 space-y-2 border-t border-line/70 pt-3">
           <div className="flex flex-wrap items-center gap-2">
             {account.map((a) => {
-              const pending = a.m.isPending && a.m.variables === id;
+              const pending = busy && lastAction === a.key;
               return (
                 <Button
                   key={a.key} type="button" size="sm" variant={a.key === 'logout' ? 'ghost' : 'secondary'}
                   data-testid={`apply-${a.key}-${id}`} disabled={busy}
                   aria-describedby={a.key === 'open' ? loginHint : undefined}
-                  onClick={() => a.m.mutate(id, { onSuccess: () => setSent(a.key) })}
+                  onClick={() => {
+                    setLastAction(a.key);
+                    a.m.mutate(id);
+                  }}
                 >
                   {pending ? <LoaderCircle aria-hidden className="animate-spin" /> : a.icon}
                   {a.label}
                 </Button>
               );
             })}
-            <span role="status" className="text-xs text-muted">{sent && !busy && !accountError ? 'Pedido enviado.' : ''}</span>
+            <span role="status" className="text-xs text-muted">{feedback.kind === 'sent' ? 'Pedido enviado.' : ''}</span>
           </div>
           <p id={loginHint} className={HINT}>
             A janela abre no navegador das candidaturas. Você digita a senha no próprio site; o app não vê nem guarda a sua senha.
             {site.sessionCheckedAt !== null && ` Última verificação às ${time(site.sessionCheckedAt)}.`}
           </p>
-          {accountError && <p role="alert" className={ERROR}>{accountError.message}</p>}
+          {feedback.kind === 'error' && <p role="alert" className={ERROR}>{feedback.message}</p>}
         </div>
       )}
 
@@ -237,7 +236,7 @@ function SiteRow({ site, form, errors, capId, onChange }: {
   );
 }
 
-function Today({ status }: { status: ApplyStatusDto | undefined }) {
+function Today({ status, error, onRetry }: { status: ApplyStatusDto | undefined; error: string | null; onRetry: () => void }) {
   const share = status && status.totalCap > 0 ? Math.min(1, status.totalToday / status.totalCap) : 0;
   return (
     <div data-testid="apply-today" className={cn(CARD, 'p-5')}>
@@ -267,9 +266,23 @@ function Today({ status }: { status: ApplyStatusDto | undefined }) {
             </li>
           </ul>
         </>
+      ) : error ? (
+        <StatusError message={error} onRetry={onRetry} className="mt-2" />
       ) : (
         <Skeleton className="mt-3 h-24 w-full" />
       )}
+    </div>
+  );
+}
+
+/** A leitura de /apply/status falhou: o motivo, discreto, e um botão para ler de novo. */
+function StatusError({ message, onRetry, className }: { message: string; onRetry: () => void; className?: string }) {
+  return (
+    <div role="alert" className={cn('flex flex-wrap items-center gap-x-3 gap-y-1.5', className)}>
+      <p className={ERROR}>Não foi possível ler o estado da candidatura automática: {message}</p>
+      <Button type="button" size="sm" variant="ghost" onClick={onRetry}>
+        <RotateCw aria-hidden /> Tentar de novo
+      </Button>
     </div>
   );
 }
@@ -303,6 +316,11 @@ export function SettingsApplySection({ dto, form, errors, showErrors, dirty, ids
   const capId = (key: keyof ApplyDailyCaps) => (key === badCap ? ids.applyDailyCaps : `${capBase}-${key}`);
   const capChanged = (key: keyof ApplyDailyCaps) => form.applyDailyCaps[key].trim() !== String(apply.dailyCaps.value[key]);
   const capError = (key: keyof ApplyDailyCaps) => (key === badCap ? shown.applyDailyCaps : undefined);
+  // Limite de site inválido sem linha na tela (o estado dos sites não carregou, ou o site não está registrado):
+  // o erro aparece no bloco Sites e é ele que recebe o foco, para um salvamento bloqueado sempre mostrar a causa.
+  const shownSites: string[] = status.data?.sites.map((s) => s.site) ?? [];
+  const orphanCap = badCap && (APPLY_SITE_IDS as readonly string[]).includes(badCap) && !shownSites.includes(badCap)
+    ? (badCap as (typeof APPLY_SITE_IDS)[number]) : null;
   const setCap = (key: keyof ApplyDailyCaps) => (v: string) => onChange({ applyDailyCaps: { ...form.applyDailyCaps, [key]: v } });
 
   const companies = collectBlockItems(form.applyBlockedCompanies, form.applyBlockedCompaniesDraft);
@@ -330,6 +348,7 @@ export function SettingsApplySection({ dto, form, errors, showErrors, dirty, ids
               <ToggleRow
                 testId="apply-enabled" label="Candidatura automática"
                 off="nenhuma candidatura é preparada nem enviada; o app funciona como antes."
+                on="o app prepara candidaturas para as vagas com nota a partir da mínima, dentro dos limites abaixo."
                 checked={form.applyEnabled} onChange={(applyEnabled) => onChange({ applyEnabled })}
                 source={apply.enabled.source} changed={form.applyEnabled !== apply.enabled.value}
               />
@@ -358,9 +377,14 @@ export function SettingsApplySection({ dto, form, errors, showErrors, dirty, ids
                   <p className="rounded-2xl border border-dashed border-line px-4 py-3 text-[13px] text-muted">Nenhum site de candidatura está registrado nesta instalação.</p>
                 )
               ) : status.isError ? (
-                <p role="alert" className={ERROR}>Não foi possível ler o estado dos sites: {status.error.message}</p>
+                <StatusError message={status.error.message} onRetry={() => void status.refetch()} />
               ) : (
                 <div className="space-y-2.5"><Skeleton className="h-28 rounded-2xl" /></div>
+              )}
+              {orphanCap && shown.applyDailyCaps && (
+                <p id={ids.applyDailyCaps} tabIndex={-1} role="alert" data-testid="apply-cap-orphan-error" className={cn(ERROR, 'mt-2.5 outline-none')}>
+                  Limite do dia de {APPLY_SITE_LABELS[orphanCap]}: {shown.applyDailyCaps}
+                </p>
               )}
             </Block>
 
@@ -393,15 +417,17 @@ export function SettingsApplySection({ dto, form, errors, showErrors, dirty, ids
                 <div className="flex flex-wrap items-center gap-2.5">
                   <label htmlFor={ids.applyWindow} className="text-[13px] text-ink-2">das</label>
                   <Input
-                    id={ids.applyWindow} data-testid="apply-window-start" type="time" value={form.applyWindowStart}
+                    id={ids.applyWindow} data-testid="apply-window-start" value={form.applyWindowStart} inputMode="numeric" placeholder="08:00" maxLength={5}
+                    pattern="([01][0-9]|2[0-3]):[0-5][0-9]" autoComplete="off" aria-describedby={windowHelp}
                     onChange={(e) => onChange({ applyWindowStart: e.target.value })} aria-invalid={shown.applyWindow ? true : undefined}
-                    className="w-32 tabular-nums"
+                    className="w-24 text-center tabular-nums"
                   />
                   <label htmlFor={`${capBase}-end`} className="text-[13px] text-ink-2">às</label>
                   <Input
-                    id={`${capBase}-end`} data-testid="apply-window-end" type="time" value={form.applyWindowEnd}
+                    id={`${capBase}-end`} data-testid="apply-window-end" value={form.applyWindowEnd} inputMode="numeric" placeholder="21:00" maxLength={5}
+                    pattern="([01][0-9]|2[0-3]):[0-5][0-9]" autoComplete="off" aria-describedby={windowHelp}
                     onChange={(e) => onChange({ applyWindowEnd: e.target.value })} aria-invalid={shown.applyWindow ? true : undefined}
-                    className="w-32 tabular-nums"
+                    className="w-24 text-center tabular-nums"
                   />
                 </div>
                 <p id={windowHelp} className={cn(shown.applyWindow ? ERROR : HINT, 'mt-1.5')}>
@@ -521,7 +547,7 @@ export function SettingsApplySection({ dto, form, errors, showErrors, dirty, ids
       </div>
 
       <div className="grid min-w-0 items-start gap-4 md:grid-cols-2 xl:grid-cols-1">
-        <Today status={status.data} />
+        <Today status={status.data} error={status.isError ? status.error.message : null} onRetry={() => void status.refetch()} />
         <div className={cn(CARD, 'p-5')}>
           <h3 className={EYEBROW}>Ensaio e Enviar</h3>
           <p className="mt-2 text-[13px] leading-relaxed text-ink-2">
