@@ -21,7 +21,11 @@ export function fakeFixturePath(variant: string): string {
 
 const STEP_TIMEOUT_MS = 5_000;
 
-/** Atende vagas da fonte `fake`. A variante do formulário vem de `?variant=` na URL da vaga; sem ela, `form`. */
+/**
+ * Atende vagas da fonte `fake`. A variante do formulário vem de `?variant=` na URL da vaga; sem ela, `form`. O alvo é
+ * sempre em `FAKE_SITE_ORIGIN` (mesmo caminho e busca da URL da vaga), o único endereço que o navegador do site de
+ * teste serve: a fonte falsa publica as vagas em outro host (`https://example.com/jobs/fake-N`).
+ */
 export function createFakeSite(): ApplySite {
   return {
     id: 'fake',
@@ -30,7 +34,7 @@ export function createFakeSite(): ApplySite {
     match(job: ApplyJob): ApplyTarget | null {
       if (job.source !== 'fake') return null;
       let variant = 'form';
-      let url = job.url;
+      let url = `${FAKE_SITE_ORIGIN}/jobs/${encodeURIComponent(job.externalId)}`;
       try {
         const parsed = new URL(job.url);
         variant = parsed.searchParams.get('variant') ?? 'form';
@@ -38,8 +42,8 @@ export function createFakeSite(): ApplySite {
           // Variante desconhecida: a URL acompanha a variante realmente usada.
           variant = 'form';
           parsed.searchParams.set('variant', variant);
-          url = parsed.toString();
         }
+        url = new URL(`${parsed.pathname}${parsed.search}`, FAKE_SITE_ORIGIN).toString();
       } catch { /* url inválida: variante padrão */ }
       return { site: 'fake', url, ref: { variant } };
     },

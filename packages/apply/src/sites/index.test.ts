@@ -23,6 +23,16 @@ describe('site registry', () => {
     expect(new URL(t!.url).searchParams.get('variant')).toBe('form');
     expect(() => fakeFixturePath('../../x')).toThrow();
   });
+  it('opens every fake-source job on the test site, whatever host the job url names', () => {
+    // A fonte falsa (FAKE_CONNECTORS=1) publica as vagas em https://example.com/jobs/fake-N; o navegador do site de
+    // teste só serve FAKE_SITE_ORIGIN e corta o resto da rede, então o alvo precisa estar nele.
+    const fake = createFakeSite();
+    expect(fake.match(job({ url: 'https://example.com/jobs/fake-1' }))?.url).toBe('http://apply.fake.test/jobs/fake-1');
+    const closed = fake.match(job({ url: 'https://example.com/jobs/fake-2?variant=closed' }));
+    expect(closed?.url).toBe('http://apply.fake.test/jobs/fake-2?variant=closed');
+    expect(closed?.ref.variant).toBe('closed');
+    expect(fake.match(job({ url: 'http://apply.fake.test/jobs/1?variant=captcha' }))?.url).toBe('http://apply.fake.test/jobs/1?variant=captcha');
+  });
   it('takes the form variant from the job url', () => {
     const fake = createFakeSite();
     expect(siteFor(job({ url: 'http://apply.fake.test/jobs/1?variant=closed' }), [fake])?.target.ref.variant).toBe('closed');
