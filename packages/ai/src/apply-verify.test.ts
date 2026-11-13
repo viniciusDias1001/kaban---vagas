@@ -60,22 +60,22 @@ describe('yearsCovered', () => {
 
 describe('verifyProfileFact', () => {
   it('bounds years of experience by the cited experiences', () => {
-    expect(verifyProfileFact(profile, number('Anos com TypeScript'), { answer: '5', basis: [exp1, exp2] }, now)).toEqual({ ok: true, value: '5' });
-    expect(verifyProfileFact(profile, number('Anos com TypeScript'), { answer: '6', basis: [exp1, exp2] }, now).ok).toBe(false);
-    expect(verifyProfileFact(profile, number('Anos com TypeScript'), { answer: '7', basis: [exp1, exp2] }, now).ok).toBe(false);
-    expect(verifyProfileFact(profile, number('Anos com TypeScript'), { answer: '3', basis: [] }, now).ok).toBe(false);
-    expect(verifyProfileFact(profile, number('Anos com TypeScript'), { answer: '3', basis: [exp1] }, now).ok).toBe(false);
+    expect(verifyProfileFact(profile, number('Anos de experiência com TypeScript'), { answer: '5', basis: [exp1, exp2] }, now)).toEqual({ ok: true, value: '5' });
+    expect(verifyProfileFact(profile, number('Anos de experiência com TypeScript'), { answer: '6', basis: [exp1, exp2] }, now).ok).toBe(false);
+    expect(verifyProfileFact(profile, number('Anos de experiência com TypeScript'), { answer: '7', basis: [exp1, exp2] }, now).ok).toBe(false);
+    expect(verifyProfileFact(profile, number('Anos de experiência com TypeScript'), { answer: '3', basis: [] }, now).ok).toBe(false);
+    expect(verifyProfileFact(profile, number('Anos de experiência com TypeScript'), { answer: '3', basis: [exp1] }, now).ok).toBe(false);
   });
 
   it('accepts only plain whole numbers', () => {
     for (const answer of ['', '-1', '2.5', '2,5', '3 anos', '1e1', '0x2', 'três']) {
-      expect(verifyProfileFact(profile, number('Anos com React'), { answer, basis: [exp1, exp2] }, now).ok, answer).toBe(false);
+      expect(verifyProfileFact(profile, number('Anos de experiência com React'), { answer, basis: [exp1, exp2] }, now).ok, answer).toBe(false);
     }
-    expect(verifyProfileFact(profile, number('Anos com React'), { answer: ' 3 ', basis: [exp2] }, now)).toEqual({ ok: true, value: '3' });
+    expect(verifyProfileFact(profile, number('Anos de experiência com React'), { answer: ' 3 ', basis: [exp2] }, now)).toEqual({ ok: true, value: '3' });
   });
 
   it('counts only experiences, not other items, as years of work', () => {
-    expect(verifyProfileFact(profile, number('Anos com React'), { answer: '1', basis: ['skill_1a2b3c4d'] }, now).ok).toBe(false);
+    expect(verifyProfileFact(profile, number('Anos de experiência com React'), { answer: '1', basis: ['skill_1a2b3c4d'] }, now).ok).toBe(false);
   });
 
   it('refuses a number about a technology that the profile does not list', () => {
@@ -84,7 +84,7 @@ describe('verifyProfileFact', () => {
   });
 
   it('rejects a fact that cites an unknown item', () => {
-    expect(verifyProfileFact(profile, number('Anos com React'), { answer: '1', basis: [exp1, 'exp_zzzzzzzz'] }, now).ok).toBe(false);
+    expect(verifyProfileFact(profile, number('Anos de experiência com React'), { answer: '1', basis: [exp1, 'exp_zzzzzzzz'] }, now).ok).toBe(false);
     expect(verifyProfileFact(profile, bool('Tem React?'), { answer: 'true', basis: ['skill_zzzzzzzz'] }, now).ok).toBe(false);
   });
 
@@ -152,7 +152,7 @@ describe('verifyProfileFact: review round 1', () => {
 
   it('1. a yes/no select needs a basis and an option that the cited items support', () => {
     expect(ok(sel('Possui graduação completa?', ['Sim', 'Não']), 'Sim', [])).toBe(false);
-    expect(ok(sel('Possui graduação completa?', ['Sim', 'Não']), 'Sim', [degree])).toBe(true);
+    expect(ok(sel('Possui graduação completa?', ['Sim', 'Não']), 'Sim', [degree])).toBe(false); // no cited text says "graduação" and "completa"
     expect(ok(sel('Possui graduação completa?', ['Sim', 'Não']), 'Sim', [exp1])).toBe(false);
     expect(ok(sel('Possui graduação completa?', ['Sim', 'Não']), 'Não', [])).toBe(true);
     expect(ok(sel('Nível de inglês', ['Básico', 'Avançado', 'Fluente']), 'Fluente', [english])).toBe(false);
@@ -160,19 +160,17 @@ describe('verifyProfileFact: review round 1', () => {
     expect(ok(sel('Nível de inglês', ['Básico', 'Avançado', 'Fluente']), 'Avançado', [])).toBe(false);
   });
 
-  it('4. a number that is not about years must be in a cited item', () => {
+  it('4. only years-of-experience questions get a number', () => {
     expect(ok(number('Quantas pessoas você liderou?'), '5', [exp1, exp2])).toBe(false);
     const lead: CandidateProfile = { ...profile, experiences: [{ ...profile.experiences[0], achievements: [{ id: 'ach_lead0001', text: 'Liderei 3 pessoas' }] }, profile.experiences[1]] };
-    expect(verifyProfileFact(lead, number('Quantas pessoas você liderou?'), { answer: '3', basis: ['ach_lead0001'] }, now).ok).toBe(true);
-    expect(verifyProfileFact(lead, number('Quantas pessoas você liderou?'), { answer: '5', basis: [exp1] }, now).ok).toBe(false);
-    expect(ok(number('Quantas pessoas você liderou?'), '3', [])).toBe(false);
+    expect(verifyProfileFact(lead, number('Quantas pessoas você liderou?'), { answer: '3', basis: ['ach_lead0001'] }, now).ok).toBe(false);
     expect(ok(number('Anos de experiência com TypeScript'), '5', [exp1, exp2])).toBe(true);
   });
 
   it('6. an affirmation needs a cited item that relates to the question', () => {
     expect(ok(bool('Você fala inglês fluente?'), 'true', [exp1])).toBe(false);
     expect(ok(bool('Possui ensino superior?'), 'true', [exp1])).toBe(false);
-    expect(ok(bool('Possui ensino superior?'), 'true', [degree])).toBe(true);
+    expect(ok(bool('Possui ensino superior?'), 'true', [degree])).toBe(false);
     expect(ok(bool('Tem experiência com liderança?'), 'true', [exp2])).toBe(false);
     expect(ok(bool('Tem experiência com go?'), 'true', [exp1])).toBe(false);
     expect(ok(bool('Tem experiência com React?'), 'true', [react])).toBe(true);
@@ -201,9 +199,11 @@ describe('verifyOpenAnswer: review round 1', () => {
     expect(codes(profile, open(), 'Quero trabalhar na Globex Fictícia como Engenheira Front-end, com React e TypeScript.')).toEqual([]);
   });
 
-  it('7. a proper name that opens a sentence is checked', () => {
-    expect(codes(profile, open(), 'Datadog foi a ferramenta que usei.')).toContain('novel_term');
-    expect(codes(profile, open(), 'Uso React. Datadog também.')).toContain('novel_term');
+  it('7. a name that opens a sentence is checked when the job mentions it', () => {
+    const ops = { ...job, description: 'Usamos Datadog e Grafana.' };
+    const run = (t: string) => verifyOpenAnswer(profile, ops, open(), t, now).map((v) => v.code);
+    expect(run('Datadog foi a ferramenta que usei.')).toContain('novel_term');
+    expect(run('Uso React. Datadog também.')).toContain('novel_term');
     expect(codes(profile, open(), 'Gosto de React. Tenho interesse na vaga.')).toEqual([]);
   });
 
@@ -212,6 +212,95 @@ describe('verifyOpenAnswer: review round 1', () => {
       { ...profile.experiences[0], achievements: [{ id: 'ach_aaaaaaa1', text: 'Atendi 6 clientes' }] }, profile.experiences[1]] };
     expect(codes(six, open(), 'Tenho 6 anos de experiência.')).toContain('new_number');
     expect(codes(six, open(), 'Atendi 6 clientes.')).toEqual([]);
+  });
+});
+
+describe('verifyProfileFact: review round 2, every claim covered by the cited items', () => {
+  const ok = (p: CandidateProfile, q: Question, answer: string, basis: string[]) => verifyProfileFact(p, q, { answer, basis }, now).ok;
+  const withEducation = (e: Partial<CandidateProfile['education'][number]>): CandidateProfile =>
+    ({ ...profile, education: [{ ...profile.education[0], ...e }] });
+
+  it('A. refuses degree and language claims that the cited text does not state', () => {
+    const level = sel('Qual sua maior formação?', ['Ensino médio', 'Graduação', 'Pós-graduação']);
+    expect(ok(profile, level, 'Pós-graduação', [degree])).toBe(false);
+    expect(ok(withEducation({ degree: 'Ensino Médio' }), bool('Possui ensino superior completo?'), 'true', [degree])).toBe(false);
+    expect(ok(withEducation({ end: '' }), sel('Possui graduação completa?', ['Sim', 'Não']), 'Sim', [degree])).toBe(false);
+    expect(ok(profile, bool('Você fala inglês fluente?'), 'true', [english])).toBe(false);
+    expect(ok(profile, bool('Possui inglês nativo?'), 'true', [english])).toBe(false);
+    expect(ok(profile, bool('Possui graduação em engenharia?'), 'true', [degree])).toBe(false);
+    expect(ok(profile, bool('Tem experiência com React e liderança de times?'), 'true', [react])).toBe(false);
+  });
+
+  it('A. accepts a claim when every stem of the question is in the cited items', () => {
+    expect(ok(profile, bool('Tem experiência com React?'), 'true', [react])).toBe(true);
+    expect(ok(profile, sel('Nível de inglês', ['Básico', 'Avançado']), 'Avançado', [english])).toBe(true);
+    expect(ok(profile, bool('Possui inglês avançado?'), 'true', [english])).toBe(true);
+    expect(ok(profile, bool('Tem experiência com ciência da computação?'), 'true', [degree])).toBe(true);
+  });
+
+  it('A. an ongoing item never supports "completed"', () => {
+    const done = withEducation({ degree: 'Graduação completa', end: '2019' });
+    expect(ok(done, bool('Possui graduação completa?'), 'true', [degree])).toBe(true);
+    expect(ok(withEducation({ degree: 'Graduação completa', end: '' }), bool('Possui graduação completa?'), 'true', [degree])).toBe(false);
+    expect(ok(withEducation({ degree: 'Graduação completa', end: '2031' }), bool('Possui graduação completa?'), 'true', [degree])).toBe(false);
+  });
+
+  it('A. short words are content: "go" is not dropped for its length', () => {
+    const withGo = { ...profile, skills: [...profile.skills, { id: 'skill_gggggggg', name: 'Go' }] };
+    expect(ok(withGo, bool('Tem experiência com Go?'), 'true', ['skill_gggggggg'])).toBe(true);
+    expect(ok(profile, bool('Tem experiência com Go?'), 'true', [react])).toBe(false);
+  });
+
+  it('B. a number is only for years-of-experience questions', () => {
+    expect(ok(profile, number('Quantas pessoas você liderou?'), '40', ['ach_aaaaaaa1'])).toBe(false);
+    const atendi = { ...profile, experiences: [{ ...profile.experiences[0], achievements: [{ id: 'ach_atendi01', text: 'Atendi 40 clientes internos' }] }, profile.experiences[1]] };
+    expect(ok(atendi, number('Quantas pessoas você liderou?'), '40', ['ach_atendi01'])).toBe(false);
+    expect(ok(profile, number('Há quantos anos você mora em São Paulo?'), '5', [exp1, exp2])).toBe(false);
+    expect(ok(profile, number('Quantos anos você tem?'), '5', [exp1, exp2])).toBe(false);
+    expect(ok(profile, number('Anos de experiência com TypeScript'), '5', [exp1, exp2])).toBe(true);
+    expect(ok(profile, number('Years of experience with React'), '5', [exp1, exp2])).toBe(true);
+    expect(ok(profile, number('Tempo de experiência com React (anos)'), '5', [exp1, exp2])).toBe(true);
+  });
+
+  it('B. a year range option needs a basis unless the whole option is zero or a plain negative', () => {
+    const range = sel('Experiência com Kubernetes', ['0-2 anos', '3-5 anos']);
+    expect(ok(profile, range, '0-2 anos', [])).toBe(false);
+    expect(ok(profile, sel('Experiência com React', ['0', '3-5 anos']), '0', [])).toBe(true);
+    expect(ok(profile, sel('Experiência com React', ['Nenhum', '3-5 anos']), 'Nenhum', [])).toBe(true);
+    expect(ok(profile, sel('Experiência com React', ['0-2 anos', '3-5 anos']), '0-2 anos', [])).toBe(false);
+  });
+});
+
+describe('verifyOpenAnswer: review round 2', () => {
+  const run = (j: typeof job, t: string) => verifyOpenAnswer(profile, j, open(), t, now).map((v) => v.code);
+  const ops = { ...job, description: 'Usamos Datadog e Grafana.' };
+
+  it('C. names after a bullet are sentence starts', () => {
+    expect(run(ops, 'Usei:\n• Datadog\n• Grafana')).toContain('novel_term');
+    expect(run(ops, '- Datadog no dia a dia.')).toContain('novel_term');
+    expect(run(ops, 'Ferramentas que usei:\n- Datadog\n- Grafana')).toContain('novel_term');
+    expect(run(ops, '1. Datadog')).toContain('novel_term');
+  });
+
+  it('C. a lower-case word of the job does not vouch for a capitalised name', () => {
+    const stack = { ...job, description: 'Stack: rust, vue e react.' };
+    expect(run(stack, 'Tenho experiência com Rust e Vue.')).toContain('novel_term');
+    expect(run(stack, 'Rust é minha linguagem.')).toContain('novel_term');
+  });
+
+  it('C. a technology the job lists is not the candidate own in any case or position', () => {
+    const listed = { ...job, description: 'Experiência com Vue.js e RUST.' };
+    expect(run(listed, 'Tenho experiência com rust e vue.')).toContain('novel_term');
+  });
+
+  it('C. ordinary sentence openers pass', () => {
+    expect(run(job, 'Gostaria de fazer parte da Globex Fictícia, onde posso crescer.')).toEqual([]);
+    expect(run(job, 'Trabalhar com React me motiva.')).toEqual([]);
+    expect(run(job, 'Interesso-me pela vaga. Desejo crescer.')).toEqual([]);
+  });
+
+  it('C. an opener that the job description contains is refused', () => {
+    expect(run({ ...job, description: 'Vamos trabalhar em equipe.' }, 'Trabalhar com React me motiva.')).toContain('novel_term');
   });
 });
 

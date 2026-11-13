@@ -1,6 +1,6 @@
 import { optionKey, type AnswerValue, type CandidateProfile, type Question, type Violation } from '@kv/shared';
 import {
-  STOPWORDS, allowedNumbers, buildTermIndex, contentStems, foldText, hasControlChars, isKnownTerm, isListedName, novelTerms, numberIds, stem,
+  STOPWORDS, allowedNumbers, buildTermIndex, foldText, foldedWords, hasControlChars, isKnownTerm, isListedName, novelTerms, numberIds, stem,
 } from './text';
 import { numericTexts, profileTexts } from './verify';
 
@@ -93,15 +93,31 @@ function yearClaims(text: string): number[] {
   return numberIds(text).filter((id) => /^\d+$/.test(id)).map(Number).filter((n) => n <= MAX_YEARS_CLAIM);
 }
 
-const ABOUT_YEARS = /\b(anos?|years?)\b/i;
+/** Só pergunta de anos DE EXPERIÊNCIA (ou de trabalho) recebe número: "anos ... experiência" ou "experiência ... anos". */
+const YEARS_OF_EXPERIENCE = new RegExp(
+  '\\b(anos?|years?|yrs?|tempo|time)\\b[^.?!\\n]{0,40}\\b(experiencia|experience|trabalh\\w*|work\\w*|atuacao|carreira)\\b|' +
+    '\\b(experiencia|experience)\\b[^.?!\\n]{0,40}\\b(anos?|years?|yrs?)\\b',
+);
 const NEGATION = /\b(nao|not|never|nunca|nenhum|nenhuma|none|without|sem)\b/;
-const NEGATIVE_OPTION = /^(nao|no|nenhum|nenhuma|none|never|nunca|0)(\W|$)/;
-const YES_OPTION = /^(sim|yes|true|verdadeiro)(\W|$)/;
+/** Opção que é exatamente zero ou um "não" simples: afirma nada, não precisa de item citado. */
+const NEGATIVE_OPTION = /^(0|nao|no|nenhum|nenhuma|none|never|nunca)$/;
+const YES_OPTION = /^(sim|yes)$/;
+const COMPLETION = /\b(complet[oa]s?|concluid[oa]s?|completed?|finished|graduated)\b/;
 
-/** Palavras de pergunta que não dizem sobre o que é a pergunta (já fora: as de STOPWORDS). */
-const GENERIC_STEMS = new Set(['possui', 'conhecimento', 'tempo', 'habilidade', 'skill'].map(stem));
-/** O que "graduação", "ensino superior" etc. querem dizer: itens de formação do perfil os sustentam. */
-const EDUCATION_WORDS = 'graduacao superior ensino faculdade universidade bacharelado degree bachelor college university graduate';
+/**
+ * Palavras de moldura de pergunta, que não dizem sobre o que ela é (as de STOPWORDS também ficam de fora). Nenhuma
+ * palavra de conteúdo entra aqui, e nenhuma lista diz que um termo "vale" por outro: o item citado precisa conter a palavra.
+ */
+const SCAFFOLD = new Set(
+  (
+    'possui possuir tem ter voce vc you qual quais sua seu suas seus nivel level do does did have has having are is be ' +
+    'how many quantos quantas ha which what experiencia experience anos ano years year'
+  ).split(' '),
+);
+/** Radicais de conteúdo de um texto: sem stopwords, sem moldura de pergunta, sem número puro. Palavra curta ("go", "c#") conta. */
+const contentWords = (text: string): string[] =>
+  foldedWords(text).filter((w) => !STOPWORDS.has(w) && !SCAFFOLD.has(w) && !/^\d+$/.test(w)).map(stem);
+const allWords = (text: string): Set<string> => new Set(foldedWords(text).map(stem));
 
 type Checked = { ok: true; value: AnswerValue } | { ok: false; why: string };
 const fail = (why: string): Checked => ({ ok: false, why });
@@ -158,13 +174,18 @@ export function verifyProfileFact(
     const stray = texts.flatMap(numberIds).find((id) => !years.has(id) && !known.has(id));
     return stray === undefined ? null : `o número "${stray}" da pergunta não está no perfil`;
   };
-  const hasEducation = basis.some((id) => profile.education.some((e) => e.id === id));
-  const citedStems = () => contentStems([...cited.flat(), ...(hasEducation ? [EDUCATION_WORDS] : [])].join(' '));
-  const notGeneric = (stems: Iterable<string>) => [...stems].filter((s) => !GENERIC_STEMS.has(s));
-  /** Algum item citado trata do assunto da pergunta? Sem palavra de assunto na pergunta não há como saber: recusa. */
-  const related = () => {
-    const have = citedStems();
-    return notGeneric(contentStems(questionText)).some((s) => have.has(s));
+  /** Todo radical de conteúdo de `texts` está nos textos dos itens citados? Sem nenhum radical não há o que conferir: recusa. */
+  const covered = (...texts: string[]): boolean => {
+    const have = allWords(cited.flat().join(' '));
+    const need = texts.flatMap(contentWords);
+    return need.length > 0 && need.every((w) => have.has(w));
+  };
+  /** Item de formação ou experiência sem fim, com fim no futuro ou ilegível: não sustenta "completo". */
+  const ongoing = (id: string): boolean => {
+    const item = profile.education.find((e) => e.id === id) ?? profile.experiences.find((e) => e.id === id);
+    if (!item) return false;
+    const end = monthIndex(item.end, 'end');
+    return item.end.trim() === '' || end === null || end > nowIndex(now);
   };
   const negated = NEGATION.test(foldText(questionText));
 
@@ -172,14 +193,10 @@ export function verifyProfileFact(
     case 'number': {
       if (!/^\d{1,3}$/.test(answer)) return fail('a resposta não é um número inteiro simples');
       const value = Number(answer);
-      if (ABOUT_YEARS.test(questionText)) {
-        if (experienceIds.length === 0) return fail('nenhuma experiência foi citada');
-        const covered = yearsCovered(profile, experienceIds, now);
-        if (value > covered) return fail(`${value} anos é mais que os ${covered} que as experiências citadas cobrem`);
-      } else {
-        if (basis.length === 0) return fail('nenhum item foi citado');
-        if (!allowedNumbers(cited.flat()).has(String(value))) return fail(`o número ${value} não está nos itens citados`);
-      }
+      if (!YEARS_OF_EXPERIENCE.test(foldText(questionText))) return fail('só pergunta de anos de experiência recebe número');
+      if (experienceIds.length === 0) return fail('nenhuma experiência foi citada');
+      const years = yearsCovered(profile, experienceIds, now);
+      if (value > years) return fail(`${value} anos é mais que os ${years} que as experiências citadas cobrem`);
       const subject = value > 0 ? unknownSubjectWhy() : null;
       return subject ?? { ok: true, value: String(value) };
     }
@@ -193,7 +210,8 @@ export function verifyProfileFact(
       if (subject) return subject;
       const claim = unsupportedClaim([questionText]);
       if (claim !== null) return fail(claim);
-      return related() ? { ok: true, value: true } : fail('nenhum item citado trata do assunto da pergunta');
+      if (COMPLETION.test(foldText(questionText)) && basis.some(ongoing)) return fail('um item em andamento não sustenta "completo"');
+      return covered(questionText) ? { ok: true, value: true } : fail('os itens citados não cobrem tudo o que a pergunta afirma');
     }
     case 'select': {
       const matches = question.options.filter((o) => optionKey(o) === optionKey(answer));
@@ -207,12 +225,12 @@ export function verifyProfileFact(
       if (subject) return subject;
       const claim = unsupportedClaim([questionText, option]);
       if (claim !== null) return fail(claim);
-      if (YES_OPTION.test(key) || yearClaims(option).length > 0) {
-        return related() ? { ok: true, value: option } : fail('nenhum item citado trata do assunto da pergunta');
-      }
-      const words = notGeneric(contentStems(option));
-      const have = citedStems();
-      return words.length > 0 && words.every((w) => have.has(w)) ? { ok: true, value: option } : fail('a opção não está nos itens citados');
+      if (COMPLETION.test(foldText(`${questionText} ${option}`)) && basis.some(ongoing)) return fail('um item em andamento não sustenta "completo"');
+      // "Sim" e faixa de anos (os anos já foram conferidos acima) não trazem palavra própria: só a pergunta é conferida.
+      const needsOptionWords = !YES_OPTION.test(key) && !/\d/.test(option);
+      return covered(questionText) && (!needsOptionWords || covered(option))
+        ? { ok: true, value: option }
+        : fail('os itens citados não cobrem tudo o que a pergunta e a opção afirmam');
     }
     case 'text':
     case 'longtext': {
@@ -231,38 +249,37 @@ export function verifyProfileFact(
   }
 }
 
-/** Primeiras palavras comuns de frase (pt/en) que não são nome próprio, além dos verbos já reconhecidos pela terminação. */
-const OPENERS = new Set(
-  (
-    'sou tenho tive fui estou quero gosto acredito busco atuo atuei uso utilizo aplico domino conheco construi desenvolvi ' +
-    'reduzi lidero minha meu minhas meus me nao sim alem tambem porque pois entao assim hoje atualmente desde durante ' +
-    'admiro vejo penso considero obrigado obrigada ola prezados cordialmente atenciosamente i my we our in as at on after ' +
-    'during currently also because since this that there however while having being thanks hello dear'
-  ).split(' '),
-);
-/** Terminações de verbo (1ª pessoa do passado, gerúndio...) e advérbio: palavra de frase, não nome. */
-const PROSE_ENDING = /(ei|ou|ava|avam|amos|emos|ndo|mente)$/;
+/** Início de frase: começo do texto, depois de . ! ? : ou de quebra de linha, pulando marcadores de lista ("-", "•", "*", "1."). */
+const SENTENCE_START = /(?:^|[.!?:]\s+|\n)\s*(?:(?:[-•*–—]|\d+[.)])\s*)*["'“«(]*(\p{Lu}[\p{L}\p{N}+#.&'-]*)/gu;
+const WORD = /[\p{L}\p{N}][\p{L}\p{N}+#.&'-]*/gu;
+const trimWord = (w: string) => w.replace(/'s$/i, '').replace(/[.'&-]+$/, '');
 
-/** Palavras que aparecem com inicial minúscula no texto: vocabulário comum, não nome próprio. */
-function lowercaseWords(text: string): Set<string> {
-  const out = new Set<string>();
-  for (const m of text.matchAll(/\p{Ll}[\p{L}\p{N}]*/gu)) {
-    if (m.index > 0 && /[\p{L}\p{N}]/u.test(text[m.index - 1])) continue; // meio de palavra
-    out.add(foldText(m[0]));
-  }
-  return out;
+/** Forma de tecnologia ou sigla: dígito, + # &, ponto interno, CamelCase ou 2+ maiúsculas ("Vue.js", "C#", "AWS", "GraphQL"). */
+function technicalShape(word: string): boolean {
+  const letters = word.replace(/[^\p{L}]/gu, '');
+  if (!letters) return false;
+  if (/\p{N}/u.test(word) || /[+#&]/.test(word) || /[\p{L}\p{N}]\.[\p{L}\p{N}]/u.test(word) || /\p{Ll}\p{Lu}/u.test(word)) return true;
+  return letters.length >= 2 && /^\p{Lu}+s?$/u.test(letters);
 }
 
+/** Variantes de grafia de uma palavra dobrada: "vue.js" também vale "vue" e "vuejs". */
+const spellings = (folded: string): string[] => [folded, folded.replace(/\.?js$/, ''), folded.replace(/[.'-]/g, '')];
+
 /**
- * As violações de um texto de resposta aberta contra o perfil e a vaga; vazio = pode enviar.
+ * As violações de um texto de resposta aberta contra o perfil e a vaga; vazio = pode enviar. A descrição da vaga NÃO
+ * abona nada: o que o candidato diz saber vem só do perfil, do nome da empresa e do título da vaga.
  * - `new_number`: número que não está no perfil (nem no nome da empresa ou no título da vaga; os números da descrição NÃO
- *   valem: "mais de 10 anos" da vaga não é um fato do candidato), ou "N anos" acima do que todas as experiências cobrem;
- * - `novel_term`: termo ou nome próprio que não está no perfil, na empresa nem no título da vaga. Da descrição da vaga
- *   só palavra comum capitalizada vale (ela aparece também com minúscula na descrição e não consta das listas de nomes
- *   conhecidos): tecnologia, sigla ou nome que a vaga pede não vira experiência do candidato. Palavra capitalizada que
- *   abre frase também é conferida, salvo palavras de abertura comuns e verbos reconhecidos pela terminação (heurística:
- *   na dúvida recusa);
+ *   valem), ou "N anos" acima do que todas as experiências cobrem;
+ * - `novel_term`:
+ *   1. nome, sigla ou termo técnico no meio de uma frase que o perfil não traz (regra de `novelTerms`);
+ *   2. palavra capitalizada que abre frase (inclusive depois de marcador de lista) que o perfil não traz E que consta da
+ *      lista de nomes conhecidos, tem forma de tecnologia/sigla ou aparece na descrição da vaga em qualquer grafia;
+ *      as demais são prosa ("Gostaria", "Desejo");
+ *   3. qualquer palavra, em qualquer posição e caixa, que a descrição da vaga traz como nome conhecido ou com forma de
+ *      tecnologia/sigla e que o perfil não traz;
  * - `limit`: texto vazio, acima de `maxLength` ou com caractere de controle.
+ * Limites conhecidos: tecnologia em minúsculas que não está em lista nem tem forma técnica; nome próprio simples que abre
+ * frase e não está nas listas nem na descrição.
  */
 export function verifyOpenAnswer(
   profile: CandidateProfile,
@@ -284,32 +301,47 @@ export function verifyOpenAnswer(
     if (!allowed.has(id)) violations.push({ code: 'new_number', path: 'text', detail: id, message: `o número "${id}" não está no perfil` });
   }
   const claims = yearClaims(text);
-  const covered = yearsCovered(profile, profile.experiences.map((e) => e.id), now);
-  if (claims.length > 0 && Math.max(...claims) > covered) {
+  const years = yearsCovered(profile, profile.experiences.map((e) => e.id), now);
+  if (claims.length > 0 && Math.max(...claims) > years) {
     violations.push({
       code: 'new_number', path: 'text', detail: `${Math.max(...claims)} anos`,
-      message: `o texto fala em ${Math.max(...claims)} anos e as experiências do perfil cobrem ${covered}`,
+      message: `o texto fala em ${Math.max(...claims)} anos e as experiências do perfil cobrem ${years}`,
     });
   }
 
   const index = buildTermIndex([...profileTexts(profile), job.company, job.title]);
-  const jobWords = lowercaseWords(job.description.slice(0, JOB_TEXT_CHARS));
-  const vouchedByJob = (term: string) => {
-    const folded = foldText(term);
-    return /^\p{Lu}\p{Ll}+$/u.test(term) && !isListedName(folded) && jobWords.has(folded);
-  };
+  const description = job.description.slice(0, JOB_TEXT_CHARS);
   const reported = new Set<string>();
   const report = (term: string) => {
-    reported.add(foldText(term));
+    const folded = foldText(term);
+    if (reported.has(folded)) return;
+    reported.add(folded);
     violations.push({ code: 'novel_term', path: 'text', detail: term, message: `o texto cita "${term}", que não está no perfil` });
   };
-  for (const term of novelTerms(text, index, { mode: 'full' })) if (!vouchedByJob(term)) report(term);
-  for (const m of text.trim().matchAll(/(?:^|[.!?]\s+|\n\s*)["'“«(]*(\p{Lu}\p{L}*)/gu)) {
-    const term = m[1];
-    const folded = foldText(term);
-    if (folded.length < 3 || reported.has(folded) || STOPWORDS.has(folded) || OPENERS.has(folded) || PROSE_ENDING.test(folded)) continue;
-    if (isKnownTerm(folded, index) || vouchedByJob(term)) continue;
-    report(term);
+
+  // Palavras que a descrição da vaga traz como nome conhecido ou com forma de tecnologia, e todas as suas palavras.
+  const jobWords = new Set<string>();
+  const jobSpecial = new Set<string>();
+  for (const m of description.matchAll(WORD)) {
+    const word = trimWord(m[0]);
+    const folded = foldText(word);
+    if (!folded || /^[\d.,'-]+$/.test(folded)) continue;
+    spellings(folded).forEach((s) => jobWords.add(s));
+    if (!STOPWORDS.has(folded) && (isListedName(folded) || technicalShape(word))) spellings(folded).forEach((s) => jobSpecial.add(s));
+  }
+
+  for (const term of novelTerms(text, index, { mode: 'full' })) report(term);
+  for (const m of text.trim().matchAll(SENTENCE_START)) {
+    const word = trimWord(m[1]);
+    const folded = foldText(word);
+    if (folded.length < 2 || STOPWORDS.has(folded) || isKnownTerm(folded, index)) continue;
+    if (isListedName(folded) || technicalShape(word) || spellings(folded).some((s) => jobWords.has(s))) report(word);
+  }
+  for (const m of text.matchAll(WORD)) {
+    const word = trimWord(m[0]);
+    const folded = foldText(word);
+    if (!folded || /^[\d.,'-]+$/.test(folded) || STOPWORDS.has(folded) || isKnownTerm(folded, index)) continue;
+    if (spellings(folded).some((s) => jobSpecial.has(s))) report(word);
   }
   return violations;
 }
