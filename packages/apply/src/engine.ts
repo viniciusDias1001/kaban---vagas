@@ -165,7 +165,8 @@ export async function runApplication(target: ApplyTarget, deps: EngineDeps): Pro
         const gate = await site.humanGate(page);
         if (gate) {
           await waitGate(gate);
-          if (!readSinceOpen) needOpen = true;
+          // Only a login moves the page elsewhere; after a captcha or a code the form is still the one on screen.
+          if (!readSinceOpen && gate === 'login') needOpen = true;
           continue;
         }
         const read = await site.readStep(page);
@@ -196,7 +197,8 @@ export async function runApplication(target: ApplyTarget, deps: EngineDeps): Pro
         const gate = await gateOnScreen();
         if (gate) {
           await waitGate(gate);
-          if (!readSinceOpen) needOpen = true;
+          // Only a login moves the page elsewhere; after a captcha or a code the form is still the one on screen.
+          if (!readSinceOpen && gate === 'login') needOpen = true;
           continue;
         }
         await photo('blocked');

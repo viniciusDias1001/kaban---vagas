@@ -315,6 +315,22 @@ describe('runApplication', () => {
     expect(order.lastIndexOf('site:open')).toBeLessThan(order.indexOf('site:readStep'));
   });
 
+  it('continues on the page, without reopening, after a captcha or a code solved right after open', async () => {
+    for (const gate of ['captcha', 'verification_code'] as const) {
+      order = [];
+      // Como uma caixa de captcha que aparece a cada carregamento da página: some quando resolvida, volta a cada open.
+      let solved = false;
+      const res = await runApplication(target, deps({
+        open: async () => { solved = false; return { kind: 'form' }; },
+        humanGate: async () => (solved ? null : gate),
+        waitHuman: async () => { solved = true; return 'solved'; },
+      }));
+      expect(res.status).toBe('submitted');
+      expect(count('site:open')).toBe(1);
+      expect(count(`wait:${gate}`)).toBe(1);
+    }
+  });
+
   it('reads the step again, without reopening, after a gate solved between steps', async () => {
     let calls = 0;
     const res = await runApplication(target, deps({
