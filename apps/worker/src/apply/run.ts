@@ -34,7 +34,9 @@ const sleep = (ms: number) => new Promise<'grace'>((r) => setTimeout(() => r('gr
 const ABANDONED_DETAIL =
   'o envio foi clicado e o site não respondeu a tempo; confira no site se a candidatura chegou';
 
-type Raced = { kind: 'done'; result: EngineResult } | { kind: 'error'; error: unknown } | { kind: 'timeout' };
+const CLICK_ERROR_DETAIL = 'o envio foi clicado e o resultado não pôde ser gravado; confira no site se a candidatura chegou';
+
+type Raced ={ kind: 'done'; result: EngineResult } | { kind: 'error'; error: unknown } | { kind: 'timeout' };
 
 /**
  * Uma candidatura, do `preparing` (já reivindicado) ao desfecho gravado: prepara, grava o formulário aberto, roda o motor
@@ -54,9 +56,15 @@ export async function runOne(c: RunContext, row: ApplicationRow): Promise<void> 
     const result = await engine(c, row, ready, ai, state, controller);
     if (result) await recordResult(c.db, row, ready.site.id, result, c.now());
   } catch (e) {
-    if (state.phase === 'click' || state.phase === 'abandoned') {
-      // O clique aconteceu ou pode ter acontecido: nunca volta à fila. A linha fica em `submitting` e a recuperação
-      // do próximo início a manda para o dono confirmar no site.
+    if (state.phase === 'click') {
+      // O clique aconteceu ou pode ter acontecido: nunca volta à fila. Vai ao dono confirmar no site já (sem esperar o
+      // próximo início); se nem isso der para gravar, a linha fica em `submitting` e a recuperação faz o mesmo.
+      c.log(`candidatura ${row.id}: erro depois do envio, ficou para conferir: ${errorText(e)}`);
+      await stopForOwner(
+        c.db, row, 'confirm_submission', `${CLICK_ERROR_DETAIL} (erro: ${errorText(e)})`, c.now(), {}, { keepOnCancel: true },
+      ).catch((err) => c.log(errorText(err)));
+    } else if (state.phase === 'abandoned') {
+      // A fila já gravou `confirm_submission` ao abandonar a execução.
       c.log(`candidatura ${row.id}: erro depois do envio, ficou para conferir: ${errorText(e)}`);
     } else if (e instanceof ApplyBudgetError) {
       const zone = await ai.budgetTimeZone().catch(() => c.cfg.timeZone);

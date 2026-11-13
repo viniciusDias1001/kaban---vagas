@@ -6,7 +6,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { desc, eq } from 'drizzle-orm';
 import { createFakeProvider, parseOutput, readBlock, readTask, type AiConfig, type AiProvider } from '@kv/ai';
 import {
-  applications, applicationForJob, applyCommands, applyCountsSince, applyWorkerState, jobAi, closeDb, createApplication, enqueueApplyCommand, jobEvents, jobs,
+  applications, applicationForJob, applyCommands, applyCountsSince, applyWorkerState, jobAi, lockApplication, closeDb, createApplication, enqueueApplyCommand, jobEvents, jobs,
   nextApplyCommand, nextQueuedApplication, recordUsage, requestCancel, retryApplication, saveApplyAnswer, siteState, transitionApplication,
   updateSiteState, usageByLayer,
   type Db,
@@ -23,7 +23,7 @@ import {
 // Para o teste da reivindicação: um gancho entre a leitura da próxima candidatura e a reivindicação dela.
 vi.mock('@kv/db', async (importOriginal) => {
   const mod = await importOriginal<typeof import('@kv/db')>();
-  return { ...mod, nextQueuedApplication: vi.fn(mod.nextQueuedApplication) };
+  return { ...mod, nextQueuedApplication: vi.fn(mod.nextQueuedApplication), lockApplication: vi.fn(mod.lockApplication) };
 });
 
 const TZ = 'America/Sao_Paulo';
@@ -691,6 +691,21 @@ describe('errors', () => {
     await runUntilIdle(q);
     expect(await applicationForJob(db, jobId)).toMatchObject({ status: 'failed', attempts: 3, detail: 'net::ERR_CONNECTION_RESET' });
     expect((await siteState(db, 'fake')).consecutiveFailures).toBe(0);
+  });
+
+  it('sends to the owner to confirm, at once, an application whose result could not be recorded after the click', async () => {
+    site.variants.form = {
+      submit: async () => {
+        // O banco falha na gravação do resultado, logo depois do clique.
+        vi.mocked(lockApplication).mockRejectedValueOnce(new Error('conexão perdida'));
+        return { confirmation: 'Recebida' };
+      },
+    };
+    const { id: jobId } = await candidate();
+    await runUntilIdle(queue({ mode: 'real' }));
+    expect(await applicationForJob(db, jobId)).toMatchObject({ status: 'needs_human', reason: 'confirm_submission' });
+    expect((await jobRow(jobId)).needsHuman).toBe(true);
+    expect(site.calls.filter((c) => c === 'submit')).toHaveLength(1);
   });
 
   it('aborts work that runs past the time limit, discards the form and counts a transient error', async () => {
