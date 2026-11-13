@@ -82,21 +82,22 @@ export const DEFAULT_VARIANTS: Record<string, VariantScript> = {
   refused: { submit: async () => { throw new SubmitRejectedError('recusado'); } },
 };
 
-/** Site `fake` de mentira: atende vagas da fonte `fake` e registra cada chamada em `calls`. */
-export function createRecordingSite(opts: { needsLogin?: boolean } = {}): FakeSite {
+/** Site de mentira (`fake`, ou o id dado): atende vagas da fonte de mesmo nome e registra cada chamada em `calls`. */
+export function createRecordingSite(opts: { needsLogin?: boolean; id?: ApplySite['id'] } = {}): FakeSite {
+  const id = opts.id ?? 'fake';
   const calls: string[] = [];
   let current = 'form';
   const script = (): VariantScript => site.variants[current] ?? {};
   const site: FakeSite = {
-    id: 'fake',
+    id,
     needsLogin: opts.needsLogin ?? false,
     ...(opts.needsLogin ? { loginUrl: 'https://www.fake.test/entrar' } : {}),
     calls,
     variants: { ...DEFAULT_VARIANTS },
     sessions: 'logged_in',
     match(job) {
-      if (job.source !== 'fake') return null;
-      return { site: 'fake', url: job.url, ref: { variant: variantOf(job.url) } };
+      if (job.source !== id) return null;
+      return { site: id, url: job.url, ref: { variant: variantOf(job.url) } };
     },
     async sessionState() {
       calls.push('sessionState');
