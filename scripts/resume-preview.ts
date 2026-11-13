@@ -14,10 +14,10 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { resolveTailored } from '../packages/ai/src/index';
+import { fullDraftOf, resolveTailored } from '../packages/ai/src/index';
 import { closeDb, createDb, profileFor } from '../packages/db/src/index';
 import { PREVIEW_FILES, ResumePdfError, previewDir, renderResumePdf } from '../packages/resume/src/index';
-import { RESUME_LANGS, type TailoredDraft } from '../packages/shared/src/index';
+import { RESUME_LANGS } from '../packages/shared/src/index';
 
 const args = process.argv.slice(2).filter((a) => a !== '--');
 const outIndex = args.indexOf('--out');
@@ -52,18 +52,8 @@ try {
     const row = await profileFor(db, lang);
     if (!row) continue;
     const profile = row.data;
-    // Rascunho com todos os itens do perfil, tal como estão.
-    const draft: TailoredDraft = {
-      summary: profile.summary,
-      experiences: profile.experiences.map((e) => ({ id: e.id, achievements: e.achievements.map((a) => ({ sourceId: a.id, text: a.text })) })),
-      educationIds: profile.education.map((e) => e.id),
-      skillIds: profile.skills.map((k) => k.id),
-      languageIds: profile.languages.map((l) => l.id),
-      certificationIds: profile.certifications.map((c) => c.id),
-      linkIds: profile.links.map((l) => l.id),
-    };
     try {
-      const { resume } = resolveTailored(draft, profile, lang);
+      const { resume } = resolveTailored(fullDraftOf(profile), profile, lang);
       const file = join(dir, PREVIEW_FILES[lang]);
       await writeFile(file, await renderResumePdf(resume));
       console.log(file);

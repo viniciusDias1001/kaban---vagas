@@ -1,15 +1,16 @@
 import { eq, inArray, sql } from 'drizzle-orm';
 import {
-  AiError, analyzeJob, dayStartMs, draftTailored, estimateAbortedUsage, estimateCostUsd, estimateInterruptedUsage, extractProfile,
-  isTimeout, resolveTailored, scoreJobs, tailoredLangFor, toCorrections, translateProfile, violationCodes, type AiConfig,
-  type AiProvider, type AiTier, type AiUsage, type TailoredCorrection,
+  AiError, analyzeJob, dayStartMs, draftTailored, estimateCostUsd, estimateInterruptedUsage, extractProfile,
+  resolveTailored, scoreJobs, tailoredLangFor, toCorrections, translateProfile, violationCodes, type AiConfig,
+  type AiProvider, type TailoredCorrection,
 } from '@kv/ai';
 import { MAX_DESCRIPTION_CHARS, type DescriptionFetcher } from '@kv/connectors';
 import {
   ESTIMATED_MODEL_SUFFIX, aiSpentSince, aiTasks, baseProfile, jobAi, jobs, profileFor, recordUsage, resumes, saveProfile,
   tailoredResumes, type AiTaskRow, type CandidateProfileRow, type Db,
 } from '@kv/db';
-import { otherLang, type AiLayer, type JobAnalysis } from '@kv/shared';
+import { otherLang, type JobAnalysis } from '@kv/shared';
+import { createBilling } from './billing';
 import type { UnitRunner } from './queue';
 import { DraftBlockedError, ProfileChangedError, TaskCancelledError } from './task-errors';
 
@@ -51,7 +52,7 @@ function clipDescription(text: string): string {
 }
 
 /** Palavras-chave da análise da camada 2 (as que a vaga pede), para o verificador da camada 3. */
-const keywordsOf = (ai: { tier2State: 'ok' | 'error' | null; analysis: JobAnalysis | null } | undefined): string[] =>
+export const keywordsOf = (ai: { tier2State: 'ok' | 'error' | null; analysis: JobAnalysis | null } | undefined): string[] =>
   ai?.tier2State === 'ok' && ai.analysis ? [...ai.analysis.keywordsMissing, ...ai.analysis.keywordsPresent] : [];
 
 /**
@@ -82,56 +83,7 @@ export function createExecutor(deps: ExecutorDeps): UnitRunner {
 
 function bindExecutor(deps: ExecutorDeps, rawProvider: AiProvider, config: AiConfig): UnitRunner {
   const { db, fetchDescription, now = Date.now, log = () => {}, maxAttempts = 3 } = deps;
-
-  /** O provedor em vigor, com a estimativa de uso anexada ao erro de uma chamada abortada por tempo. */
-  const provider: AiProvider = {
-    id: rawProvider.id,
-    async generate(req) {
-      try {
-        return await rawProvider.generate(req);
-      } catch (e) {
-        if (e instanceof AiError && !e.usage && (isTimeout(e) || req.signal?.aborted)) {
-          e.usage = estimateAbortedUsage(req);
-          e.estimated = true;
-        }
-        throw e;
-      }
-    },
-  };
-
-  async function charge(layer: AiLayer, tier: AiTier, res: { usage: AiUsage; model: string }, estimated = false): Promise<void> {
-    await recordUsage(db, {
-      provider: provider.id,
-      model: estimated ? `${res.model}${ESTIMATED_MODEL_SUFFIX}` : res.model,
-      layer,
-      inputTokens: res.usage.inputTokens,
-      outputTokens: res.usage.outputTokens,
-      costUsd: estimateCostUsd(res.model, res.usage, config.models[tier]),
-      createdAt: now(),
-    });
-  }
-
-  /**
-   * Faz a chamada ao provedor e registra o uso, venha a resposta ou um erro que a carregue. Se gravar o uso
-   * falhar depois de um erro, o erro do provedor é o que sobe (o do banco vai para o log).
-   */
-  async function billed<T extends { usage: AiUsage; model: string }>(layer: AiLayer, tier: AiTier, call: () => Promise<T>): Promise<T> {
-    let res: T;
-    try {
-      res = await call();
-    } catch (e) {
-      if (e instanceof AiError && e.usage) {
-        try {
-          await charge(layer, tier, { usage: e.usage, model: e.model ?? config.models[tier] }, e.estimated === true);
-        } catch (dbError) {
-          log(`IA: não consegui registrar o uso de uma chamada que falhou (${layer}): ${errorText(dbError)}`);
-        }
-      }
-      throw e;
-    }
-    await charge(layer, tier, res);
-    return res;
-  }
+  const { provider, billed } = createBilling({ db, now, log }, rawProvider, config);
 
   /**
    * Grava o resultado de uma vaga. Se a vaga foi apagada enquanto a chamada ao modelo estava em curso, o

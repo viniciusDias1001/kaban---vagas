@@ -3,7 +3,7 @@ import { draftOf, TailoredDraftSchema, type CandidateProfile, type TailoredDraft
 import { createFakeProvider } from './fake';
 import { draftTailored } from './tasks';
 import { LAYOUT_PROFILE, legacyProfile, SAMPLE_JOB, SAMPLE_PROFILE } from './testing';
-import { describeViolations, isStructural, numbersIn, resolveTailored } from './verify';
+import { describeViolations, fullDraftOf, isStructural, numbersIn, resolveTailored } from './verify';
 
 /** Rascunho honesto: tudo que está no perfil, com uma realização reescrita sem mudar os números. */
 const honest = (): TailoredDraft => ({
@@ -181,5 +181,23 @@ describe('layout fields', () => {
       experiences: LAYOUT_PROFILE.experiences.map((e) => ({ ...e, note: '' })) };
     const blocked = resolveTailored(draft, bare, 'pt-BR').violations.map((v) => `${v.code}:${v.detail}`).join(' ');
     for (const expected of [/new_number:18/, /novel_term:s[eê]nior/i, /novel_term:kubernetes/i]) expect(blocked).toMatch(expected);
+  });
+});
+
+describe('fullDraftOf', () => {
+  it('references every item of the profile and resolves to the full résumé, with headline, groups, sections and notes', () => {
+    const { resume, violations } = resolveTailored(fullDraftOf(LAYOUT_PROFILE), LAYOUT_PROFILE, 'pt-BR');
+    expect(violations).toEqual([]);
+    expect(resume.headline).toBe(LAYOUT_PROFILE.headline);
+    expect(resume.summary).toBe(LAYOUT_PROFILE.summary);
+    expect(resume.experiences.map((e) => [e.id, e.section, e.note])).toEqual(LAYOUT_PROFILE.experiences.map((e) => [e.id, e.section, e.note]));
+    expect(resume.experiences.flatMap((e) => e.achievements.map((a) => a.text))).toEqual(
+      LAYOUT_PROFILE.experiences.flatMap((e) => e.achievements.map((a) => a.text)),
+    );
+    expect(resume.skills.map((k) => [k.id, k.group])).toEqual(LAYOUT_PROFILE.skills.map((k) => [k.id, k.group]));
+    expect(resume.education).toHaveLength(LAYOUT_PROFILE.education.length);
+    expect(resume.languages).toHaveLength(LAYOUT_PROFILE.languages.length);
+    expect(resume.certifications).toHaveLength(LAYOUT_PROFILE.certifications.length);
+    expect(resume.links).toHaveLength(LAYOUT_PROFILE.links.length);
   });
 });
