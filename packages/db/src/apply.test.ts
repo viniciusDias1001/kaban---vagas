@@ -7,7 +7,7 @@ import {
   waitingApplication, listApplicationEvents, applicationForJob, applyCandidates, applyCountsSince, companyFormsSince, createApplication,
   deleteApplyData, enqueueApplyCommand, finishApplyCommand, listApplications, nextApplyCommand, nextQueuedApplication,
   recoverApplications, recoverApplyCommands, requestCancel, siteState, toApplicationDto, transitionApplication, updateSiteState,
-  settleAppliedByOwner, lockApplicationWithJob, applyWorkerState, saveApplyWorkerState,
+  settleAppliedByOwner, lockApplicationWithJob, applyWorkerState, saveApplyWorkerState, applicationFilterCounts, listJobItems,
 } from './apply';
 import { deleteAllAiData } from './ai';
 import { applications, applyAnswers, applyCommands, candidateProfiles, jobAi, jobs, settings } from './schema';
@@ -152,6 +152,63 @@ describe('queue reads', () => {
     expect(dto).toMatchObject({ id: b.id, hasResume: true, resumeFileName: 'cv.pdf' });
     expect(JSON.stringify(dto)).not.toContain('resumePdf');
     expect(dto.events).toHaveLength(2);
+  });
+});
+
+describe('lists, counts and the board', () => {
+  /** `n` candidaturas no estado dado, criadas em lote (vaga e candidatura), com `createdAt` crescente a partir de `from`. */
+  async function bulk(n: number, status: 'skipped' | 'dry_run_ready' | 'queued' | 'cancelled', from: number) {
+    const base = seq;
+    seq += n;
+    const rows = await db.insert(jobs).values(Array.from({ length: n }, (_, i) => {
+      const url = `https://example.com/bulk/${base + i}`;
+      return {
+        source: 'gupy', externalId: url, url, title: 'Dev', company: 'ACME', location: 'Remoto', country: 'BR' as const,
+        remote: true, stacks: [], description: '', discoveredAt: 1, dedupHash: url, position: base + i,
+      };
+    })).returning({ id: jobs.id });
+    return db.insert(applications).values(rows.map((r, i) => ({
+      jobId: r.id, site: 'fake' as const, status, trigger: 'auto' as const, mode: 'real' as const, createdAt: from + i,
+    }))).returning({ id: applications.id, jobId: applications.jobId });
+  }
+
+  it('counts every filter over all rows and lists the 200 newest of one filter', async () => {
+    const old = await bulk(205, 'cancelled', 1000);
+    await bulk(3, 'skipped', 5000);
+    await bulk(2, 'dry_run_ready', 6000);
+    const running = await create();
+    await transitionApplication(db, running.id, { status: 'filling' });
+    expect(await applicationFilterCounts(db)).toEqual({ active: 1, needs_human: 0, rehearsals: 2, submitted: 0, skipped: 208 });
+    const skipped = await listApplications(db, { filter: 'skipped' });
+    expect(skipped).toHaveLength(200);
+    expect(skipped.every((r) => ['skipped', 'cancelled', 'failed'].includes(r.status))).toBe(true);
+    expect(skipped.map((r) => r.id)).not.toContain(old[0].id); // os mais antigos ficam de fora
+    expect(await listApplications(db, { filter: 'rehearsals' })).toHaveLength(2);
+    expect((await listApplications(db, { filter: 'active' })).map((r) => r.id)).toEqual([running.id]);
+  });
+
+  it('sends exactly the listed rows that are still rehearsals, and counts the rest as skipped', async () => {
+    const [a, b, c] = await bulk(3, 'dry_run_ready', 1000);
+    const [d] = await bulk(1, 'queued', 1000);
+    const [applied] = await bulk(1, 'dry_run_ready', 1000);
+    await db.update(jobs).set({ column: 'aplicada', appliedBy: 'humano' }).where(eq(jobs.id, applied.jobId));
+    expect(await sendAllRehearsals(db, [a.id, b.id, d.id, applied.id, 999_999], 2000)).toEqual({ queued: 2, skipped: 3 });
+    expect(await applicationForJob(db, a.jobId)).toMatchObject({ status: 'queued', mode: 'real' });
+    expect((await applicationForJob(db, c.jobId))!.status).toBe('dry_run_ready');
+    expect((await applicationForJob(db, applied.jobId))!.status).toBe('dry_run_ready');
+    expect(await sendAllRehearsals(db, [], 2000)).toEqual({ queued: 0, skipped: 0 });
+  });
+
+  it('lists the board with each job application status and without the heavy columns', async () => {
+    const plain = await seedJob();
+    const { job, id } = await create();
+    await transitionApplication(db, id, { status: 'needs_human', reason: 'question' });
+    const items = await listJobItems(db);
+    expect(items.map((i) => [i.id, i.applicationStatus])).toEqual([[plain.id, null], [job.id, 'needs_human']]);
+    expect(items[0]).not.toHaveProperty('description');
+    expect(items[0]).not.toHaveProperty('dedupHash');
+    expect(items[0]).toMatchObject({ title: 'Dev', column: 'descobertas', appliedBy: null });
+    expect((await listJobItems(db, eq(jobs.id, job.id))).map((i) => i.id)).toEqual([job.id]);
   });
 });
 
@@ -456,11 +513,11 @@ describe('sendRehearsal / sendAllRehearsals', () => {
       await transitionApplication(db, r.id, { status: 'dry_run_ready', set: { answers: [answer('q', String(r.id))], mode: 'dry_run' } });
     }
     await transitionApplication(db, other.id, { status: 'failed' });
-    expect(await sendAllRehearsals(db)).toBe(2);
+    expect(await sendAllRehearsals(db, [one.id, two.id, other.id])).toEqual({ queued: 2, skipped: 1 });
     expect((await applicationForJob(db, one.job.id))!.approvedAnswers).toEqual([answer('q', String(one.id))]);
     expect(await applicationForJob(db, two.job.id)).toMatchObject({ status: 'queued', mode: 'real' });
     expect(await applicationForJob(db, other.job.id)).toMatchObject({ status: 'failed', approvedAnswers: [] });
-    expect(await sendAllRehearsals(db)).toBe(0);
+    expect(await sendAllRehearsals(db, [one.id, two.id])).toEqual({ queued: 0, skipped: 2 });
   });
 });
 
@@ -586,7 +643,7 @@ describe('a stale cancel flag never follows a row back to the queue', () => {
     expect(await retryApplication(db, retried.id)).toBe('queued');
     expect(await sendRehearsal(db, rehearsal.id)).toBe('queued');
     await transitionApplication(db, allRehearsals.id, { status: 'dry_run_ready', set: { answers: [answer] } });
-    expect(await sendAllRehearsals(db)).toBe(1);
+    expect(await sendAllRehearsals(db, [allRehearsals.id])).toEqual({ queued: 1, skipped: 0 });
     const answeredRow = (await applicationForJob(db, answered.job.id))!;
     expect(await settlePendingQuestions(db, answeredRow, [])).toBe(true);
     expect(await requeueQuestionWaits(db, asked.id)).toEqual([waiting.id]);

@@ -3,6 +3,7 @@ import {
   ACTIVE_APPLICATION_STATUSES, APPLY_DEFAULTS, APPLY_TIMING, applyAvailability, isActiveApplication,
   normalizeQuestionText, bankBoolean, bankList, bankText, SHOT_KINDS, PendingAnswersBodySchema, ApplyAnswerInputSchema, type AnswerValue, type ApplicationStatus,
   type PendingQuestion, COLUMNS, isAppliedOrLater, type CannotApplyReason, type JobApplicationDto,
+  APPLICATION_FILTERS, APPLICATION_FILTER_STATUSES, APPLICATION_STATUSES, applicationFilterOf, type ApplicationFilter,
 } from './index';
 
 describe('apply constants', () => {
@@ -40,6 +41,22 @@ describe('apply constants', () => {
     expect(APPLY_DEFAULTS.minScore).toBe(70);
     expect(APPLY_DEFAULTS.dailyCaps).toMatchObject({ linkedin: 10, greenhouse: 15, lever: 15, total: 30, linkedinViews: 30 });
     expect(APPLY_TIMING.humanWaitMs).toBe(600_000);
+  });
+});
+
+describe('application filters', () => {
+  it('puts every status in exactly one filter', () => {
+    expect(APPLICATION_FILTERS).toEqual(['active', 'needs_human', 'rehearsals', 'submitted', 'skipped']);
+    const of = Object.fromEntries(APPLICATION_STATUSES.map((s) => [s, applicationFilterOf(s)]));
+    expect(of).toEqual({
+      queued: 'active', preparing: 'active', filling: 'active', waiting_human: 'active', submitting: 'active',
+      needs_human: 'needs_human', dry_run_ready: 'rehearsals', submitted: 'submitted',
+      skipped: 'skipped', failed: 'skipped', cancelled: 'skipped',
+    });
+    for (const f of APPLICATION_FILTERS) {
+      expect(APPLICATION_FILTER_STATUSES[f]).toEqual(APPLICATION_STATUSES.filter((s) => applicationFilterOf(s) === f));
+    }
+    expectTypeOf(applicationFilterOf).returns.toEqualTypeOf<ApplicationFilter>();
   });
 });
 

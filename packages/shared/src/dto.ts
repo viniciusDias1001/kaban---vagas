@@ -1,3 +1,4 @@
+import type { ApplicationStatus } from './apply-constants';
 import type { Column, Level } from './constants';
 import type { ProfileInput } from './schemas';
 
@@ -28,6 +29,8 @@ export interface JobDto {
   notes: string;
   /** Quando a descrição foi buscada sob demanda; nulo se veio na busca ou nunca foi buscada. */
   descriptionFetchedAt: number | null;
+  /** O estado da candidatura automática da vaga; nulo sem candidatura. */
+  applicationStatus: ApplicationStatus | null;
 }
 
 /** Item de `GET /jobs` (o quadro): a vaga sem a descrição, que só vem em `GET /jobs/:id`. */

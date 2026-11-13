@@ -104,6 +104,23 @@ export function isActiveApplication(status: ApplicationStatus): boolean {
   return (ACTIVE_APPLICATION_STATUSES as readonly string[]).includes(status);
 }
 
+/** Os filtros da aba Candidaturas. Cada estado cai em exatamente um. */
+export const APPLICATION_FILTERS = ['active', 'needs_human', 'rehearsals', 'submitted', 'skipped'] as const;
+export type ApplicationFilter = (typeof APPLICATION_FILTERS)[number];
+/** Os estados de cada filtro; "Não enviadas" (`skipped`) junta puladas, falhas e canceladas. */
+export const APPLICATION_FILTER_STATUSES: Record<ApplicationFilter, readonly ApplicationStatus[]> = {
+  active: ACTIVE_APPLICATION_STATUSES,
+  needs_human: ['needs_human'],
+  rehearsals: ['dry_run_ready'],
+  submitted: ['submitted'],
+  skipped: ['skipped', 'failed', 'cancelled'],
+};
+
+/** O filtro em que um estado aparece. */
+export function applicationFilterOf(status: ApplicationStatus): ApplicationFilter {
+  return APPLICATION_FILTERS.find((f) => APPLICATION_FILTER_STATUSES[f].includes(status))!;
+}
+
 /** A função só existe com HOST local: ausente, `127.0.0.1`, `localhost` ou `::1`. */
 export function applyAvailability(env: { HOST?: string }): { available: boolean; reason: string | null } {
   const host = env.HOST?.trim();

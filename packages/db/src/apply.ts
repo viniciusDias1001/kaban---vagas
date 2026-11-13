@@ -1,9 +1,9 @@
-import { and, asc, desc, eq, gte, inArray, isNotNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, getTableColumns, gte, inArray, isNotNull, sql, type SQL } from 'drizzle-orm';
 import type {
-  ApplicationDto, ApplicationEventDto, ApplicationListItemDto, ApplicationReason, ApplicationStatus, ApplyMode, ApplySiteId,
-  ApplyTrigger, ApplyWorkerState,
+  ApplicationDto, ApplicationEventDto, ApplicationFilter, ApplicationListItemDto, ApplicationReason, ApplicationStatus, ApplyMode,
+  ApplySiteId, ApplyTrigger, ApplyWorkerState, JobListItemDto,
 } from '@kv/shared';
-import { APPLY_SITE_IDS, isAppliedOrLater } from '@kv/shared';
+import { APPLICATION_FILTERS, APPLICATION_FILTER_STATUSES, APPLY_SITE_IDS, applicationFilterOf, isAppliedOrLater } from '@kv/shared';
 import type { Db } from './client';
 import { applicationEvents as eventsTable, applications, applyAnswers, applyCommands, applySites, candidateProfiles, jobAi, jobs, settings } from './schema';
 
@@ -134,12 +134,19 @@ export async function listApplicationEvents(db: Db, id: number): Promise<Applica
   return rows;
 }
 
-/** Mais novas primeiro, até 200. Não seleciona o PDF. */
+/** Teto de linhas de `listApplications` (por filtro). */
+export const APPLICATION_LIST_LIMIT = 200;
+
+/**
+ * Mais novas primeiro, até 200 (`APPLICATION_LIST_LIMIT`), do filtro da aba (`filter`), de um estado ou de um site. Não
+ * seleciona o PDF. As contagens verdadeiras de cada filtro vêm de `applicationFilterCounts`.
+ */
 export async function listApplications(
   db: Db,
-  filter: { status?: ApplicationStatus; site?: ApplySiteId },
+  filter: { filter?: ApplicationFilter; status?: ApplicationStatus; site?: ApplySiteId },
 ): Promise<ApplicationListItemDto[]> {
   const conditions = [];
+  if (filter.filter) conditions.push(inArray(applications.status, [...APPLICATION_FILTER_STATUSES[filter.filter]]));
   if (filter.status) conditions.push(eq(applications.status, filter.status));
   if (filter.site) conditions.push(eq(applications.site, filter.site));
   return db
@@ -162,7 +169,37 @@ export async function listApplications(
     .innerJoin(jobs, eq(jobs.id, applications.jobId))
     .where(conditions.length > 0 ? and(...conditions) : undefined)
     .orderBy(desc(applications.createdAt), desc(applications.id))
-    .limit(200);
+    .limit(APPLICATION_LIST_LIMIT);
+}
+
+/** Quantas candidaturas há em cada filtro da aba, contadas no banco sobre todas as linhas. */
+export async function applicationFilterCounts(db: Db): Promise<Record<ApplicationFilter, number>> {
+  const rows = await db
+    .select({ status: applications.status, n: sql<number>`count(*)::int`.mapWith(Number) })
+    .from(applications)
+    .groupBy(applications.status);
+  const counts = Object.fromEntries(APPLICATION_FILTERS.map((f) => [f, 0])) as Record<ApplicationFilter, number>;
+  for (const r of rows) counts[applicationFilterOf(r.status)] += r.n;
+  return counts;
+}
+
+/**
+ * Colunas de um item do quadro: tudo o que o card usa. Ficam de fora a descrição (o campo mais pesado, só lido no
+ * detalhe da vaga) e o `dedupHash` (interno do worker).
+ */
+const { description: _description, dedupHash: _dedupHash, ...JOB_LIST_COLUMNS } = getTableColumns(jobs);
+
+/**
+ * As vagas do quadro (`GET /jobs`), com o estado da candidatura de cada uma (null sem candidatura), na ordem do quadro
+ * (posição, id). `where` filtra pela tabela `jobs`.
+ */
+export async function listJobItems(db: Db, where?: SQL): Promise<JobListItemDto[]> {
+  return db
+    .select({ ...JOB_LIST_COLUMNS, applicationStatus: applications.status })
+    .from(jobs)
+    .leftJoin(applications, eq(applications.jobId, jobs.id))
+    .where(where)
+    .orderBy(asc(jobs.position), asc(jobs.id));
 }
 
 /** Sem os bytes do PDF: só `hasResume`. */
@@ -581,17 +618,39 @@ export async function sendRehearsal(
   });
 }
 
-/** O mesmo para todos os ensaios prontos. Devolve quantos. */
-export async function sendAllRehearsals(db: Db, now: number = Date.now()): Promise<number> {
+/**
+ * "Enviar todos os ensaios": o mesmo de `sendRehearsal` para exatamente as candidaturas de `ids` (as que a tela listou)
+ * que ainda estão em `dry_run_ready` e cuja vaga o dono não aplicou. Devolve quantas foram para a fila e quantas ficaram
+ * de fora (não existem, saíram do ensaio, vaga já aplicada). Trava as vagas e depois as candidaturas.
+ */
+export async function sendAllRehearsals(
+  db: Db, ids: number[], now: number = Date.now(),
+): Promise<{ queued: number; skipped: number }> {
+  const wanted = [...new Set(ids)];
+  if (wanted.length === 0) return { queued: 0, skipped: 0 };
   return db.transaction(async (tx) => {
+    const refs = await tx.select({ jobId: applications.jobId }).from(applications).where(inArray(applications.id, wanted));
+    const lockedJobs = refs.length === 0 ? [] : await tx
+      .select()
+      .from(jobs)
+      .where(inArray(jobs.id, refs.map((r) => r.jobId)))
+      .orderBy(asc(jobs.id))
+      .for('update');
+    const jobById = new Map(lockedJobs.map((j) => [j.id, j]));
     const rows = await tx
       .select()
       .from(applications)
-      .where(eq(applications.status, 'dry_run_ready'))
+      .where(and(inArray(applications.id, wanted), eq(applications.status, 'dry_run_ready')))
       .orderBy(asc(applications.id))
       .for('update');
-    for (const row of rows) await approveRow(tx, row, now);
-    return rows.length;
+    let queued = 0;
+    for (const row of rows) {
+      const job = jobById.get(row.jobId);
+      if (!job || jobAlreadyApplied(job)) continue;
+      await approveRow(tx, row, now);
+      queued += 1;
+    }
+    return { queued, skipped: wanted.length - queued };
   });
 }
 
