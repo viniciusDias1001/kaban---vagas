@@ -150,6 +150,9 @@ export function buildEngineDeps(input: EngineDepsInput): EngineDeps {
    * O tempo da espera não conta no tempo de trabalho.
    */
   async function waitHuman(gate: HumanGate): Promise<'solved' | 'timeout'> {
+    // Uma execução abortada ou abandonada não mexe mais no navegador (a página da frente já é da próxima) nem na linha.
+    const givenUp = () => state.phase === 'aborted' || state.phase === 'abandoned';
+    if (givenUp()) return 'timeout';
     clock.pause();
     try {
       await db.update(applications).set({ waitingGate: gate }).where(eq(applications.id, id));
@@ -157,7 +160,7 @@ export function buildEngineDeps(input: EngineDepsInput): EngineDeps {
       const started = Date.now();
       for (;;) {
         await sleep(input.humanPollMs);
-        if (state.phase === 'aborted' || state.phase === 'abandoned' || (await cancelled())) return 'timeout';
+        if (givenUp() || (await cancelled())) return 'timeout';
         let onScreen: HumanGate | null = gate;
         try {
           onScreen = await site.humanGate(page);
@@ -172,7 +175,7 @@ export function buildEngineDeps(input: EngineDepsInput): EngineDeps {
         }
       }
     } finally {
-      await db.update(applications).set({ waitingGate: null }).where(eq(applications.id, id)).catch(() => {});
+      if (!givenUp()) await db.update(applications).set({ waitingGate: null }).where(eq(applications.id, id)).catch(() => {});
       clock.resume();
     }
   }

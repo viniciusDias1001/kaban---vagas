@@ -733,6 +733,41 @@ describe('the login window', () => {
     await q.tick();
     expect(browser.calls).toContain('close');
   });
+
+  it('starts no application on any site while a login window waits (the browser has one page)', async () => {
+    const lever = createRecordingSite({ id: 'lever' });
+    const { id: jobId } = await candidate({ source: 'lever', score: null });
+    await createApplication(db, { jobId, site: 'lever', trigger: 'manual', mode: 'real' }, clock.now);
+    const q = queue({ mode: 'real', sites: [site, lever], deps: { humanWaitMs: 20 * MIN } });
+    await enqueueApplyCommand(db, 'open_login', 'fake', clock.now);
+    expect(await q.tick()).toMatchObject({ commands: 1, started: false });
+    clock.now += MIN;
+    expect(await q.tick()).toMatchObject({ started: false });
+    expect(lever.calls).toEqual([]);
+
+    site.sessions = 'logged_in';
+    await enqueueApplyCommand(db, 'check_session', 'fake', clock.now);
+    expect(await q.tick()).toMatchObject({ commands: 1, started: true });
+    await q.idle();
+    expect(await applicationForJob(db, jobId)).toMatchObject({ status: 'submitted' });
+  });
+
+  it('does not run open_login while an application holds the browser', async () => {
+    let release!: () => void;
+    site.sessions = 'logged_in';
+    site.variants.form = { readStep: () => new Promise<void>((resolve) => { release = resolve; }) };
+    const jobId = await manualRow();
+    const q = queue({ mode: 'real' });
+    expect(await q.tick()).toMatchObject({ started: true });
+    await enqueueApplyCommand(db, 'open_login', 'fake', clock.now);
+    while (!release) await new Promise((r) => setTimeout(r, 5));
+    expect(await q.tick()).toMatchObject({ commands: 0, started: false });
+    expect((await db.select().from(applyCommands))[0]).toMatchObject({ status: 'queued' });
+    release();
+    await q.idle();
+    expect(await applicationForJob(db, jobId)).toMatchObject({ status: 'submitted' });
+    expect(await q.tick()).toMatchObject({ commands: 1 });
+  });
 });
 
 describe('the daily cap and a form already opened today', () => {
