@@ -453,13 +453,35 @@ export async function updateSiteState(db: Db, site: ApplySiteId, patch: Partial<
   await db.update(applySites).set(patch).where(eq(applySites.site, site));
 }
 
-/** Apaga o banco de respostas e esvazia respostas, pendências, PDF, fotos, e-mail e confirmação das candidaturas; estado e datas ficam. */
-export async function deleteApplyData(db: Db): Promise<void> {
+/**
+ * Apaga o banco de respostas e esvazia o conteúdo das candidaturas: respostas, pendências, PDF, fotos (a coluna; os
+ * arquivos em `<pasta de dados>/shots` e `/resumes` são da rota), e-mail, confirmação, detalhe e os textos dos eventos.
+ * Estado e datas ficam, menos nas que esperavam perguntas do dono: sem as pendências não há o que responder, então viram
+ * `cancelled` e a marca "precisa de você" do card sai. Trava as vagas antes das candidaturas.
+ */
+export async function deleteApplyData(db: Db, now: number = Date.now()): Promise<void> {
   await db.transaction(async (tx) => {
     await tx.delete(applyAnswers);
+    await tx.update(eventsTable).set({ message: null });
+    const questionWait = and(eq(applications.status, 'needs_human'), eq(applications.reason, 'question'));
+    const waitingJobs = (await tx.select({ jobId: applications.jobId }).from(applications).where(questionWait)).map((r) => r.jobId);
+    if (waitingJobs.length > 0) {
+      await tx.update(jobs).set({ needsHuman: false, needsHumanReason: null }).where(inArray(jobs.id, waitingJobs));
+    }
+    const waiting = await tx.select().from(applications).where(questionWait).orderBy(asc(applications.id)).for('update');
     await tx
       .update(applications)
-      .set({ answers: [], approvedAnswers: [], pendingQuestions: [], resumePdf: null, shots: {}, contactEmail: null, confirmation: null });
+      .set({
+        answers: [], approvedAnswers: [], pendingQuestions: [], resumePdf: null, shots: {}, contactEmail: null, confirmation: null,
+        detail: null,
+      });
+    for (const row of waiting) {
+      await writeTransition(
+        tx, row,
+        { status: 'cancelled', message: 'Os dados de IA foram apagados: a candidatura foi cancelada.', set: { cancelRequested: false, waitingGate: null } },
+        now,
+      );
+    }
   });
 }
 

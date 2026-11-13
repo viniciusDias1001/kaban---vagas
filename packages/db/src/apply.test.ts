@@ -419,6 +419,36 @@ describe('deleteApplyData', () => {
     expect(await db.select().from(applyAnswers)).toEqual([]);
   });
 
+  it('also empties the details and the event texts, and cancels the applications waiting on questions', async () => {
+    const sent = await create();
+    await transitionApplication(db, sent.id, { status: 'submitted', message: 'Obrigado pela candidatura, Fulano!' }, 2000);
+    const failed = await create();
+    await transitionApplication(db, failed.id, { status: 'failed', detail: 'erro com o currículo de Fulano' }, 2000);
+    const asked = await create();
+    await transitionApplication(db, asked.id, {
+      status: 'needs_human', reason: 'question', detail: 'uma pergunta precisa de você',
+      set: { pendingQuestions: [{ question: { id: 'q', label: 'L', help: '', kind: 'text', options: [], required: true, maxLength: null }, category: 'open', kind: 'unanswered', proposal: null }] },
+    }, 2000);
+    const captcha = await create();
+    await transitionApplication(db, captcha.id, { status: 'needs_human', reason: 'captcha', detail: 'resolva' }, 2000);
+    await db.update(jobs).set({ needsHuman: true, needsHumanReason: 'x' });
+
+    await deleteApplyData(db, 3000);
+
+    expect(await applicationForJob(db, failed.job.id)).toMatchObject({ status: 'failed', detail: null });
+    expect(await applicationForJob(db, asked.job.id)).toMatchObject({
+      status: 'cancelled', reason: null, detail: null, pendingQuestions: [], finishedAt: 3000,
+    });
+    expect((await db.select().from(jobs).where(eq(jobs.id, asked.job.id)))[0]).toMatchObject({ needsHuman: false, needsHumanReason: null });
+    expect(await applicationForJob(db, captcha.job.id)).toMatchObject({ status: 'needs_human', reason: 'captcha', detail: null });
+    expect((await db.select().from(jobs).where(eq(jobs.id, captcha.job.id)))[0]).toMatchObject({ needsHuman: true });
+    const sentEvents = await listApplicationEvents(db, sent.id);
+    expect(sentEvents.map((e) => e.message)).toEqual([null, null]);
+    expect((await listApplicationEvents(db, asked.id)).at(-1)).toEqual({
+      status: 'cancelled', message: 'Os dados de IA foram apagados: a candidatura foi cancelada.', at: 3000,
+    });
+  });
+
   it('runs with deleteAllAiData', async () => {
     const { job } = await create();
     await db.update(applications).set({ contactEmail: 'a@example.com' }).where(eq(applications.jobId, job.id));
