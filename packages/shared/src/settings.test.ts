@@ -77,8 +77,16 @@ describe('apply settings', () => {
     expect(ok({ applyBlockedTerms: Array.from({ length: 101 }, (_, i) => `t${i}`) })).toBe(false);
     expect(ok({ applyBlockedCompanies: ['x'.repeat(81)] })).toBe(false);
     expect(ok({ applyBlockedCompanies: [] })).toBe(true);
-    expect(ok({ applyResumeMode: 'base', applyOpenAnswers: false, applyEnabled: null })).toBe(true);
+    expect(ok({ applyResumeMode: 'base', applyAiAnswers: 'off', applyEnabled: null })).toBe(true);
     expect(ok({ applyResumeMode: 'other' })).toBe(false);
+  });
+
+  it('takes one of three modes for answers proposed by the model, and no longer the old switch', () => {
+    for (const mode of ['off', 'review', 'auto']) expect(ok({ applyAiAnswers: mode })).toBe(true);
+    expect(ok({ applyAiAnswers: null })).toBe(true);
+    expect(ok({ applyAiAnswers: true })).toBe(false);
+    expect(ok({ applyAiAnswers: 'always' })).toBe(false);
+    expect(ok({ applyOpenAnswers: false })).toBe(false);
   });
 });
 

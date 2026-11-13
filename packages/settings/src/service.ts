@@ -4,7 +4,7 @@ import {
 } from '@kv/ai';
 import { aiKeys, settings as settingsTable, type Db } from '@kv/db';
 import {
-  APPLY_DEFAULTS, APPLY_SITE_IDS, type ApplyConfig, type ApplyDailyCaps, type ApplyMode, type ApplyResumeMode,
+  APPLY_DEFAULTS, APPLY_SITE_IDS, type ApplyAiAnswers, type ApplyConfig, type ApplyDailyCaps, type ApplyMode, type ApplyResumeMode,
   type ApplySiteId, type ApplyWindow,
   AI_KEY_ENV_VARS, AI_PROVIDER_IDS, AI_PROVIDER_LABELS, DEFAULT_GREENHOUSE_BOARDS, DEFAULT_LEVER_COMPANIES, SETTING_KEYS,
   SETTING_SCHEMAS, type AiKeyMetaDto, type AiProviderId, type SettingKey, type SettingSource, type SettingValue,
@@ -53,7 +53,7 @@ export interface ResolvedSettings {
     companyCap: SettingValue<number>;
     window: SettingValue<ApplyWindow>;
     resumeMode: SettingValue<ApplyResumeMode>;
-    openAnswers: SettingValue<boolean>;
+    aiAnswers: SettingValue<ApplyAiAnswers>;
     blockedCompanies: SettingValue<string[]>;
     blockedTerms: SettingValue<string[]>;
   };
@@ -176,7 +176,8 @@ export function createSettingsService(db: Db, opts: SettingsServiceOptions = {})
         companyCap: pick(stored.applyCompanyCap as number | undefined, undefined, APPLY_DEFAULTS.companyCap),
         window: pick<ApplyWindow>(stored.applyWindow as ApplyWindow | undefined, undefined, { ...APPLY_DEFAULTS.window }),
         resumeMode: pick<ApplyResumeMode>(stored.applyResumeMode as ApplyResumeMode | undefined, undefined, 'tailored'),
-        openAnswers: pick(stored.applyOpenAnswers as boolean | undefined, undefined, true),
+        // Padrão `review`: nada que o modelo propõe vai ao formulário antes de o dono aprovar.
+        aiAnswers: pick<ApplyAiAnswers>(stored.applyAiAnswers as ApplyAiAnswers | undefined, undefined, 'review'),
         blockedCompanies: pick<string[]>(stored.applyBlockedCompanies as string[] | undefined, undefined, []),
         blockedTerms: pick<string[]>(stored.applyBlockedTerms as string[] | undefined, undefined, []),
       },
@@ -281,7 +282,7 @@ export function createSettingsService(db: Db, opts: SettingsServiceOptions = {})
       const { apply: a, budgetTimeZone } = resolve((await load()).stored);
       return {
         enabled: a.enabled.value, minScore: a.minScore.value, siteModes: a.siteModes.value, dailyCaps: a.dailyCaps.value,
-        companyCap: a.companyCap.value, window: a.window.value, resumeMode: a.resumeMode.value, openAnswers: a.openAnswers.value,
+        companyCap: a.companyCap.value, window: a.window.value, resumeMode: a.resumeMode.value, aiAnswers: a.aiAnswers.value,
         blockedCompanies: a.blockedCompanies.value, blockedTerms: a.blockedTerms.value, timeZone: budgetTimeZone,
       };
     },
@@ -372,7 +373,7 @@ export function createSettingsService(db: Db, opts: SettingsServiceOptions = {})
           companyCap: src(resolved.apply.companyCap),
           window: src(resolved.apply.window),
           resumeMode: src(resolved.apply.resumeMode),
-          openAnswers: src(resolved.apply.openAnswers),
+          aiAnswers: src(resolved.apply.aiAnswers),
           blockedCompanies: src(resolved.apply.blockedCompanies),
           blockedTerms: src(resolved.apply.blockedTerms),
         },

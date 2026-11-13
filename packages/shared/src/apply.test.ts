@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 import {
   ACTIVE_APPLICATION_STATUSES, APPLY_DEFAULTS, APPLY_TIMING, applyAvailability, isActiveApplication,
-  normalizeQuestionText, PendingAnswersBodySchema, ApplyAnswerInputSchema, type ApplicationStatus,
+  normalizeQuestionText, PendingAnswersBodySchema, ApplyAnswerInputSchema, type AnswerValue, type ApplicationStatus,
+  type PendingQuestion,
 } from './index';
 
 describe('apply constants', () => {
@@ -19,6 +20,21 @@ describe('apply constants', () => {
     expect(applyAvailability({ HOST: 'localhost' }).available).toBe(true);
     expect(applyAvailability({ HOST: '::1' }).available).toBe(true);
     expect(applyAvailability({ HOST: '0.0.0.0' })).toEqual({ available: false, reason: expect.stringContaining('local') });
+  });
+  it('a pending question carries a model proposal with its source and basis', () => {
+    const question = { id: 'q1', label: 'Anos de React?', help: '', kind: 'text' as const, options: [], required: true, maxLength: null };
+    const proposal: PendingQuestion = {
+      question, category: 'profile_fact', kind: 'confirm_proposal',
+      proposal: { bankAnswerId: null, bankQuestion: null, value: '5', source: 'profile', basis: ['exp_aaaaaaa1'] },
+    };
+    const match: PendingQuestion = {
+      question, category: 'personal', kind: 'confirm_match',
+      proposal: { bankAnswerId: 7, bankQuestion: 'Precisa de visto?', value: 'No', source: 'bank', basis: [] },
+    };
+    expect(proposal.proposal?.bankAnswerId).toBeNull();
+    expectTypeOf(proposal.proposal!.source).toEqualTypeOf<'bank' | 'profile' | 'written'>();
+    expectTypeOf(match.kind).toEqualTypeOf<'unanswered' | 'confirm_match' | 'confirm_proposal'>();
+    expectTypeOf(match.proposal!.value).toEqualTypeOf<AnswerValue>();
   });
   it('keeps the defaults the spec fixes', () => {
     expect(APPLY_DEFAULTS.minScore).toBe(70);

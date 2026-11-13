@@ -22,6 +22,12 @@ export type ApplicationReason = NeedsHumanReason | SkipReason;
 export type ApplyMode = 'dry_run' | 'real';
 export type ApplyTrigger = 'auto' | 'manual';
 export type ApplyResumeMode = 'tailored' | 'base';
+/**
+ * Respostas propostas pelo modelo (fatos do perfil e textos escritos): `off` nunca pede ao modelo; `review` (padrão)
+ * pede e manda cada proposta ao dono antes de valer; `auto` usa a proposta já verificada sem perguntar.
+ */
+export const APPLY_AI_ANSWER_MODES = ['off', 'review', 'auto'] as const;
+export type ApplyAiAnswers = (typeof APPLY_AI_ANSWER_MODES)[number];
 export type ShotKind = 'filled' | 'confirmation' | 'blocked';
 export type SiteSession = 'unknown' | 'logged_in' | 'logged_out';
 export type SitePauseReason = 'brake' | 'restricted' | 'owner_away';
@@ -48,9 +54,21 @@ export interface ResolvedAnswer {
 export interface AnswerRecord extends ResolvedAnswer { label: string; kind: QuestionKind; options: string[]; required: boolean }
 export interface PendingQuestion {
   question: Question; category: QuestionCategory;
-  /** `unanswered`: falta resposta. `confirm_match`: o modelo propôs uma resposta salva e o dono precisa confirmar. */
-  kind: 'unanswered' | 'confirm_match';
-  proposal: { bankAnswerId: number; bankQuestion: string; value: string } | null;
+  /**
+   * `unanswered`: nada a propor. `confirm_match`: o modelo diz que uma resposta salva serve para esta pergunta.
+   * `confirm_proposal`: o modelo propõe uma resposta tirada do perfil ou escrita por ele.
+   */
+  kind: 'unanswered' | 'confirm_match' | 'confirm_proposal';
+  proposal: {
+    /** A resposta salva proposta (`confirm_match`); null em `confirm_proposal`. */
+    bankAnswerId: number | null;
+    bankQuestion: string | null;
+    value: AnswerValue;
+    /** De onde vem o valor proposto. */
+    source: 'bank' | 'profile' | 'written';
+    /** Ids de itens do perfil em que a proposta se apoia (`profile`); vazio nos demais. */
+    basis: string[];
+  } | null;
 }
 
 export const APPLY_DEFAULTS = {
