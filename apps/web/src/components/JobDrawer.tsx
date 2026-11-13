@@ -6,6 +6,7 @@ import { AI_TIER2_DESCRIPTION_CHARS, COLUMNS, COLUMN_LABELS, LIMITS, type Column
 import { ageLabel } from '../age';
 import { api } from '../api';
 import { drawerTitle } from '../lib/ai';
+import { historyMailLine } from '../lib/email';
 import { COLUMN_COLOR } from '../lib/columns';
 import { spring } from '../lib/motion';
 import { cn } from '../lib/utils';
@@ -14,6 +15,7 @@ import { useJobNotes } from '../useJobNotes';
 import { useMoveJob } from '../useMoveJob';
 import { JobAiSection } from './JobAiSection';
 import { JobApplicationSection } from './JobApplicationSection';
+import { JobEmailSection } from './JobEmailSection';
 import { SourceMark, sourceInfo } from './SourceMark';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
@@ -296,6 +298,9 @@ function DrawerContent({ id, onOpenSettings }: { id: number; onOpenSettings: () 
         {/* Some quando a função está desligada e a vaga não tem candidatura: o painel fica como sempre foi. */}
         <JobApplicationSection job={job} index={order++} />
 
+        {/* Some quando a vaga não tem e-mail. */}
+        <JobEmailSection job={job} index={order++} />
+
         {hasStacks && (
           <Section title="Stacks" index={order++}>
             <ul aria-label="Stacks da vaga" className="flex flex-wrap gap-1.5">
@@ -322,9 +327,16 @@ function DrawerContent({ id, onOpenSettings }: { id: number; onOpenSettings: () 
                     {e.fromColumn ? `${COLUMN_LABELS[e.fromColumn]} → ` : ''}
                     {COLUMN_LABELS[e.toColumn]}
                   </p>
-                  <p className="text-xs tabular-nums text-muted">
-                    {new Date(e.createdAt).toLocaleString('pt-BR')} — {ACTOR_LABEL[e.actor]}
-                  </p>
+                  {e.actor === 'email' && e.mail ? (
+                    <>
+                      <p className="text-xs tabular-nums text-muted">{new Date(e.createdAt).toLocaleString('pt-BR')}</p>
+                      <p data-testid={`history-mail-${e.id}`} className="break-words text-[13px] leading-snug text-ink-2">{historyMailLine(e.mail)}</p>
+                    </>
+                  ) : (
+                    <p className="text-xs tabular-nums text-muted">
+                      {new Date(e.createdAt).toLocaleString('pt-BR')} — {ACTOR_LABEL[e.actor]}
+                    </p>
+                  )}
                 </div>
               </li>
             ))}
