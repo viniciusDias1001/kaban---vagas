@@ -105,11 +105,16 @@ export async function prepare(c: PrepareContext, row: ApplicationRow): Promise<P
     return null;
   }
   const job = await withDescription(c, found);
-  const manual = row.trigger === 'manual';
+  // Uma linha que o dono mandou enviar ("Enviar de verdade", com respostas aprovadas) vale como pedido dele: a conferência,
+  // a nota mínima e o limite por empresa não a seguram mais. A lista de bloqueio, os limites diários, o orçamento e o
+  // modo do site continuam valendo.
+  const ownerApproved = row.approvedAnswers.length > 0;
+  const manual = row.trigger === 'manual' || ownerApproved;
 
   // Bloqueio (vale também para o pedido manual), limite por empresa e conferência da vaga (só automáticas).
   const blockedBy = isBlocked(job, cfg);
   let gate: { score: number; eligible: boolean; ineligibleReason: string } | null = null;
+  if (ownerApproved && row.gateScore !== null) gate = { score: row.gateScore, eligible: true, ineligibleReason: '' };
   if (!manual && blockedBy === null) {
     const since = c.now() - APPLY_DEFAULTS.companyCapDays * DAY_MS;
     let used = await companyFormsSince(db, job.company, since);

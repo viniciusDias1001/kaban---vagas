@@ -751,6 +751,25 @@ describe('the site mode when an application starts', () => {
     expect(await applicationForJob(db, jobId)).toMatchObject({ status: 'submitted', mode: 'real' });
   });
 
+  it('sends a row the owner approved past the current minimum score and the company cap, but not past the block list', async () => {
+    const jobId = await queuedRow('real', { approvedAnswers: approved, gateScore: 72 });
+    const company = (await jobRow(jobId)).company;
+    // Duas candidaturas da mesma empresa já abertas no período: o limite por empresa está cheio.
+    for (let i = 0; i < 2; i++) {
+      const other = await candidate({ score: null, company });
+      const id = (await createApplication(db, { jobId: other.id, site: 'fake', trigger: 'auto', mode: 'real' }, NOON))!;
+      await db.update(applications).set({ status: 'submitted', formOpenedAt: NOON - HOUR }).where(eq(applications.id, id));
+    }
+    await runUntilIdle(queue({ mode: 'real', cfg: { minScore: 90 } }));
+    expect(await applicationForJob(db, jobId)).toMatchObject({ status: 'submitted', gateScore: 72 });
+    expect(tasks).not.toContain('apply_gate');
+
+    const blocked = await queuedRow('real', { approvedAnswers: approved, gateScore: 95 });
+    await db.update(jobs).set({ company: 'Bloqueada SA' }).where(eq(jobs.id, blocked));
+    await runUntilIdle(queue({ mode: 'real', cfg: { blockedCompanies: ['Bloqueada'] } }));
+    expect(await applicationForJob(db, blocked)).toMatchObject({ status: 'skipped', reason: 'blocked' });
+  });
+
   it('never turns a rehearsal into a real send when the site went real', async () => {
     const jobId = await queuedRow('dry_run');
     await runUntilIdle(queue({ mode: 'real' }));
