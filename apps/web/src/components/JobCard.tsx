@@ -204,7 +204,7 @@ const CardView = memo(function CardView(p: CardViewProps) {
       data-over={p.over}
       onClick={() => onOpen(job.id)}
       onKeyDown={onKeyDown}
-      className="job-card shrink-0"
+      className="job-card w-full min-w-0 shrink-0"
       {...p.listeners}
       {...p.attributes}
     >
