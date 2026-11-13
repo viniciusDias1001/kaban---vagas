@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { CircleAlert, LoaderCircle, Paperclip, RotateCcw, TriangleAlert, Unlink } from 'lucide-react';
+import { CircleAlert, LoaderCircle, Paperclip, RotateCcw, RotateCw, TriangleAlert, Unlink } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import {
@@ -258,7 +258,21 @@ function MessageItem({ item, jobId }: { item: ConversationItem; jobId: number })
  */
 export function JobEmailSection({ job, index }: { job: JobDto; index: number }) {
   const titleId = useId();
-  const { data } = useJobEmails(job.id);
+  const { data, isError, isFetching, refetch } = useJobEmails(job.id);
+  // O erro de leitura aparece aqui, uma vez (a consulta não abre o aviso flutuante).
+  if (!data && isError) {
+    return (
+      <section data-testid="job-emails" aria-labelledby={titleId}>
+        <h3 id={titleId} className={cn(EYEBROW, 'mb-2')}>E-mails</h3>
+        <Notice
+          tone="bad" role="alert" data-testid="job-emails-error"
+          action={<Button size="sm" disabled={isFetching} onClick={() => void refetch()}><RotateCw aria-hidden /> Tentar de novo</Button>}
+        >
+          Não foi possível carregar os e-mails desta vaga.
+        </Notice>
+      </section>
+    );
+  }
   if (!data || data.messages.length === 0) return null;
 
   const { messages } = data;

@@ -18,12 +18,33 @@ export const EMAIL_KEYS = {
 const MESSAGES_PREFIX = ['email', 'messages'] as const;
 const JOB_EMAILS_PREFIX = ['email', 'job'] as const;
 
+/**
+ * Tudo que muda com uma ação sobre e-mails: os alertas, as conversas, o quadro (selos e coluna), a vaga aberta e os
+ * números (os do quadro e os do Painel).
+ */
+export const EMAIL_REFRESH_KEYS: readonly (readonly unknown[])[] = [
+  EMAIL_KEYS.alerts, MESSAGES_PREFIX, JOB_EMAILS_PREFIX, JOBS_KEY, ['job'], ['stats'], ['dashboard'],
+];
+
 /** Mutação cujo erro a própria tela mostra junto do botão: o `MutationCache` (main.tsx) não abre o aviso flutuante. */
 const INLINE_ERROR = { inlineError: true } as const;
 
+/**
+ * As consultas do e-mail: cada tela que as usa mostra o erro nela mesma (Configurações > E-mail, o sino, a conversa da vaga e
+ * a lista do Painel), e várias são relidas sozinhas; o aviso flutuante repetiria a frase a cada releitura.
+ */
+export const mailAccountQuery = () => ({ queryKey: EMAIL_KEYS.account, queryFn: api.getMailAccount, meta: INLINE_ERROR });
+export const alertsQuery = () => ({
+  queryKey: EMAIL_KEYS.alerts, queryFn: async () => (await api.listAlerts()).alerts, refetchInterval: 15_000, meta: INLINE_ERROR,
+});
+export const jobEmailsQuery = (jobId: number) => ({ queryKey: EMAIL_KEYS.job(jobId), queryFn: () => api.getJobEmails(jobId), meta: INLINE_ERROR });
+export const mailMessagesQuery = (filter: MailMessageFilter) => ({
+  queryKey: EMAIL_KEYS.messages(filter), queryFn: () => api.listMailMessages(filter), meta: INLINE_ERROR,
+});
+
 /** O estado da caixa: conectada, pausada, com erro, e se a função está disponível neste computador. */
 export function useMailAccount() {
-  return useQuery({ queryKey: EMAIL_KEYS.account, queryFn: api.getMailAccount });
+  return useQuery(mailAccountQuery());
 }
 
 /**
@@ -48,6 +69,9 @@ export function useConnectMailbox() {
   return mutation;
 }
 
+/** Desconectar a caixa: a conta, os e-mails ignorados e tudo o que uma ação sobre e-mails relê (apagar tira e-mails dos números). */
+export const DISCONNECT_REFRESH_KEYS: readonly (readonly unknown[])[] = [EMAIL_KEYS.account, EMAIL_KEYS.ignored, ...EMAIL_REFRESH_KEYS];
+
 /** Desconecta: `keep` guarda os e-mails já lidos, `delete` os apaga junto com respostas e alertas. */
 export function useDisconnectMailbox() {
   const qc = useQueryClient();
@@ -55,12 +79,7 @@ export function useDisconnectMailbox() {
     meta: INLINE_ERROR,
     mutationFn: (messages: 'keep' | 'delete') => api.disconnectMailbox(messages),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: EMAIL_KEYS.account });
-      void qc.invalidateQueries({ queryKey: EMAIL_KEYS.alerts });
-      void qc.invalidateQueries({ queryKey: MESSAGES_PREFIX });
-      void qc.invalidateQueries({ queryKey: JOB_EMAILS_PREFIX });
-      void qc.invalidateQueries({ queryKey: EMAIL_KEYS.ignored });
-      void qc.invalidateQueries({ queryKey: JOBS_KEY });
+      for (const queryKey of DISCONNECT_REFRESH_KEYS) void qc.invalidateQueries({ queryKey });
     },
   });
 }
@@ -100,16 +119,12 @@ export function usePhoneActions() {
 
 /** Os alertas abertos, relidos a cada 15 s (o sino). */
 export function useAlerts() {
-  return useQuery({
-    queryKey: EMAIL_KEYS.alerts,
-    queryFn: async () => (await api.listAlerts()).alerts,
-    refetchInterval: 15_000,
-  });
+  return useQuery(alertsQuery());
 }
 
 /** Os e-mails e as respostas de uma vaga. */
 export function useJobEmails(jobId: number) {
-  return useQuery({ queryKey: EMAIL_KEYS.job(jobId), queryFn: () => api.getJobEmails(jobId) });
+  return useQuery(jobEmailsQuery(jobId));
 }
 
 /** Os e-mails que o filtro local descartou, guardados por 30 dias. */
@@ -118,19 +133,13 @@ export function useIgnoredMail() {
 }
 
 export function useMailMessages(filter: MailMessageFilter = {}) {
-  return useQuery({ queryKey: EMAIL_KEYS.messages(filter), queryFn: () => api.listMailMessages(filter) });
+  return useQuery(mailMessagesQuery(filter));
 }
 
-/** Tudo que muda com uma ação sobre e-mails: os alertas, as conversas, o quadro (selos e coluna) e os números. */
 function useEmailRefresh() {
   const qc = useQueryClient();
   return () => {
-    void qc.invalidateQueries({ queryKey: EMAIL_KEYS.alerts });
-    void qc.invalidateQueries({ queryKey: MESSAGES_PREFIX });
-    void qc.invalidateQueries({ queryKey: JOB_EMAILS_PREFIX });
-    void qc.invalidateQueries({ queryKey: JOBS_KEY });
-    void qc.invalidateQueries({ queryKey: ['job'] });
-    void qc.invalidateQueries({ queryKey: ['stats'] });
+    for (const queryKey of EMAIL_REFRESH_KEYS) void qc.invalidateQueries({ queryKey });
   };
 }
 

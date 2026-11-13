@@ -156,6 +156,13 @@ export function AlertBell({ onOpenJob, onOpenSettings, onOpenAnswers, onOpenPain
                   <p className="text-sm text-muted">Nada esperando você.</p>
                 </motion.div>
               ) : (
+                <>
+                {/* Os alertas já carregados continuam; o erro da releitura aparece uma vez, aqui (sem aviso flutuante). */}
+                {query.isError && (
+                  <Notice tone="warn" role="alert" className="mb-3" data-testid="alert-panel-stale">
+                    Não foi possível atualizar os alertas. Confira se a API está no ar.
+                  </Notice>
+                )}
                 <ul aria-label="Alertas" className="space-y-3">
                   <AnimatePresence initial={false}>
                     {alerts.map((a) => (
@@ -175,6 +182,7 @@ export function AlertBell({ onOpenJob, onOpenSettings, onOpenAnswers, onOpenPain
                     ))}
                   </AnimatePresence>
                 </ul>
+                </>
               )}
             </div>
           </div>
