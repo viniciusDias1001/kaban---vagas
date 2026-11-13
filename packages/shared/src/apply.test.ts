@@ -1,7 +1,7 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import {
   ACTIVE_APPLICATION_STATUSES, APPLY_DEFAULTS, APPLY_TIMING, applyAvailability, isActiveApplication,
-  normalizeQuestionText, PendingAnswersBodySchema, ApplyAnswerInputSchema, type AnswerValue, type ApplicationStatus,
+  normalizeQuestionText, bankBoolean, bankList, bankText, SHOT_KINDS, PendingAnswersBodySchema, ApplyAnswerInputSchema, type AnswerValue, type ApplicationStatus,
   type PendingQuestion,
 } from './index';
 
@@ -43,6 +43,31 @@ describe('apply constants', () => {
   });
 });
 
+describe('saved answer encoding', () => {
+  it('writes values as text', () => {
+    expect(bankText(true)).toBe('Sim');
+    expect(bankText(false)).toBe('Não');
+    expect(bankText(['A', ' B ', ''])).toBe('A\nB');
+    expect(bankText('  x ')).toBe('x');
+    expect(bankText(null)).toBe('');
+  });
+  it('reads yes and no, and nothing else', () => {
+    for (const t of ['Sim', 'yes', 'TRUE', 'Verdadeiro', 's', 'Y', '1', ' sim ']) expect(bankBoolean(t)).toBe(true);
+    for (const t of ['Não', 'nao', 'No', 'false', 'FALSO', 'n', '0']) expect(bankBoolean(t)).toBe(false);
+    for (const t of ['talvez', '', '2', 'sim e não']) expect(bankBoolean(t)).toBeNull();
+    expect(bankBoolean(bankText(true))).toBe(true);
+    expect(bankBoolean(bankText(false))).toBe(false);
+  });
+  it('reads a list one option per line', () => {
+    expect(bankList('A, B\n\n C \r\nD')).toEqual(['A, B', 'C', 'D']);
+    expect(bankList('')).toEqual([]);
+    expect(bankList(bankText(['x', 'y']))).toEqual(['x', 'y']);
+  });
+  it('lists the shot kinds', () => {
+    expect(SHOT_KINDS).toEqual(['filled', 'confirmation', 'blocked']);
+  });
+});
+
 describe('apply schemas', () => {
   it('rejects extra keys and bad scopes in the pending answers body', () => {
     expect(PendingAnswersBodySchema.safeParse({ answers: [{ questionId: 'q1', value: 'x', scope: 'always', confirmMatch: false }] }).success).toBe(true);
@@ -59,5 +84,25 @@ describe('apply schemas', () => {
     expect(ApplyAnswerInputSchema.safeParse(ok).success).toBe(true);
     expect(ApplyAnswerInputSchema.safeParse({ ...ok, extra: 1 }).success).toBe(false);
     expect(ApplyAnswerInputSchema.safeParse({ ...ok, kind: 'longtext' }).success).toBe(false);
+  });
+  it('caps the size of what the browser sends', () => {
+    const item = (over: object) => ({ answers: [{ questionId: 'q', value: 'x', scope: 'always', confirmMatch: false, ...over }] });
+    const pending = (over: object) => PendingAnswersBodySchema.safeParse(item(over)).success;
+    expect(pending({ questionId: 'q'.repeat(200) })).toBe(true);
+    expect(pending({ questionId: 'q'.repeat(201) })).toBe(false);
+    expect(pending({ value: 'x'.repeat(2000) })).toBe(true);
+    expect(pending({ value: 'x'.repeat(2001) })).toBe(false);
+    expect(pending({ value: Array(50).fill('x'.repeat(300)) })).toBe(true);
+    expect(pending({ value: Array(51).fill('x') })).toBe(false);
+    expect(pending({ value: ['x'.repeat(301)] })).toBe(false);
+    const ok = { question: 'q', answer: 'a', kind: 'text', scope: 'job', scopeValue: 's', country: 'BR' };
+    const bank = (over: object) => ApplyAnswerInputSchema.safeParse({ ...ok, ...over }).success;
+    expect(bank({ question: '' })).toBe(false);
+    expect(bank({ question: 'q'.repeat(501) })).toBe(false);
+    expect(bank({ question: 'q'.repeat(500) })).toBe(true);
+    expect(bank({ answer: 'a'.repeat(2001) })).toBe(false);
+    expect(bank({ scopeValue: 's'.repeat(201) })).toBe(false);
+    expect(bank({ country: 'BRA' })).toBe(false);
+    expect(bank({ country: null, scopeValue: null })).toBe(true);
   });
 });

@@ -277,6 +277,7 @@ export const applications = pgTable(
     /** Nunca selecione esta coluna em listagens: são até 2 MiB por linha. */
     resumePdf: bytea('resume_pdf'),
     answers: jsonb('answers').$type<AnswerRecord[]>().notNull().default([]),
+    approvedAnswers: jsonb('approved_answers').$type<AnswerRecord[]>().notNull().default([]),
     pendingQuestions: jsonb('pending_questions').$type<PendingQuestion[]>().notNull().default([]),
     confirmation: text('confirmation'),
     contactEmail: text('contact_email'),

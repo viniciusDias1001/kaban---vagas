@@ -3,7 +3,8 @@ import { eq } from 'drizzle-orm';
 import type { ApplySiteId, CandidateProfile } from '@kv/shared';
 import { closeDb, type Db } from './index';
 import {
-  listApplicationEvents, applicationForJob, applyCandidates, applyCountsSince, companyFormsSince, createApplication,
+  applicationQueueCounts, retryApplication, sendAllRehearsals, sendRehearsal, requeueQuestionWaits, settlePendingQuestions,
+  waitingApplication, listApplicationEvents, applicationForJob, applyCandidates, applyCountsSince, companyFormsSince, createApplication,
   deleteApplyData, enqueueApplyCommand, finishApplyCommand, listApplications, nextApplyCommand, nextQueuedApplication,
   recoverApplications, recoverApplyCommands, requestCancel, siteState, toApplicationDto, transitionApplication, updateSiteState,
 } from './apply';
@@ -308,9 +309,10 @@ describe('deleteApplyData', () => {
       },
     }, 2000);
     await db.insert(applyAnswers).values({ question: 'q', normalized: 'q', kind: 'text', createdAt: 1, updatedAt: 1 });
+    await db.update(applications).set({ approvedAnswers: (await applicationForJob(db, job.id))!.answers });
     await deleteApplyData(db);
     expect(await applicationForJob(db, job.id)).toMatchObject({
-      status: 'submitted', submittedAt: 2000, answers: [], pendingQuestions: [], resumePdf: null, contactEmail: null,
+      status: 'submitted', submittedAt: 2000, answers: [], approvedAnswers: [], pendingQuestions: [], resumePdf: null, contactEmail: null,
       confirmation: null, shots: {},
     });
     expect(await db.select().from(applyAnswers)).toEqual([]);
@@ -321,5 +323,135 @@ describe('deleteApplyData', () => {
     await db.update(applications).set({ contactEmail: 'a@example.com' }).where(eq(applications.jobId, job.id));
     await deleteAllAiData(db);
     expect((await applicationForJob(db, job.id))!.contactEmail).toBeNull();
+  });
+});
+
+describe('queue counts and the live wait', () => {
+  it('counts queued and needs_human rows and finds the live wait', async () => {
+    const a = await create();
+    await create();
+    const c = await create();
+    expect(await applicationQueueCounts(db)).toEqual({ queued: 3, needsHuman: 0, running: 0 });
+    expect(await waitingApplication(db)).toBeNull();
+    await transitionApplication(db, a.id, { status: 'needs_human', reason: 'question' });
+    await transitionApplication(db, c.id, { status: 'waiting_human', set: { waitingGate: 'captcha' } });
+    expect(await applicationQueueCounts(db)).toEqual({ queued: 1, needsHuman: 1, running: 1 });
+    expect(await waitingApplication(db)).toEqual({ applicationId: c.id, jobId: c.job.id, gate: 'captcha' });
+  });
+});
+
+describe('retryApplication', () => {
+  it('requeues the stopped states and refuses a sent, running or unconfirmed one', async () => {
+    const { id, job } = await create();
+    await db.update(jobs).set({ needsHuman: true, needsHumanReason: 'x' }).where(eq(jobs.id, job.id));
+    for (const status of ['needs_human', 'failed', 'skipped', 'cancelled'] as const) {
+      await transitionApplication(db, id, { status, set: { attempts: 2, runAfter: 5 } });
+      expect(await retryApplication(db, id)).toBe('queued');
+      expect(await applicationForJob(db, job.id)).toMatchObject({ status: 'queued', attempts: 0, runAfter: null, approvedAnswers: [] });
+    }
+    expect((await db.select().from(jobs).where(eq(jobs.id, job.id)))[0]).toMatchObject({ needsHuman: false });
+    expect(await retryApplication(db, id)).toBe('not_retryable'); // já na fila
+    await transitionApplication(db, id, { status: 'filling' });
+    expect(await retryApplication(db, id)).toBe('in_progress');
+    await transitionApplication(db, id, { status: 'needs_human', reason: 'confirm_submission' });
+    expect(await retryApplication(db, id)).toBe('confirm_submission');
+    expect((await applicationForJob(db, job.id))!.status).toBe('needs_human');
+    await transitionApplication(db, id, { status: 'submitted' });
+    expect(await retryApplication(db, id)).toBe('sent');
+    expect(await retryApplication(db, 999_999)).toBe('not_found');
+  });
+});
+
+describe('sendRehearsal / sendAllRehearsals', () => {
+  const answer = (id: string, value: string) => ({
+    questionId: id, value, source: 'bank' as const, category: 'profile_fact' as const, basis: [], bankAnswerId: null,
+    label: id, help: '', kind: 'text' as const, options: [], required: true,
+  });
+  it('queues the rehearsal for real and copies its answers to approved_answers', async () => {
+    const { id, job } = await create('fake', 'auto');
+    const answers = [answer('q1', '20000')];
+    await transitionApplication(db, id, { status: 'dry_run_ready', set: { answers, mode: 'dry_run' } });
+    expect(await sendRehearsal(db, id)).toBe('queued');
+    expect(await applicationForJob(db, job.id)).toMatchObject({ status: 'queued', mode: 'real', answers, approvedAnswers: answers, finishedAt: null });
+    expect(await sendRehearsal(db, id)).toBe('not_rehearsal');
+    expect(await sendRehearsal(db, 999_999)).toBe('not_found');
+  });
+  it('does the same for every rehearsal and leaves the others alone', async () => {
+    const one = await create();
+    const two = await create();
+    const other = await create();
+    for (const r of [one, two]) {
+      await transitionApplication(db, r.id, { status: 'dry_run_ready', set: { answers: [answer('q', String(r.id))], mode: 'dry_run' } });
+    }
+    await transitionApplication(db, other.id, { status: 'failed' });
+    expect(await sendAllRehearsals(db)).toBe(2);
+    expect((await applicationForJob(db, one.job.id))!.approvedAnswers).toEqual([answer('q', String(one.id))]);
+    expect(await applicationForJob(db, two.job.id)).toMatchObject({ status: 'queued', mode: 'real' });
+    expect(await applicationForJob(db, other.job.id)).toMatchObject({ status: 'failed', approvedAnswers: [] });
+    expect(await sendAllRehearsals(db)).toBe(0);
+  });
+});
+
+describe('answering pending questions', () => {
+  const question = (id: string, required: boolean) => ({
+    question: { id, label: id, help: '', kind: 'text' as const, options: [], required, maxLength: null },
+    category: 'unknown' as const, kind: 'unanswered' as const, proposal: null,
+  });
+  it('requeues the other question waits only, with the mark off and their own mode kept', async () => {
+    const asked = await create();
+    const other = await create();
+    const captcha = await create();
+    await db.update(jobs).set({ needsHuman: true, needsHumanReason: 'x' });
+    await transitionApplication(db, asked.id, { status: 'needs_human', reason: 'question' });
+    await transitionApplication(db, other.id, { status: 'needs_human', reason: 'question', set: { mode: 'dry_run' } });
+    await transitionApplication(db, captcha.id, { status: 'needs_human', reason: 'captcha' });
+    expect(await requeueQuestionWaits(db, asked.id)).toEqual([other.id]);
+    expect(await applicationForJob(db, other.job.id)).toMatchObject({ status: 'queued', mode: 'dry_run' });
+    expect((await applicationForJob(db, asked.job.id))!.status).toBe('needs_human');
+    expect((await applicationForJob(db, captcha.job.id))!.status).toBe('needs_human');
+    expect((await db.select().from(jobs).where(eq(jobs.id, other.job.id)))[0]).toMatchObject({ needsHuman: false });
+    expect((await db.select().from(jobs).where(eq(jobs.id, captcha.job.id)))[0]).toMatchObject({ needsHuman: true });
+  });
+  it('keeps the row in needs_human while a required question is left, and requeues when none is', async () => {
+    const { id, job } = await create();
+    await db.update(jobs).set({ needsHuman: true, needsHumanReason: 'x' }).where(eq(jobs.id, job.id));
+    await transitionApplication(db, id, {
+      status: 'needs_human', reason: 'question', set: { pendingQuestions: [question('a', true), question('b', false)] },
+    });
+    let row = (await applicationForJob(db, job.id))!;
+    expect(await settlePendingQuestions(db, row, [question('a', true)])).toBe(false);
+    row = (await applicationForJob(db, job.id))!;
+    expect(row).toMatchObject({ status: 'needs_human', reason: 'question' });
+    expect(row.pendingQuestions).toHaveLength(1);
+    expect(await settlePendingQuestions(db, row, [question('b', false)])).toBe(true);
+    expect(await applicationForJob(db, job.id)).toMatchObject({ status: 'queued', reason: null, pendingQuestions: [] });
+    expect((await db.select().from(jobs).where(eq(jobs.id, job.id)))[0]).toMatchObject({ needsHuman: false, needsHumanReason: null });
+  });
+});
+
+// O PGlite aceita um número no lugar de um timestamp; o Postgres de verdade recusa ("date/time field value out of range").
+// Então o teste confere o que seria enviado ao driver: todo valor de tempo dentro de um fragmento `sql` tem de passar pelo
+// mapeamento da coluna (ISO 8601), nunca ir como número.
+describe('time parameters in raw sql fragments', () => {
+  it('sends ISO strings, not numbers, for the time parameters of applyCountsSince and nextQueuedApplication', async () => {
+    const { drizzle } = await import('drizzle-orm/pglite');
+    const { PGlite } = await import('@electric-sql/pglite');
+    const { migrate } = await import('drizzle-orm/pglite/migrator');
+    const { MIGRATIONS_FOLDER } = await import('./migrate');
+    const schema = await import('./schema');
+    const seen: unknown[][] = [];
+    const logged = drizzle(new PGlite(), { schema, logger: { logQuery: (_query, params) => void seen.push(params) } });
+    try {
+      await migrate(logged, { migrationsFolder: MIGRATIONS_FOLDER });
+      seen.length = 0;
+      await applyCountsSince(logged, 1_700_000_000_000);
+      await nextQueuedApplication(logged, { excludeSites: [] }, 1_700_000_000_000);
+      const iso = new Date(1_700_000_000_000).toISOString();
+      expect(seen[0]).toEqual([iso, iso]);
+      expect(seen[1]).toContain(iso);
+      expect(seen.flat()).not.toContain(1_700_000_000_000);
+    } finally {
+      await closeDb(logged);
+    }
   });
 });

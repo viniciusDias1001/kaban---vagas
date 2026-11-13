@@ -11,6 +11,7 @@
     "@fastify/multipart": "^10.1.8",
     "@fastify/static": "^10.1.10",
     "@kv/ai": "workspace:*",
+    "@kv/apply": "workspace:*",
     "@kv/connectors": "workspace:*",
     "@kv/db": "workspace:*",
     "@kv/resume": "workspace:*",

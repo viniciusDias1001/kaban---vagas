@@ -1,7 +1,7 @@
 import { and, asc, eq, getTableColumns, ilike, ne, or, sql, type SQL } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { JOBS_WRITE_LOCK, jobEvents, jobs, type Db } from '@kv/db';
+import { JOBS_WRITE_LOCK, requestCancel, jobEvents, jobs, type Db } from '@kv/db';
 import { ColumnSchema, JobPatchSchema, LIMITS, hasNul, type Column, type JobListItemDto } from '@kv/shared';
 import type { AiContext } from '../ai-context';
 import { intendedIndex } from '../position';
@@ -86,6 +86,10 @@ export function jobRoutes(app: FastifyInstance, db: Db, ctx: AiContext) {
       if (patch.column && patch.column !== job.column) {
         set.column = patch.column;
         if (patch.column === 'aplicada' && !job.appliedBy) set.appliedBy = 'humano';
+        // O dono mexeu no card: a candidatura automática para (ou é cancelada) e a marca de "precisa de você" sai.
+        set.needsHuman = false;
+        set.needsHumanReason = null;
+        await requestCancel(tx, id);
         await tx
           .insert(jobEvents)
           .values({ jobId: id, fromColumn: job.column, toColumn: patch.column, actor: 'humano', createdAt: Date.now() });

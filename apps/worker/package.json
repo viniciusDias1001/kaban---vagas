@@ -9,8 +9,10 @@
   },
   "dependencies": {
     "@kv/ai": "workspace:*",
+    "@kv/apply": "workspace:*",
     "@kv/connectors": "workspace:*",
     "@kv/db": "workspace:*",
+    "@kv/resume": "workspace:*",
     "@kv/settings": "workspace:*",
     "@kv/shared": "workspace:*",
     "drizzle-orm": "^0.45.4"
