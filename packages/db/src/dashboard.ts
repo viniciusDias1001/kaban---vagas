@@ -27,8 +27,11 @@ export interface AppliedJobFact {
 const APPLIED_COLUMNS: Column[] = ['aplicada', 'entrevista', 'oferta', 'perdida'];
 const ANSWERED_COLUMNS: Column[] = ['entrevista', 'oferta', 'perdida'];
 
-/** Evento do card que não veio de um e-mail corrigido (o join com `mail_messages` é feito por quem usa). */
-const eventCounts = or(isNull(jobEvents.mailMessageId), eq(mailMessages.corrected, false));
+/**
+ * Evento do card que não foi desfeito e não veio de um e-mail corrigido (o join com `mail_messages` é feito por quem
+ * usa). `undone` vale mesmo depois que a mensagem é apagada e a ligação vira null.
+ */
+const eventCounts = and(eq(jobEvents.undone, false), or(isNull(jobEvents.mailMessageId), eq(mailMessages.corrected, false)));
 
 const firstEvent = (where: SQL) => sql<number | null>`min(${jobEvents.createdAt}) filter (where ${where})`.mapWith(jobEvents.createdAt);
 

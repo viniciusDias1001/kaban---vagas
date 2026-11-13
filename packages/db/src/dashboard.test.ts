@@ -124,6 +124,15 @@ describe('appliedJobFacts', () => {
     expect(facts.find((f) => f.jobId === e)!).toMatchObject({ appliedAt: 1000, firstResponseAt: null, lostAt: null });
   });
 
+  it('does not count an undone mail move whose mail was deleted', async () => {
+    const f = await seedJob({ column: 'aplicada', appliedBy: 'humano' });
+    await event(f, 'aplicada', 1000);
+    // A mensagem foi apagada: a chave estrangeira soltou a ligação, e só `undone` diz que o movimento foi desfeito.
+    await event(f, 'perdida', 2000, { actor: 'email', fromColumn: 'aplicada', mailMessageId: null, undone: true });
+    await event(f, 'aplicada', 2500, { actor: 'humano', fromColumn: 'perdida' });
+    expect((await appliedJobFacts(db, null)).find((x) => x.jobId === f)).toMatchObject({ appliedAt: 1000, firstResponseAt: null, lostAt: null });
+  });
+
   it('takes the earlier of the first answering mail and the first move past Aplicada', async () => {
     const j = await seedJob({ column: 'oferta', appliedBy: 'humano' });
     await event(j, 'aplicada', 1000);

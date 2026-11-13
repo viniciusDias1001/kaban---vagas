@@ -62,7 +62,8 @@ export async function moveCardByEmail(
 
 /**
  * Desfaz o movimento que a mensagem causou: só se o evento dela é o mais recente do card. O card volta à coluna de origem
- * com evento de autor `humano`, e a mensagem ganha `corrected = true`. Devolve false sem mexer em nada nos outros casos.
+ * com evento de autor `humano`, o evento desfeito ganha `undone = true` e a mensagem `corrected = true`. Devolve false sem
+ * mexer em nada nos outros casos.
  */
 export async function undoEmailMove(db: Db, messageId: number, now: number = Date.now()): Promise<boolean> {
   return db.transaction(async (tx) => {
@@ -78,6 +79,8 @@ export async function undoEmailMove(db: Db, messageId: number, now: number = Dat
     const last = await latestEvent(tx, event.jobId);
     if (!job || last?.id !== event.id || job.column !== event.toColumn) return false;
     await putOnTop(tx, event.jobId, job.column, event.fromColumn, 'humano', null, now);
+    // O evento guarda que foi desfeito: a mensagem (e o seu `corrected`) pode ser apagada depois.
+    await tx.update(jobEvents).set({ undone: true }).where(eq(jobEvents.id, event.id));
     await tx.update(mailMessages).set({ corrected: true }).where(eq(mailMessages.id, messageId));
     return true;
   });
