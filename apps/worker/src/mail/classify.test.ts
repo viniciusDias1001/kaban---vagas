@@ -1,12 +1,13 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { AiError, createFakeProvider, type AiConfig, type AiProvider } from '@kv/ai';
+import { AiError, createFakeProvider, type AiConfig, type AiErrorKind, type AiProvider } from '@kv/ai';
 import {
   forceClassifyAll, insertMailMessage, jobs, mailMessageById, openAlerts, recordUsage, saveMailAccount, usageByLayer, type Db,
   type NewMailMessage,
 } from '@kv/db';
 import { resetTestDb } from '@kv/db/testing';
 import { createSettingsService } from '@kv/settings';
+import { actOnNext } from './act';
 import { createMailAi, type MailAi } from './ai-calls';
 import { classifyNext, type MailWorkDeps } from './classify';
 import { CONNECTED_AT, DAY, HOUR, MAIL_NOW, OWNER_ADDRESS, mailTestBed } from './test-helpers';
@@ -170,17 +171,64 @@ describe('classifyNext', () => {
     expect(JSON.stringify(row)).not.toContain('fora.com'); // nenhum endereço do modelo em nenhuma coluna
   });
 
-  it('leaves the mail for the next round when the model fails, and gives up after three failures in a row', async () => {
+  const failingWith = (kind: AiErrorKind, message: string): AiProvider =>
+    ({ id: 'fake', generate: async () => { throw new AiError(kind, message); } });
+
+  for (const [kind, message] of [
+    ['config', 'chave recusada'], ['rate_limited', 'limite de taxa'], ['transient', 'o provedor caiu'],
+  ] as const) {
+    it(`stops the round and never gives up on a mail when the provider fails (${kind})`, async () => {
+      const id = await incoming({ subject: 'Convite: entrevista na Acme', body: 'Queremos marcar uma entrevista.' });
+      deps.ai = mailAi(failingWith(kind, message));
+      for (let i = 0; i < 4; i++) expect(await classifyNext(deps)).toBe('off');
+      expect(await mailMessageById(db, id)).toMatchObject({ kind: null, summary: null });
+      expect(await openAlerts(db)).toEqual([]);
+      expect(logs.filter((l) => l.includes(message))).toHaveLength(4); // uma linha por rodada
+      // O provedor volta: a mensagem é classificada normalmente.
+      deps.ai = mailAi();
+      expect(await classifyNext(deps)).toBe('done');
+      expect((await mailMessageById(db, id))!.kind).toBe('entrevista');
+    });
+  }
+
+  it('gives up after three unusable answers in a row and tells the owner', async () => {
     const id = await incoming();
-    const failing: AiProvider = { id: 'fake', generate: async () => { throw new AiError('transient', 'o provedor caiu'); } };
-    deps.ai = mailAi(failing);
-    expect(await classifyNext(deps)).toBe('done');
-    expect(await classifyNext(deps)).toBe('done');
-    expect((await mailMessageById(db, id))!.kind).toBeNull();
-    expect(logs.filter((l) => l.includes('o provedor caiu'))).toHaveLength(2);
+    deps.ai = mailAi(failingWith('invalid_output', 'saída fora do schema'));
+    expect(await classifyNext(deps)).toBe('none');
+    expect(await classifyNext(deps)).toBe('none');
+    expect(await mailMessageById(db, id)).toMatchObject({ kind: null });
+    expect(await openAlerts(db)).toEqual([]);
+    expect(logs.filter((l) => l.includes('saída fora do schema'))).toHaveLength(2);
     expect(await classifyNext(deps)).toBe('done');
     expect(await mailMessageById(db, id)).toMatchObject({ kind: 'outro', summary: 'Não foi possível classificar.', jobId: null });
+    expect(await openAlerts(db)).toEqual([expect.objectContaining({ kind: 'unmatched', messageId: id })]);
     expect(await classifyNext(deps)).toBe('none');
+    // A ação sobre a mensagem (`outro`: nada) não resolve nem repete o alerta.
+    expect(await actOnNext(deps)).toBe(true);
+    expect(await actOnNext(deps)).toBe(false);
+    expect(await openAlerts(db)).toEqual([expect.objectContaining({ kind: 'unmatched', messageId: id })]);
+  });
+
+  it('gives up silently on first-read mail', async () => {
+    const id = await incoming({ backfill: true, sentAt: CONNECTED_AT - DAY });
+    deps.ai = mailAi(failingWith('refused', 'o modelo recusou'));
+    expect(await classifyNext(deps)).toBe('none');
+    expect(await classifyNext(deps)).toBe('none');
+    expect(await classifyNext(deps)).toBe('done');
+    expect(await mailMessageById(db, id)).toMatchObject({ kind: 'outro', summary: 'Não foi possível classificar.' });
+    expect(await openAlerts(db)).toEqual([]);
+  });
+
+  it('a provider failure neither resets nor adds to the count', async () => {
+    const id = await incoming();
+    deps.ai = mailAi(failingWith('truncated', 'resposta cortada'));
+    expect(await classifyNext(deps)).toBe('none');
+    expect(await classifyNext(deps)).toBe('none');
+    deps.ai = mailAi(failingWith('config', 'chave recusada'));
+    expect(await classifyNext(deps)).toBe('off');
+    deps.ai = mailAi(failingWith('truncated', 'resposta cortada'));
+    expect(await classifyNext(deps)).toBe('done'); // a terceira falha de conteúdo
+    expect((await mailMessageById(db, id))!.kind).toBe('outro');
   });
 
   it('lets an error that is not from the model reach the queue', async () => {

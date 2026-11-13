@@ -2,7 +2,7 @@
  * Classificação: uma chamada ao modelo por mensagem de vaga, a mais antiga primeiro. O código escolhe as vagas
  * candidatas e confere a escolha do modelo; o modelo nunca liga uma mensagem a um card que o e-mail não cita.
  */
-import { AiError, classifyEmail } from '@kv/ai';
+import { AiError, classifyEmail, isContentFailure } from '@kv/ai';
 import {
   countUnclassified, mailMatchPool, nextUnclassified, raiseAlert, resolveAlerts, saveClassification, threadJobs,
   type Db, type MailMessageRow,
@@ -13,17 +13,22 @@ import { MailBudgetError, type MailAi } from './ai-calls';
 
 export interface MailWorkDeps { db: Db; settings: SettingsService; ai: MailAi; now: () => number; log: (msg: string) => void }
 
-/** Falhas seguidas do modelo numa mesma mensagem antes de ela ser gravada como `outro`. */
+/** Respostas inutilizáveis seguidas do modelo numa mesma mensagem antes de ela ser gravada como `outro`. */
 const MAX_FAILURES = 3;
 export const UNCLASSIFIABLE_SUMMARY = 'Não foi possível classificar.';
 
-/** Falhas seguidas por mensagem (pelo Message-ID), só neste processo: um worker reiniciado começa a contar de novo. */
+/**
+ * Falhas de conteúdo seguidas por mensagem (pelo Message-ID), só neste processo: um worker reiniciado começa a contar de
+ * novo. Uma falha do provedor não soma nem zera; uma classificação bem-sucedida zera.
+ */
 const failures = new Map<string, number>();
 
 /**
  * Classifica a mensagem mais antiga sem tipo. `budget`: o limite diário segurou (alerta `budget_waiting` aberto ou
- * atualizado). `off`: sem IA configurada. `none`: nada esperando (o alerta `budget_waiting` é resolvido). `done`: uma
- * mensagem foi tratada, classificada ou não (um erro do modelo a deixa sem tipo para a próxima rodada).
+ * atualizado). `off`: sem IA configurada, ou o provedor falhou para qualquer pedido (chave, crédito, limite de taxa,
+ * rede, tempo): a mensagem fica sem tipo e nada mais é classificado nesta rodada. `none`: nada esperando (o alerta
+ * `budget_waiting` é resolvido), ou o modelo devolveu uma resposta inutilizável que ainda não é a terceira seguida (a
+ * mensagem espera a próxima rodada). `done`: uma mensagem ganhou tipo (classificada, ou desistida na terceira falha).
  */
 export async function classifyNext(deps: MailWorkDeps): Promise<'done' | 'none' | 'budget' | 'off'> {
   const { db, ai, now } = deps;
@@ -51,7 +56,11 @@ export async function classifyNext(deps: MailWorkDeps): Promise<'done' | 'none' 
   } catch (e) {
     if (e instanceof MailBudgetError) return waitForBudget(db, now());
     if (!(e instanceof AiError)) throw e;
-    await countFailure(deps, mail, e);
+    if (!isContentFailure(e)) {
+      deps.log(`[mail] a IA não está disponível agora; a classificação fica para a próxima rodada: ${e.message}`);
+      return 'off';
+    }
+    return (await countFailure(deps, mail, e)) ? 'done' : 'none';
   }
   return 'done';
 }
@@ -81,18 +90,26 @@ async function classifyOne(deps: MailWorkDeps, mail: MailMessageRow, force: bool
   failures.delete(mail.messageId);
 }
 
-/** Erro do modelo: registra; na terceira falha seguida, grava `outro` para a mensagem não travar a fila. */
-async function countFailure(deps: MailWorkDeps, mail: MailMessageRow, e: AiError): Promise<void> {
+/**
+ * Resposta inutilizável do modelo (recusa, corte, saída inválida): registra; na terceira seguida, grava `outro` para a
+ * mensagem não travar a fila e, fora da primeira leitura, abre o alerta `unmatched` dela, para o dono lê-la (um convite
+ * não fica enterrado em silêncio). `actOnNext` não faz nada com `outro`, então o alerta fica aberto. Devolve se desistiu.
+ */
+async function countFailure(deps: MailWorkDeps, mail: MailMessageRow, e: AiError): Promise<boolean> {
   const { db, now, log } = deps;
   const n = (failures.get(mail.messageId) ?? 0) + 1;
   log(`[mail] a classificação do e-mail ${mail.id} falhou (${n}/${MAX_FAILURES}): ${e.message}`);
   if (n < MAX_FAILURES) {
     failures.set(mail.messageId, n);
-    return;
+    return false;
   }
-  failures.delete(mail.messageId);
   const threadJob = (await threadJobs(db, [mail.threadKey])).get(mail.threadKey) ?? null;
-  await saveClassification(
-    db, mail.id, { kind: 'outro', summary: UNCLASSIFIABLE_SUMMARY, lang: 'pt-BR', requests: [], jobId: threadJob }, now(),
-  );
+  await db.transaction(async (tx) => {
+    await saveClassification(
+      tx, mail.id, { kind: 'outro', summary: UNCLASSIFIABLE_SUMMARY, lang: 'pt-BR', requests: [], jobId: threadJob }, now(),
+    );
+    if (!mail.backfill) await raiseAlert(tx, { kind: 'unmatched', mailMessageId: mail.id }, now());
+  });
+  failures.delete(mail.messageId);
+  return true;
 }
