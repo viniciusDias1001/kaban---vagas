@@ -2,6 +2,7 @@ import { getConnectors } from '@kv/connectors';
 import { closeDb, createDb, waitForDb, type Db } from '@kv/db';
 import { createSettingsService } from '@kv/settings';
 import { createAiRuntime } from './ai/runtime';
+import { createApplyRuntime } from './apply/runtime';
 import { createQueue, failStaleRuns, isDue, scheduleHourly } from './scheduler';
 
 const POLL_MS = 5_000;
@@ -94,6 +95,24 @@ async function pollAi() {
 const aiTimer = setInterval(() => void pollAi(), POLL_MS);
 void pollAi();
 
+// Fila de candidaturas: uma candidatura por vez, com timer próprio. Indisponível (HOST não local ou sem navegador) ela
+// não faz nada; desligada, só atende os comandos de conta do app. Liga e desliga pela aba Configurações, sem reiniciar.
+const apply = createApplyRuntime(db, settings, { log });
+await apply.recoverInterrupted();
+async function pollApply() {
+  if (stopping) return;
+  try {
+    const { commands, swept, started } = await apply.tick();
+    if (commands > 0) log(`candidaturas: ${commands} comandos de conta atendidos`);
+    if (swept > 0) log(`candidaturas: ${swept} vagas novas na fila`);
+    if (started) log(`candidaturas: candidatura ${apply.inFlightId()} iniciada`);
+  } catch (e) {
+    log(`erro na fila de candidaturas: ${errorText(e)}`);
+  }
+}
+const applyTimer = setInterval(() => void pollApply(), POLL_MS);
+void pollApply();
+
 /**
  * Redeploy/Ctrl+C: para de pegar runs da fila, espera um pouco os que estão em andamento e fecha o pool.
  * O que não terminar a tempo fica como "running" e vira erro no próximo start (failStaleRuns).
@@ -103,13 +122,20 @@ async function shutdown(signal: string) {
   stopping = true;
   clearInterval(timer);
   clearInterval(aiTimer);
+  clearInterval(applyTimer);
   log(`${signal} recebido, encerrando`);
   setTimeout(() => process.exit(1), DRAIN_MS + 4_000).unref();
   const drained = await Promise.race([
-    Promise.all([queue.idle(), ai.idle()]).then(() => true),
+    Promise.all([queue.idle(), ai.idle(), apply.idle()]).then(() => true),
     new Promise<false>((r) => setTimeout(() => r(false), DRAIN_MS)),
   ]);
+  // Uma candidatura que não terminou a tempo volta à fila no próximo start; uma pega no envio vai ao dono conferir.
   if (!drained) log('runs ainda em andamento; serão marcados como erro no próximo start');
+  try {
+    await apply.close();
+  } catch (e) {
+    log(`erro ao fechar o navegador: ${errorText(e)}`);
+  }
   try {
     await closeDb(db);
   } catch (e) {

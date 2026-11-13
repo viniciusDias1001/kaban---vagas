@@ -229,6 +229,21 @@ describe('recovery and cancellation', () => {
     expect(await listApplicationEvents(db, submitting.id)).toHaveLength(3);
   });
 
+  it('requeues every state stored only before the click and clears the live wait', async () => {
+    const preparing = await create();
+    const waiting = await create();
+    const submitting = await create();
+    await transitionApplication(db, preparing.id, { status: 'preparing' }, 2000);
+    await transitionApplication(db, waiting.id, { status: 'waiting_human', set: { waitingGate: 'captcha', runAfter: 9000 } }, 2000);
+    await transitionApplication(db, submitting.id, { status: 'submitting', set: { waitingGate: 'login' } }, 2000);
+    expect(await recoverApplications(db, 5000)).toEqual({ requeued: 2, unconfirmed: [submitting.id] });
+    expect(await applicationForJob(db, preparing.job.id)).toMatchObject({ status: 'queued' });
+    expect(await applicationForJob(db, waiting.job.id)).toMatchObject({ status: 'queued', waitingGate: null, runAfter: null });
+    expect(await applicationForJob(db, submitting.job.id)).toMatchObject({
+      status: 'needs_human', reason: 'confirm_submission', waitingGate: null,
+    });
+  });
+
   it('cancels a queued application at once and flags a running one', async () => {
     const queued = await create();
     const running = await create();
@@ -338,6 +353,17 @@ describe('queue counts and the live wait', () => {
     expect(await applicationQueueCounts(db)).toEqual({ queued: 1, needsHuman: 1, running: 1 });
     expect(await waitingApplication(db)).toEqual({ applicationId: c.id, jobId: c.job.id, gate: 'captcha' });
   });
+
+  it('shows a wait after the submit click, while the row stays submitting, and only a row with a gate', async () => {
+    const a = await create();
+    const b = await create();
+    await transitionApplication(db, a.id, { status: 'waiting_human' });
+    expect(await waitingApplication(db)).toBeNull();
+    await transitionApplication(db, b.id, { status: 'submitting', set: { waitingGate: 'verification_code' } });
+    expect(await waitingApplication(db)).toEqual({ applicationId: b.id, jobId: b.job.id, gate: 'verification_code' });
+    await transitionApplication(db, b.id, { status: 'needs_human', reason: 'confirm_submission', set: { waitingGate: 'captcha' } });
+    expect(await waitingApplication(db)).toBeNull();
+  });
 });
 
 describe('retryApplication', () => {
@@ -359,6 +385,24 @@ describe('retryApplication', () => {
     await transitionApplication(db, id, { status: 'submitted' });
     expect(await retryApplication(db, id)).toBe('sent');
     expect(await retryApplication(db, 999_999)).toBe('not_found');
+  });
+});
+
+describe('retryApplication after the gate', () => {
+  it('brings back as manual an application the gate skipped, and keeps the trigger of every other retry', async () => {
+    const cases = [
+      { status: 'skipped', reason: 'not_eligible', trigger: 'manual' },
+      { status: 'skipped', reason: 'below_min_score', trigger: 'manual' },
+      { status: 'skipped', reason: 'closed', trigger: 'auto' },
+      { status: 'failed', reason: null, trigger: 'auto' },
+      { status: 'needs_human', reason: 'question', trigger: 'auto' },
+    ] as const;
+    for (const c of cases) {
+      const { id, job } = await create('fake', 'auto');
+      await transitionApplication(db, id, { status: c.status, reason: c.reason });
+      expect(await retryApplication(db, id)).toBe('queued');
+      expect(await applicationForJob(db, job.id)).toMatchObject({ status: 'queued', trigger: c.trigger });
+    }
   });
 });
 
@@ -426,6 +470,41 @@ describe('answering pending questions', () => {
     expect(await settlePendingQuestions(db, row, [question('b', false)])).toBe(true);
     expect(await applicationForJob(db, job.id)).toMatchObject({ status: 'queued', reason: null, pendingQuestions: [] });
     expect((await db.select().from(jobs).where(eq(jobs.id, job.id)))[0]).toMatchObject({ needsHuman: false, needsHumanReason: null });
+  });
+});
+
+describe('a stale cancel flag never follows a row back to the queue', () => {
+  const flag = (id: number) => db.update(applications).set({ cancelRequested: true }).where(eq(applications.id, id));
+  const answer = { questionId: 'q', value: 'x', source: 'bank' as const, category: 'profile_fact' as const, basis: [], bankAnswerId: null, label: 'q', help: '', kind: 'text' as const, options: [], required: true };
+
+  it('clears cancel_requested in every helper that puts a row back to queued', async () => {
+    const retried = await create();
+    const rehearsal = await create();
+    const allRehearsals = await create();
+    const waiting = await create();
+    const answered = await create();
+    const interrupted = await create();
+    const asked = await create();
+    await transitionApplication(db, retried.id, { status: 'failed' });
+    await transitionApplication(db, rehearsal.id, { status: 'dry_run_ready', set: { answers: [answer] } });
+    await transitionApplication(db, waiting.id, { status: 'needs_human', reason: 'question' });
+    await transitionApplication(db, answered.id, { status: 'needs_human', reason: 'question' });
+    await transitionApplication(db, interrupted.id, { status: 'filling' });
+    await transitionApplication(db, asked.id, { status: 'needs_human', reason: 'captcha' });
+    for (const r of [retried, rehearsal, allRehearsals, waiting, answered, interrupted]) await flag(r.id);
+
+    expect(await retryApplication(db, retried.id)).toBe('queued');
+    expect(await sendRehearsal(db, rehearsal.id)).toBe('queued');
+    await transitionApplication(db, allRehearsals.id, { status: 'dry_run_ready', set: { answers: [answer] } });
+    expect(await sendAllRehearsals(db)).toBe(1);
+    const answeredRow = (await applicationForJob(db, answered.job.id))!;
+    expect(await settlePendingQuestions(db, answeredRow, [])).toBe(true);
+    expect(await requeueQuestionWaits(db, asked.id)).toEqual([waiting.id]);
+    expect(await recoverApplications(db, 5000)).toEqual({ requeued: 1, unconfirmed: [] });
+
+    for (const r of [retried, rehearsal, allRehearsals, waiting, answered, interrupted]) {
+      expect(await applicationForJob(db, r.job.id)).toMatchObject({ status: 'queued', cancelRequested: false });
+    }
   });
 });
 
