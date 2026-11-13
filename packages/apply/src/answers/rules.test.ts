@@ -328,7 +328,9 @@ describe('fix round 2: consent by remainder', () => {
   it('the name of another company is a remainder', () => {
     isNotConsent("Please review and acknowledge Acme's Candidate Privacy Policy", 'personal', at('Beta'));
     isNotConsent('Aceito os termos de uso da Beta', 'personal');
-    isConsent('Aceito os termos de uso da Beta', at('Beta Tecnologia Ltda'));
+    // Fix round 4, R6: só o nome inteiro sai; "Beta" sozinho de "Beta Tecnologia Ltda" sobra.
+    isNotConsent('Aceito os termos de uso da Beta', 'personal', at('Beta Tecnologia Ltda'));
+    isConsent('Aceito os termos de uso da Beta Tecnologia', at('Beta Tecnologia Ltda'));
   });
 
   it('own probes: more consent wordings', () => {
@@ -417,19 +419,20 @@ describe('fix round 3: words that point elsewhere, purposes, help text, military
   });
 
   it('a pointing word is accepted as the determiner of an object or of the application', () => {
-    for (const label of ['I agree to this privacy policy', 'I have read the above privacy policy', 'I accept these terms of use',
-      'I accept the following terms of use', 'By submitting this form, I agree to the privacy policy',
+    // Fix round 4, R2: "the above privacy policy" e "the following terms of use" passaram para a recusa (teste do round 4).
+    for (const label of ['I agree to this privacy policy', 'I accept these terms of use',
+      'By submitting this form, I agree to the privacy policy',
       'I consent to the processing of my personal data for this recruitment process',
       'Concordo com esta política de privacidade', 'Aceito estes termos de uso', 'Ao enviar esta candidatura, concordo com a política de privacidade',
       'Autorizo o tratamento dos meus dados pessoais neste processo seletivo', 'Declaro que as informações desta candidatura são verdadeiras'])
       consent(label);
   });
 
-  it('a pointing word is accepted as one locative right after an object', () => {
+  it('a locative right after an object is no longer accepted (fix round 4, R2)', () => {
     for (const label of ['I agree to the privacy policy above', 'I accept the terms of use below', 'I have read the privacy notice linked here',
       'Concordo com a política de privacidade acima', 'Aceito os termos de uso disponíveis aqui', 'I agree to the privacy policy linked below',
       'Li o aviso de privacidade abaixo', 'Li os termos de uso a seguir'])
-      consent(label);
+      personal(label);
     // "available" cai antes no padrão sensível de disponibilidade (over-catch aceito); a resposta segue o classificador.
     personal('I agree to the privacy policy available here');
   });
@@ -470,8 +473,9 @@ describe('fix round 3: words that point elsewhere, purposes, help text, military
     personal('Privacy Policy', 'By checking this you also agree to work weekends');
     personal('I agree to the privacy policy', 'Você também concorda em trabalhar aos sábados');
     consent('Privacy Policy', 'Required to process your application');
-    consent('Política de privacidade', 'Leia a política de privacidade aqui');
-    consent('I agree to the privacy policy', 'Read our privacy policy here');
+    // Fix round 4, R2: "aqui"/"here" sobram também no texto de ajuda.
+    personal('Política de privacidade', 'Leia a política de privacidade aqui');
+    personal('I agree to the privacy policy', 'Read our privacy policy here');
   });
 
   it('own probes: refused', () => {
@@ -489,13 +493,15 @@ describe('fix round 3: words that point elsewhere, purposes, help text, military
   });
 
   it('own probes: accepted', () => {
-    for (const label of ['I agree to the privacy policy linked above', 'Concordo com estes termos de uso',
+    // Fix round 4, R2: "linked above" e as ajudas com "linked here"/"abaixo" passaram para a recusa.
+    personal('I agree to the privacy policy linked above');
+    personal('Privacy Policy', 'Please read our privacy policy linked here');
+    personal('Termos de uso', 'Consulte os termos de uso abaixo');
+    for (const label of ['Concordo com estes termos de uso',
       'Li e concordo com a política de privacidade deste processo seletivo', 'I confirm the information in this form is accurate',
       'I consent to the processing of my personal data for the purpose of this recruitment process',
       'Autorizo o tratamento dos meus dados para fins de seleção'])
       consent(label);
-    consent('Privacy Policy', 'Please read our privacy policy linked here');
-    consent('Termos de uso', 'Consulte os termos de uso abaixo');
     consent('I agree to the privacy policy', 'Required');
     consent('Aceito a política de privacidade', 'Obrigatório');
   });
@@ -506,6 +512,126 @@ describe('fix round 3: words that point elsewhere, purposes, help text, military
       expect(classifyByRule(q(label)), label).toBe('demographic');
     expect(classifyByRule(select('Status', ['Militar', 'Civil']))).toBe('demographic');
     expect(classifyByRule(q('Situação', { help: 'Informe se é militar da ativa' }))).toBe('demographic');
+  });
+});
+
+describe('fix round 4: a closed rule set for pointing words, boundaries, the company name and "all"', () => {
+  const box = (label: string, help = '') => q(label, { kind: 'boolean', help });
+  const verdict = (label: string, help = '', company = 'Acme') => {
+    const rc: RuleContext = { ...ctx, job: { ...ctx.job, company } };
+    return [classifyByRule(box(label, help), company), answerByRule(box(label, help), 'consent', rc)];
+  };
+  const consent = (label: string, help = '', company = 'Acme') =>
+    expect(verdict(label, help, company), `${label} | ${help} | ${company}`).toEqual(['consent', true]);
+  const personal = (label: string, help = '', company = 'Acme') =>
+    expect(verdict(label, help, company), `${label} | ${help} | ${company}`).toEqual(['personal', undefined]);
+
+  it('the inputs of the review are refused', () => {
+    for (const label of ['I agree to the above, privacy policy and terms of use', 'I agree to all of the above. Privacy Policy',
+      'I accept all the above, Terms of Use and Privacy Policy', 'Concordo com o acima, política de privacidade e termos de uso',
+      'I agree to it. Privacy Policy', 'Li e concordo com isso política de privacidade', 'I agree to same privacy policy',
+      'I agree to that, the privacy policy', 'I accept that, the privacy policy and the terms of use',
+      'I agree to the above process and the privacy policy', 'I accept the following process and the privacy policy',
+      'I accept the above selection and the privacy policy', 'I agree to the above form and the privacy policy',
+      'I certify that the statements above are true', 'I confirm all of the above information and answers are true'])
+      personal(label);
+    personal('I agree to the privacy policy', 'Read the above form');
+    personal('I agree to the privacy policy', 'Read this process');
+  });
+
+  it('R1: punctuation is a boundary', () => {
+    personal('I agree to this, privacy policy');
+    consent('I agree to this privacy policy');
+    personal('Concordo com esta, política de privacidade');
+    consent('Concordo com esta política de privacidade');
+    // Hífen e apóstrofo dentro da palavra não são fronteira.
+    consent("I've read the privacy notice");
+    consent("I agree to Acme's privacy policy");
+  });
+
+  it('R2: a pointing word is never filler, also after an object', () => {
+    for (const label of ['I agree to the privacy policy above', 'I accept the terms of use below', 'I have read the privacy notice linked here',
+      'Concordo com a política de privacidade acima', 'Aceito os termos de uso disponíveis aqui', 'I agree to the privacy policy linked below',
+      'Li o aviso de privacidade abaixo', 'Li os termos de uso a seguir', 'I have read the above privacy policy',
+      'I accept the following terms of use', 'I agree to the privacy policy attached', 'I accept the aforementioned terms of use',
+      'Concordo com os referidos termos de uso', 'Aceito os mesmos termos de uso', 'Aceito tais termos de uso', 'I accept such terms of use',
+      'Declaro que as informações acima são verdadeiras'])
+      personal(label);
+    personal('Política de privacidade', 'Leia a política de privacidade aqui');
+    personal('Privacy Policy', 'Please read our privacy policy linked here');
+  });
+
+  it('R3: a demonstrative is accepted only before an allowed object or an application phrase', () => {
+    for (const label of ['I agree to this privacy policy', 'I accept these terms of use', 'Concordo com esta política de privacidade',
+      'Aceito estes termos de uso', 'By submitting this application, I agree to the privacy policy',
+      'By submitting this job application, I agree to the privacy policy', 'By submitting this form, I agree to the privacy policy',
+      'I consent to the processing of my personal data for this recruitment process',
+      'I consent to the processing of my personal data for this hiring process',
+      'Ao enviar esta candidatura, concordo com a política de privacidade', 'Ao enviar este formulário, concordo com a política de privacidade',
+      'Autorizo o tratamento dos meus dados pessoais neste processo seletivo',
+      'Autorizo o tratamento dos meus dados pessoais neste processo de recrutamento',
+      'Li e concordo com a política de privacidade deste processo de seleção',
+      'I certify that the information provided in this application is true and complete'])
+      consent(label);
+    for (const label of ['I agree to the privacy policy for this role', 'Concordo com a política de privacidade e com esta jornada',
+      'I agree to the privacy policy for this process', 'I agree to the privacy policy for this selection',
+      'Autorizo o tratamento dos meus dados neste processo', 'I accept this and the privacy policy', 'I agree to these: privacy policy'])
+      personal(label);
+  });
+
+  it('R4: "that" and "que" before a conjunction, a boundary or nothing are a remainder', () => {
+    personal('I agree to that, the privacy policy');
+    personal('I accept that and the privacy policy');
+    personal('Aceito a política de privacidade e que.');
+    consent('I confirm that I have read the privacy policy');
+  });
+
+  it('R6: the company is removed only as its whole name', () => {
+    personal('I agree to the privacy policy and remote work', '', 'Acme Remote Work');
+    consent('I agree to the privacy policy of Acme Remote Work', '', 'Acme Remote Work');
+    consent("Please review and acknowledge Acme's Candidate Privacy Policy", '', 'Acme');
+    consent("I agree to Acme Inc's privacy policy", '', 'Acme Inc.');
+    consent('Concordo com a política de privacidade da Acme', '', 'Acme S.A.');
+    consent('Concordo com a política de privacidade da Acme Ltda', '', 'Acme');
+    personal('Aceito os termos de uso da Beta', '', 'Beta Tecnologia Ltda');
+  });
+
+  it('R7: "all" and "any" only directly before the information noun of a truthfulness phrase', () => {
+    personal('I agree to the processing of my personal data for all applications');
+    personal('I agree to all terms of use');
+    personal('Aceito todos os termos de uso');
+    personal('Autorizo o tratamento dos meus dados em qualquer processo seletivo');
+    for (const label of ['I certify that all information provided is true', 'I certify that all of the information is accurate',
+      'Declaro que todas as informações são verdadeiras', 'I hereby certify that all the information I have provided is true, accurate and complete'])
+      consent(label);
+  });
+
+  it('the positive forms of rounds 2 and 3 still pass', () => {
+    for (const label of ['I agree to the privacy policy', 'Li e concordo com a política de privacidade', 'I accept the terms of use',
+      'Aceito os termos de uso', 'I consent to the processing of my personal data', 'Autorizo o tratamento dos meus dados pessoais conforme a LGPD',
+      'I certify that the information provided is true and complete', 'Declaro que as informações prestadas são verdadeiras',
+      'Privacy Policy', 'Termos de uso', 'Li e concordo com os termos de uso e a política de privacidade'])
+      consent(label);
+  });
+
+  it('own probes: wrong acceptances are refused', () => {
+    // Pontuação.
+    for (const label of ['I accept this - the privacy policy', 'I agree to this (privacy policy)', 'Concordo com esta; política de privacidade',
+      'I agree to "this" privacy policy', 'I agree to the privacy policy.\nThat', 'I certify that the information is true. All',
+      'I agree to that\nprivacy policy', 'I agree to the privacy policy / and the following']) personal(label);
+    // Palavras de ligação que somadas diriam algo.
+    for (const label of ['I agree to the privacy policy and you may submit my data', 'I agree to the privacy policy for any form',
+      'I agree to the privacy policy for every application', 'Aceito a política de privacidade para qualquer processo seletivo',
+      'Concordo com a política de privacidade de todo o processo']) personal(label);
+    // Nome da empresa.
+    personal('I agree to the privacy policy and Acme Remote', '', 'Acme Remote Work');
+    personal('I agree to the privacy policy of Remote Work', '', 'Acme Remote Work');
+    personal('I agree to the privacy policy, Acme, Remote Work', '', 'Acme Remote Work');
+    personal('I agree to the privacy policy of Inc', '', 'Acme Inc');
+    // Texto de ajuda.
+    personal('I agree to the privacy policy', 'Including all of the above');
+    personal('I agree to the privacy policy', 'This');
+    personal('Privacy Policy', 'Privacy Policy, Terms of Use, and the above');
   });
 });
 
