@@ -66,7 +66,7 @@ function Block({ title, children, first }: { title: string; children: ReactNode;
   );
 }
 
-function ToggleRow({ testId, label, off, checked, onChange, source, changed }: {
+export function ToggleRow({ testId, label, off, checked, onChange, source, changed }: {
   testId: string; label: string; off: string; checked: boolean; onChange: (v: boolean) => void; source: SettingSource; changed: boolean;
 }) {
   const id = useId();
@@ -185,13 +185,8 @@ function Usage() {
   );
 }
 
-export interface SettingsFieldIds {
-  modelFast: string;
-  modelStrong: string;
-  dailyBudget: string;
-  greenhouseBoards: string;
-  leverCompanies: string;
-}
+/** Por chave de erro, o id do campo que recebe o foco quando esse erro impede o salvamento. */
+export type SettingsFieldIds = Record<keyof SettingsFormErrors, string>;
 
 interface Props {
   dto: SettingsDto;

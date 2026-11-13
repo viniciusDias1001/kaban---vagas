@@ -146,6 +146,14 @@ function companiesProblem(list: string[]): string | undefined {
   return bad ? `"${bad}" não é um nome válido: use o nome da empresa como aparece na URL (letras, dígitos, - e _).` : undefined;
 }
 
+/** O primeiro limite diário inválido (é o campo que recebe o erro e o foco); undefined quando todos valem. */
+export function badDailyCap(form: SettingsForm): keyof ApplyDailyCaps | undefined {
+  return APPLY_CAP_KEYS.find((k) => {
+    const n = parseWhole(form.applyDailyCaps[k]);
+    return n === null || n > APPLY_SETTINGS_LIMITS.maxCap;
+  });
+}
+
 /** Erros por campo; objeto vazio = pode salvar. */
 export function validateSettings(form: SettingsForm): SettingsFormErrors {
   const errors: SettingsFormErrors = {};

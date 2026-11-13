@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { SettingsPatchSchema, type AiKeyMetaDto, type SettingsDto } from '@kv/shared';
 import {
-  OUTCOME_TONE, apiKeyProblem, changeProvider, collectBlockItems, collectCompanies, formFromSettings, isDirty, keyView, maskedKey, parseBudget,
+  OUTCOME_TONE, apiKeyProblem, badDailyCap, changeProvider, collectBlockItems, collectCompanies, formFromSettings, isDirty, keyView, maskedKey, parseBudget,
   toSettingsPatch, validateSettings,
 } from './settingsForm';
 
