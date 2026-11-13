@@ -10,3 +10,4 @@ export * from './mail';
 export * from './mail-replies';
 export * from './mail-alerts';
 export * from './mail-board';
+export * from './dashboard';
