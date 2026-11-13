@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { BrowserContext, Page, Response } from 'playwright';
+import type { Browser, BrowserContext, Page, Response } from 'playwright';
 
 // O código que roda dentro da página é texto, não função: o transpilador dos scripts (tsx) injeta auxiliares
 // em funções serializadas, e eles não existem no navegador.
@@ -38,6 +38,16 @@ function fileNameFor(url: URL, contentType: string): string {
 /** Aborta toda requisição que não é GET, na página ou no contexto inteiro. Deixa as demais para o próximo tratador. */
 export async function blockWrites(target: Page | BrowserContext): Promise<void> {
   await target.route('**/*', (route) => (route.request().method() === 'GET' ? route.fallback() : route.abort()));
+}
+
+/**
+ * A página dos modos sem janela do gravador (replay, snapshot): contexto novo sem service worker (ele poderia
+ * refazer requisições por fora de `route`) e com toda requisição que não é GET abortada antes de a página existir.
+ */
+export async function newRecordingPage(browser: Browser): Promise<Page> {
+  const context = await browser.newContext({ locale: 'pt-BR', serviceWorkers: 'block' });
+  await blockWrites(context);
+  return context.newPage();
 }
 
 /** Há um cookie com esse nome, não vazio, no domínio (ou em um subdomínio dele)? */
