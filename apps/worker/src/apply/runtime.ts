@@ -1,6 +1,7 @@
 import { AiError, createProvider } from '@kv/ai';
 import {
-  applyDataDir, applySites, browserProfileDir, createBrowserSession, detectBrowserChannel, fakeLaunch, realLaunch,
+  applyDataDir, applySites, browserProfileDir, browserUnavailableReason, createBrowserSession, detectBrowserChannel, fakeBrowserProfileDir,
+  fakeLaunch, realLaunch,
   type LaunchContext,
 } from '@kv/apply';
 import { fetchJobDescription } from '@kv/connectors';
@@ -11,8 +12,6 @@ import { createApplyQueue, type ApplyQueue } from './queue';
 
 /** Com o site de teste, a varredura roda a cada 5 s (o e2e não espera 5 min). */
 const FAKE_SWEEP_MS = 5_000;
-const NO_BROWSER =
-  'Nenhum navegador encontrado para a candidatura automática: instale o Chrome ou o Edge, ou aponte APPLY_BROWSER para o executável (ou para "chrome"/"msedge").';
 
 /**
  * Monta a fila para o processo: sites de `applySites(env)`, navegador real (o de `APPLY_BROWSER`, ou Chrome/Edge achados no
@@ -32,16 +31,19 @@ export function createApplyRuntime(
   const host = applyAvailability(env);
   // O navegador é procurado de novo a cada verificação e a cada abertura: uma atualização que muda o executável de
   // pasta (o Opera GX faz isso) aparece na tela como indisponível e volta sozinha quando o caminho volta a existir.
-  const availability = (): { available: boolean; reason: string | null } =>
-    !host.available ? host : fake || detectBrowserChannel(env) ? host : { available: false, reason: NO_BROWSER };
+  const availability = (): { available: boolean; reason: string | null } => {
+    if (!host.available || fake) return host;
+    const reason = browserUnavailableReason(env);
+    return reason === null ? host : { available: false, reason };
+  };
   const launch: LaunchContext = fake
     ? fakeLaunch()
     : async (userDataDir) => {
         const choice = detectBrowserChannel(env);
-        if (!choice) throw new Error(NO_BROWSER);
+        if (!choice) throw new Error(browserUnavailableReason(env) ?? 'Navegador não encontrado.');
         return realLaunch(choice)(userDataDir);
       };
-  const browser = createBrowserSession({ userDataDir: browserProfileDir(dataDir), launch });
+  const browser = createBrowserSession({ userDataDir: fake ? fakeBrowserProfileDir(dataDir) : browserProfileDir(dataDir), launch });
   const queue = createApplyQueue({
     db, settings, sites: () => sites, browser, dataDir, availability, fetchDescription: fetchJobDescription, log: opts.log,
     ai: async () => {
