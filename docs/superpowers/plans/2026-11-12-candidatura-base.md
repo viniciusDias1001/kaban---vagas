@@ -976,9 +976,9 @@ export function decideGate(input: { blockedBy: string | null; gate: { score: num
 
 ```ts
 it('blocks by company and by term, ignoring case and accents', () => {
-  expect(isBlocked({ company: 'HarmonizaPRO', title: 'Dev', description: '' }, { blockedCompanies: ['harmonizapro'], blockedTerms: [] })).toBe('harmonizapro');
+  expect(isBlocked({ company: 'Empresa Atual S.A.', title: 'Dev', description: '' }, { blockedCompanies: ['empresa atual'], blockedTerms: [] })).toBe('empresa atual');
   expect(isBlocked({ company: 'Acme', title: 'Estágio em TI', description: '' }, { blockedCompanies: [], blockedTerms: ['estagio'] })).toBe('estagio');
-  expect(isBlocked({ company: 'Acme', title: 'Dev', description: '' }, { blockedCompanies: ['harmonizapro'], blockedTerms: [] })).toBeNull();
+  expect(isBlocked({ company: 'Acme', title: 'Dev', description: '' }, { blockedCompanies: ['empresa atual'], blockedTerms: [] })).toBeNull();
 });
 it('opens at 08:00 and closes at 21:00 in the configured time zone', () => {
   const at = (hhmm: string) => Date.parse(`2026-11-12T${hhmm}:00-03:00`);
@@ -1147,7 +1147,13 @@ Sequência que os testes fixam:
 7. `report({ status: 'submitting', answers })`. Se devolver false: `discard` e `cancelled`.
 8. `submit`, `shot('confirmation')`, `submitted`.
 
-`SiteLayoutError` em qualquer ponto: `shot('blocked')`, `discard` (ignorando erro) e `needs_human` com `unsupported_form`. `SubmitRejectedError`: `needs_human` com `captcha` e o detalhe "o site recusou o envio automático; envie por conta própria".
+`SiteLayoutError` antes do clique de envio: `shot('blocked')`, `discard` (ignorando erro) e `needs_human` com `unsupported_form`. `SubmitRejectedError`: `needs_human` com `captcha` e o detalhe "o site recusou o envio automático; envie por conta própria".
+
+Regras que o plano dos sites reais espera do motor:
+
+- `humanGate` é consultado depois de `open`, antes de cada `readStep`, antes de `submit` e ao capturar `SiteLayoutError` ou `SubmitRejectedError`, antes de classificar a falha: com um bloqueio na tela, vale o bloqueio, não o erro.
+- Bloqueio resolvido logo depois de `open`: chama `open` de novo antes de ler. Bloqueio resolvido no envio: chama `submit` de novo (os roteiros garantem que `submit` não clica duas vezes quando a confirmação já está na tela).
+- Qualquer erro lançado por `submit` que não seja `SubmitRejectedError`, sem bloqueio na tela, devolve `needs_human` com `confirm_submission`: depois do clique não se sabe se o site recebeu, e nunca há nova tentativa automática.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1186,6 +1192,21 @@ it('makes a new rehearsal when the form gained a required question', async () =>
 it('turns an unknown layout into unsupported_form with a photo', async () => { /* readStep lança SiteLayoutError */ });
 it('turns a silent refusal into needs_human captcha', async () => { /* submit lança SubmitRejectedError */ });
 it('gives up after twelve steps', async () => { /* readStep nunca devolve isLast */ });
+it('opens the job again after a gate solved right after open', async () => {
+  // humanGate devolve 'login' na primeira consulta e null depois; waitHuman 'solved'
+  expect(order.filter((c) => c === 'site:open')).toHaveLength(2);
+});
+it('asks the owner to confirm when submit fails after the click', async () => {
+  const res = await runApplication(target, deps({ mode: 'real', submit: async () => { throw new SiteLayoutError('confira no site'); } }));
+  expect(res).toMatchObject({ status: 'needs_human', reason: 'confirm_submission' });
+  expect(order.filter((c) => c === 'site:submit')).toHaveLength(1);
+});
+it('submits again after a captcha that showed up on submit', async () => {
+  // submit lança SubmitRejectedError na primeira vez; humanGate devolve 'captcha' em seguida; waitHuman 'solved'
+  expect(res.status).toBe('submitted');
+  expect(order.filter((c) => c === 'site:submit')).toHaveLength(2);
+});
+it('prefers the gate to the layout error', async () => { /* readStep lança SiteLayoutError com humanGate 'restricted': needs_human restricted, não unsupported_form */ });
 // engine.browser.test.ts — site de teste, página de openFixture
 it('applies to the test site end to end', async () => {
   const res = await runApplication(siteFor(fakeJob, [site])!.target, realDeps({ mode: 'real' }));
