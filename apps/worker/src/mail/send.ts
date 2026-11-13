@@ -7,7 +7,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   applicationForJob, baseProfile, discardReply, getMailAccount, insertMailMessage, jobs, mailMessageById, mailReplies, markReplyFailed,
-  markReplySending, markReplySent, nextApprovedReply, profileFor, raiseAlert, repliesInSending, resolveAlerts, returnReplyToDraft,
+  markReplySending, markReplySent, nextApprovedReply, profileFor, raiseAlert, repliesInSending, resolveAlerts, returnApprovedToDraft, returnReplyToDraft,
   type Db, type MailMessageRow, type MailReplyRow,
 } from '@kv/db';
 import { MailAuthError, MailTransientError, isTrustedRecipient, type Mailbox, type OutgoingMail, type RawMail } from '@kv/mail';
@@ -41,10 +41,10 @@ const NO_COMPANY = 'Empresa';
 
 const defaultMessageId = (): string => `${randomUUID()}@kanban-vagas.local`;
 
-/** A resposta volta para o dono com a nota e um alerta `draft` com o motivo. */
+/** A resposta ainda `aprovada` volta para o dono com a nota e um alerta `draft` com o motivo; já mudou (descartada): nada. */
 async function handBack(deps: SendDeps, reply: MailReplyRow, note: string, why: string): Promise<true> {
   const { db, now, log } = deps;
-  await returnReplyToDraft(db, reply.id, note);
+  if (!(await returnApprovedToDraft(db, reply.id, note))) return true;
   await raiseAlert(db, { kind: 'draft', replyId: reply.id, payload: { reason: note } }, now());
   log(`[mail] resposta ${reply.id} voltou para rascunho: ${why}`);
   return true;

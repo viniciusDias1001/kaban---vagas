@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import {
-  baseProfile, deleteMailAccount, deleteMailData, getMailAccount, raiseAlert, repliesInState, resolveAlerts, returnReplyToDraft,
+  baseProfile, deleteMailAccount, deleteMailData, getMailAccount, raiseAlert, repliesInState, resolveAlerts, returnApprovedToDraft,
   saveMailAccount, updateMailAccount, type Db,
 } from '@kv/db';
 import { FOLDERS_HIDDEN_TEXT, MailAuthError, MailFolderError, PhoneAlertError, type Mailbox } from '@kv/mail';
@@ -109,7 +109,8 @@ export function emailAccountRoutes(app: FastifyInstance, db: Db, ctx: AiContext)
     const now = ctx.now();
     for (const kind of ['mailbox_error', 'budget_waiting', 'backfill_summary'] as const) await resolveAlerts(db, { kind }, now);
     for (const queued of await repliesInState(db, 'aprovada')) {
-      await returnReplyToDraft(db, queued.id, DISCONNECTED);
+      // Só se ainda está `aprovada`: o worker pode tê-la posto em `enviando` depois da leitura acima.
+      if (!(await returnApprovedToDraft(db, queued.id, DISCONNECTED))) continue;
       await raiseAlert(db, { kind: 'draft', replyId: queued.id, payload: { reason: DISCONNECTED } }, now);
     }
     return reply.code(204).send();

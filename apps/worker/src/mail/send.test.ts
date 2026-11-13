@@ -314,6 +314,14 @@ describe('sendNext', () => {
     expect(await replyById(db, second)).toMatchObject({ state: 'enviada' });
   });
 
+  it('raises no draft alert when the owner discarded the reply while it was being prepared', async () => {
+    await db.update(mailReplies).set({ attachResume: true }).where(eq(mailReplies.id, replyId));
+    const resume = async () => { await discardReply(db, replyId, null); return null; };
+    expect(await sendNext({ ...deps, resume })).toBe(true);
+    expect(await replyById(db, replyId)).toMatchObject({ state: 'descartada' });
+    expect(await openAlerts(db)).toEqual([]);
+  });
+
   it('still lets a mailbox error through when preparing fails', async () => {
     const { mailbox } = mailboxWith({ fetchThread: async () => { throw new MailTransientError('caiu'); } });
     await expect(sendNext({ ...deps, mailbox })).rejects.toThrow('caiu');
