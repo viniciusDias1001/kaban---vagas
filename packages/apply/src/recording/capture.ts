@@ -189,13 +189,19 @@ const BLOCK_SUBMIT_SOURCE = `(() => {
  * Instala, em toda página do contexto (a de agora e as futuras), um tratador que barra o clique em botão cujo
  * texto casa `/enviar candidatura|submit application/i` (também dentro de shadow root) e todo evento `submit`
  * de formulário. Se não conseguir instalar em uma página já aberta, lança: a gravação não segue sem a proteção.
+ * Com `closeUnscriptable`, uma página que não é http(s) (aba `chrome://`, de extensão) e não aceita o script é
+ * fechada e a instalação segue; uma página de site que não aceita ainda lança.
  */
-export async function blockSubmitClicks(page: Page): Promise<void> {
+export async function blockSubmitClicks(page: Page, options: { closeUnscriptable?: boolean } = {}): Promise<void> {
   await page.context().addInitScript(BLOCK_SUBMIT_SOURCE);
   for (const open of page.context().pages()) {
     try {
       await open.evaluate(BLOCK_SUBMIT_SOURCE);
     } catch (err) {
+      if (options.closeUnscriptable && !/^https?:/i.test(open.url())) {
+        await open.close().catch(() => {});
+        continue;
+      }
       throw new Error(`não foi possível instalar a proteção contra envio em ${open.url()}: ${err instanceof Error ? err.message : err}`);
     }
   }

@@ -62,6 +62,12 @@ describe('identity check after scrubbing', () => {
     expect(findIdentityLeaks(text, ana).length).toBeGreaterThan(0);
   });
 
+  it('flags an accented name written with json unicode escapes', () => {
+    const jose: ScrubIdentity = { names: ['José Álvares'], emails: [], phones: [], extra: [] };
+    expect(findIdentityLeaks('{"name":"Jos\\u00e9 \\u00c1lvares"}', jose).length).toBeGreaterThan(0);
+    expect(findLeaks('{"mail":"ana\\u0040gmail.com"}').map((l) => l.rule)).toContain('email');
+  });
+
   it('reports nothing for clean text or an empty identity', () => {
     expect(findIdentityLeaks('<p>Pessoa Exemplo, pessoa@example.com, +55 11 90000-0000</p>', ana)).toEqual([]);
     expect(findIdentityLeaks('<p>Ana Souza</p>', NO_IDENTITY)).toEqual([]);
@@ -79,6 +85,8 @@ describe('personal data in less common forms', () => {
     ['a data-member-id attribute', '<div data-member-id="123456789"></div>', 'member_id', /123456789/],
     ['a csrf meta tag', '<meta name="csrf-token" content="Zm9vYmFyYmF6">', 'token', /Zm9vYmFy/],
     ['a csrf meta tag with reversed attributes', '<meta content="Zm9vYmFyYmF6" name="csrf-token">', 'token', /Zm9vYmFy/],
+    ['a _csrf field', '{"_csrf": "abcdef123456"}', 'token', /abcdef123456/],
+    ['an authenticity_token key', 'authenticity_token=abcdef123456', 'token', /abcdef123456/],
     ['a csrf key in a json response', '{"csrf_token": "abcdef123456"}', 'token', /abcdef123456/],
     ['a jwt in an attribute', '<div data-auth="eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.c2lnbmF0dXJlMTIz"></div>', 'token', /eyJhbGci/],
   ] as const)('scrubs or flags %s', (_label, dirty, rule, gone) => {

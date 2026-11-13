@@ -40,7 +40,7 @@ const LICDN_URL = /(?:https?:)?\/\/(?:[\w-]+\.)*licdn\.com(?:[/?#][^\s"'()<>]*)?
 const DATA_IMAGE = /data:image\/[^\s"'()<>]*/gi;
 const DATA_IMAGE_LIMIT = 200;
 const SESSION_TOKEN =
-  /(\b(?:JSESSIONID|li_at|csrf[_-]?token|xsrf[_-]?token|x-csrf-token|session[_-]?id|access[_-]?token|id[_-]?token|auth[_-]?token)\b["']?\s*[=:]\s*["']?)([^;"'\s&<,]+)/gi;
+  /(\b(?:JSESSIONID|li_at|_csrf|authenticity[_-]?token|csrf[_-]?token|xsrf[_-]?token|x-csrf-token|session[_-]?id|access[_-]?token|id[_-]?token|auth[_-]?token)\b["']?\s*[=:]\s*["']?)([^;"'\s&<,]+)/gi;
 const AJAX_TOKEN = /ajax:(\d+)/g;
 const JWT = /\bey[\w-]{8,}\.[\w-]{8,}\.[\w-]{8,}/g;
 const ATTRIBUTE = /(\b(?:src|srcset|href|style)\s*=\s*)("[^"]*"|'[^']*')/gi;
@@ -74,7 +74,9 @@ function decodeEntities(s: string): string {
 
 /** Entidades HTML e escapes de URL decodificados, para o que se escreve de um jeito poder ser lido de outro. */
 function decodeEscapes(s: string): string {
-  return decodeEntities(s).replace(/(?:%[0-9a-f]{2})+/gi, (m) => {
+  return decodeEntities(s)
+    .replace(/\\u([0-9a-f]{4})/gi,(_m, hex: string) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/(?:%[0-9a-f]{2})+/gi, (m) => {
     try { return decodeURIComponent(m); } catch { return m; }
   });
 }

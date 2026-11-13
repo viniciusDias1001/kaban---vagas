@@ -91,6 +91,15 @@ describe('recording guards', () => {
     await expect(blockSubmitClicks(broken)).rejects.toThrow(/chrome:\/\/newtab/);
   });
 
+  it('with closeUnscriptable, closes a page that cannot be scripted and still fails on a site page', async () => {
+    let closed = 0;
+    const page = (url: string) => ({ evaluate: async () => { throw new Error('sem acesso'); }, url: () => url, close: async () => { closed += 1; } });
+    const contextWith = (pages: unknown[]) => ({ context: () => ({ addInitScript: async () => {}, pages: () => pages }) }) as unknown as Page;
+    await blockSubmitClicks(contextWith([page('chrome://newtab/'), page('chrome-extension://abc/x.html')]), { closeUnscriptable: true });
+    expect(closed).toBe(2);
+    await expect(blockSubmitClicks(contextWith([page('https://www.linkedin.com/feed/')]), { closeUnscriptable: true })).rejects.toThrow(/linkedin/);
+  });
+
   it('blockWrites aborts a fetch POST and a form POST made by the page', async () => {
     const page = await openForms();
     await blockWrites(page.context());

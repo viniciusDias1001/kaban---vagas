@@ -31,7 +31,7 @@ Modos:
   profile   --staging <pasta fora do repositório>
             Abre o perfil do navegador do dono, que já precisa estar com a sessão aberta (entre no site antes, pelo
             uso normal). Só leitura: toda requisição que não é GET é abortada e todo envio de formulário é barrado,
-            então algumas páginas podem não avançar. Isso é intencional.
+            então algumas páginas podem não avançar. Isso é intencional. Service workers ficam bloqueados.
   scrub    --from <staging> --to <pasta de fixtures> --identity <json fora do repositório>
 `;
 
@@ -114,7 +114,8 @@ async function withHeadlessPage<T>(run: (page: Page) => Promise<T>): Promise<T> 
   const { chromium } = await import('playwright');
   const browser = await chromium.launch({ headless: true });
   try {
-    const context = await browser.newContext({ locale: 'pt-BR' });
+    // Service worker poderia refazer requisições por fora de `route`.
+    const context = await browser.newContext({ locale: 'pt-BR', serviceWorkers: 'block' });
     return await run(await context.newPage());
   } finally {
     await browser.close();
@@ -164,14 +165,15 @@ async function recordProfile(values: Record<string, string | undefined>): Promis
   if (!choice) fail('nenhum navegador encontrado: defina APPLY_BROWSER (chrome, msedge ou o caminho de um executável)');
   mkdirSync(staging, { recursive: true });
 
-  const context = await realLaunch(choice)(browserProfileDir(applyDataDir()));
+  const context = await realLaunch(choice, { serviceWorkers: 'block' })(browserProfileDir(applyDataDir()));
   let closed = false;
-  context.on('close', () => { closed = true; });
   try {
     // Só leitura, antes de qualquer outra coisa: nenhuma requisição que não seja GET sai do navegador.
     await blockWrites(context);
+    context.on('close', () => { closed = true; });
     const first = context.pages()[0] ?? (await context.newPage());
-    await blockSubmitClicks(first);
+    await blockSubmitClicks(first, { closeUnscriptable: true });
+    if (!context.pages().length) await context.newPage();
     // Não se faz login neste modo: a sessão precisa já existir no perfil.
     if (!hasSessionCookie(await context.cookies('https://www.linkedin.com'), 'li_at', 'linkedin.com')) {
       fail('o perfil não tem sessão aberta no LinkedIn (sem o cookie de sessão). Abra o navegador, entre no LinkedIn normalmente, feche-o e rode de novo.');
