@@ -1,7 +1,7 @@
 # E-mail e Painel — Design (sub-projetos 4 e 5)
 
 Data: 2026-11-13
-Status: aguardando aprovação do dono
+Status: aprovado pelo dono em 2026-11-13 (a seção "Aviso no celular" entrou depois, com o canal que ele escolheu)
 Depende de: Core, IA de perfil e Candidatura automática (`2026-11-11-core-kanban-design.md`, `2026-11-11-ia-perfil-design.md`, `2026-11-12-candidatura-automatica-design.md`, com todos os adendos)
 
 ## Contexto
@@ -164,6 +164,16 @@ Em Configurações, **Respostas com fatos salvos**: `automático` (padrão), `pe
 
 Um **sino** no cabeçalho, com a contagem do que espera o dono. A lista mostra, do mais novo ao mais antigo: convite de entrevista; oferta; pedido sem resposta salva; rascunho esperando aprovação; movimento esperando confirmação; e-mail sem vaga; caixa desconectada ou com erro. Cada alerta abre o card ou a conversa, e some quando o dono resolve ou dispensa. Convite de entrevista e oferta também disparam o aviso do navegador, se o dono tiver permitido (o mesmo botão que já existe).
 
+### Aviso no celular
+
+Pedido do dono depois da aprovação do desenho (2026-11-13), com o canal escolhido por ele: **mensagem pelo Telegram**. Convite de entrevista e oferta, além do alerta no app, mandam uma mensagem por um bot do Telegram que o próprio dono cria no BotFather.
+
+- Em Configurações > E-mail: o canal (desligado por padrão), o token do bot (campo só de escrita, gravado no cofre de segredos), o botão **Achar meu chat** (o dono manda qualquer mensagem ao bot e o app descobre o chat) e **Enviar teste**.
+- Só sai da máquina o tipo do aviso e o nome da empresa ("Convite de entrevista: Acme"). Nada do texto, do remetente ou do assunto do e-mail.
+- O número de telefone do dono não é usado nem guardado.
+- Bot do Telegram não faz ligação. Ligação fica para depois, atrás da mesma interface de aviso.
+- A primeira leitura não manda aviso. Uma falha no envio tenta de novo até 3 vezes e nunca apaga o alerta do app.
+
 ### No card e no painel da vaga
 
 O card ganha um selo quando há e-mail novo ("entrevista", "oferta", "pediu informação"). O painel da vaga ganha a seção **E-mails**: a conversa em ordem (recebidos e enviados, com tipo e data), os rascunhos com **Aprovar e enviar**, **Editar** e **Descartar**, e **Não é desta vaga** (desfaz o casamento).
@@ -253,6 +263,7 @@ No tema escuro e com os componentes do app. Gráficos simples e legíveis (barra
 16. Resposta para um `Reply-To` fora dos endereços confiáveis nunca sai sem aprovação.
 17. Um e-mail de uma empresa do quadro sem sinal de contratação não vai para a IA e aparece na lista de ignorados.
 18. Com o limite diário atingido, o dono é avisado de que há e-mails esperando classificação.
+19. Com o aviso no celular ligado, convite de entrevista e oferta mandam uma mensagem no Telegram só com o tipo e a empresa, uma por alerta.
 
 ## Decisões do autor
 
