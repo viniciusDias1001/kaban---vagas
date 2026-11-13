@@ -11,13 +11,30 @@ function containsWords(haystack: string, needle: string): boolean {
   return needle !== '' && ` ${haystack} `.includes(` ${needle} `);
 }
 
+const LEGAL_SUFFIXES = new Set(['sa', 'ltda', 'me', 'eireli', 'epp', 'inc', 'llc', 'ltd', 'gmbh', 'corp', 'corporation',
+  'co', 'company', 'plc', 'bv', 'ag', 'pty']);
+
+/** Nome de empresa em palavras, sem os sufixos jurídicos do fim ("s a", "ltda", "inc"...). Vazio se só sobrar sufixo. */
+function companyWords(name: string): string {
+  const tokens = words(name).split(' ').filter(Boolean);
+  for (;;) {
+    const n = tokens.length;
+    if (n >= 2 && tokens[n - 2] === 's' && tokens[n - 1] === 'a') tokens.length = n - 2;
+    else if (n >= 1 && LEGAL_SUFFIXES.has(tokens[n - 1])) tokens.length = n - 1;
+    else return tokens.join(' ');
+  }
+}
+
 /** O item da lista de bloqueio que pegou a vaga (empresa ou termo, sem diferença de caixa e acento), ou null. */
 export function isBlocked(
   job: { company: string; title: string; description: string },
   cfg: Pick<ApplyConfig, 'blockedCompanies' | 'blockedTerms'>,
 ): string | null {
-  const company = words(job.company);
-  for (const item of cfg.blockedCompanies) if (containsWords(company, words(item))) return item;
+  const company = companyWords(job.company);
+  for (const item of cfg.blockedCompanies) {
+    const entry = companyWords(item);
+    if (containsWords(company, entry) || containsWords(entry, company)) return item;
+  }
   const text = words(`${job.title} ${job.description}`);
   for (const item of cfg.blockedTerms) if (containsWords(text, words(item))) return item;
   return null;
@@ -65,7 +82,7 @@ export function nextAllowedAt(
 ): number {
   const since = kind === 'form' ? last.formAt : last.viewAt;
   if (since === null) return 0;
-  const [lo, hi] = kind === 'view' ? APPLY_TIMING.viewIntervalMs
+  const [lo, hi] = kind === 'view' ? (site === 'fake' ? APPLY_TIMING.formIntervalMs.fake : APPLY_TIMING.viewIntervalMs)
     : site === 'linkedin' ? APPLY_TIMING.formIntervalMs.linkedin
     : site === 'fake' ? APPLY_TIMING.formIntervalMs.fake
     : APPLY_TIMING.formIntervalMs.other;
@@ -85,7 +102,7 @@ export function decideGate(input: {
   const { gate } = input;
   if (input.manual) return { pass: true, score: gate?.score ?? null };
   if (!gate) return { pass: false, reason: 'below_min_score', detail: 'sem nota de adequação' };
-  if (gate.score < input.minScore) return { pass: false, reason: 'below_min_score', detail: `nota ${gate.score}, mínimo ${input.minScore}` };
+  if (!(gate.score >= input.minScore)) return { pass: false, reason: 'below_min_score', detail: `nota ${gate.score}, mínimo ${input.minScore}` };
   if (!gate.eligible) return { pass: false, reason: 'not_eligible', detail: gate.ineligibleReason };
   return { pass: true, score: gate.score };
 }
