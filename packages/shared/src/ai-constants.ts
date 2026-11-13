@@ -99,7 +99,7 @@ export const AI_TASK_TYPES = ['profile_extract', 'profile_translate', 'tier1', '
 export type AiTaskType = (typeof AI_TASK_TYPES)[number];
 export type AiTaskStatus = 'queued' | 'running' | 'ok' | 'error' | 'blocked_budget';
 /** `test` = chamadas do botão "Testar conexão". */
-export const AI_LAYERS = ['profile', 'tier1', 'tier2', 'tier3', 'test'] as const;
+export const AI_LAYERS = ['profile', 'tier1', 'tier2', 'tier3', 'apply', 'test'] as const;
 export type AiLayer = (typeof AI_LAYERS)[number];
 
 /** Estado de uma camada para a interface. `stale` = existe resultado, mas de uma versão antiga do perfil. */

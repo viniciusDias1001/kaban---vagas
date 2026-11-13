@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   CandidateProfileSchema, ProfileWireSchema, TailoredDraftSchema, Tier1BatchSchema, Tier2OutputSchema, draftOf,
   itemIdPattern, normalizeProfile, randomItemId, type ItemKind, type ProfileWire, type TailoredResume,
+  BankMatchWireSchema, ClassifyWireSchema, GateWireSchema, OpenAnswerWireSchema, ProfileFactWireSchema,
 } from './index';
 import { LIMITS } from './constants';
 
@@ -95,6 +96,11 @@ describe('wire schemas are accepted by the three providers', () => {
     ['Tier1BatchSchema', Tier1BatchSchema],
     ['Tier2OutputSchema', Tier2OutputSchema],
     ['TailoredDraftSchema', TailoredDraftSchema],
+    ['GateWireSchema', GateWireSchema],
+    ['ClassifyWireSchema', ClassifyWireSchema],
+    ['BankMatchWireSchema', BankMatchWireSchema],
+    ['ProfileFactWireSchema', ProfileFactWireSchema],
+    ['OpenAnswerWireSchema', OpenAnswerWireSchema],
   ])('%s has only required fields, closed objects and no constraints', (_name, schema) => {
     expect(problems(z.toJSONSchema(schema))).toEqual([]);
   });

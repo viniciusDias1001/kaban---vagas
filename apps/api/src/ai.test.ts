@@ -41,7 +41,7 @@ describe('GET /ai/status and /ai/usage', () => {
       scoringPause: null,
     });
     const usageDto = (await app.inject({ method: 'GET', url: '/api/ai/usage' })).json();
-    expect(usageDto.today).toEqual({ profile: 0, tier1: 0.4, tier2: 0.7, tier3: 0, test: 0 });
+    expect(usageDto.today).toEqual({ profile: 0, tier1: 0.4, tier2: 0.7, tier3: 0, apply: 0, test: 0 });
     expect(usageDto.last30Days.tier3).toBe(5);
   });
 
