@@ -302,19 +302,51 @@ describe('runApplication', () => {
     // Antes do segundo clique, o estado volta a `submitting`.
     const second = order.lastIndexOf('site:submit');
     expect(order.slice(order.indexOf('site:submit') + 1, second)).toEqual([
-      'site:humanGate', 'report:waiting_human', 'wait:captcha', 'report:submitting',
+      'site:humanGate', 'wait:captcha', 'report:submitting',
     ]);
+    // Depois do primeiro `submitting` aceito, o estado gravado nunca sai de `submitting`.
+    const after = order.slice(order.indexOf('report:submitting'));
+    expect(after.filter((c) => c.startsWith('report:') && c !== 'report:submitting')).toEqual([]);
   });
 
-  it('does not submit again when the owner cancels during a wait on submit', async () => {
+  it('still reports waiting_human for a gate before the click', async () => {
+    let calls = 0;
+    const res = await runApplication(target, deps({ humanGate: async () => (++calls === 2 ? 'captcha' : null) }));
+    expect(res.status).toBe('submitted');
+    expect(order.indexOf('report:waiting_human')).toBeGreaterThan(-1);
+    expect(order.indexOf('report:waiting_human')).toBeLessThan(order.indexOf('report:submitting'));
+  });
+
+  it('asks the owner to confirm when the owner cancels during a wait after the click', async () => {
+    let rejected = false;
+    let submittingReports = 0;
+    const res = await runApplication(target, deps({
+      submit: async () => { rejected = true; throw new SubmitRejectedError('captcha'); },
+      humanGate: async () => (rejected ? 'captcha' : null),
+      report: async (u) => u.status !== 'submitting' || ++submittingReports === 1,
+    }));
+    expect(res).toMatchObject({
+      status: 'needs_human', reason: 'confirm_submission',
+      detail: 'o envio foi iniciado antes do cancelamento; confira no site se a candidatura chegou',
+      answers: [{ questionId: 'q1' }, { questionId: 'q2' }], pending: [],
+    });
+    expect(count('site:submit')).toBe(1);
+    expect(order).toContain('wait:captcha');
+    expect(order).not.toContain('report:waiting_human');
+    expect(order).not.toContain('site:discard');
+  });
+
+  it(`gives the gate back to the owner after ${MAX_GATE_WAITS} solved waits after the click`, async () => {
     let rejected = false;
     const res = await runApplication(target, deps({
       submit: async () => { rejected = true; throw new SubmitRejectedError('captcha'); },
       humanGate: async () => (rejected ? 'captcha' : null),
-      report: async (u) => u.status !== 'waiting_human',
     }));
-    expect(res).toEqual({ status: 'cancelled' });
-    expect(count('site:submit')).toBe(1);
+    expect(res).toMatchObject({ status: 'needs_human', reason: 'captcha' });
+    expect(count('wait:captcha')).toBe(MAX_GATE_WAITS);
+    expect(count('site:submit')).toBe(MAX_GATE_WAITS + 1);
+    expect(order).not.toContain('report:waiting_human');
+    expect(order).not.toContain('site:discard');
   });
 
   it('gives up with the gate reason when the owner does not come on submit', async () => {
@@ -326,6 +358,8 @@ describe('runApplication', () => {
     }));
     expect(res).toMatchObject({ status: 'needs_human', reason: 'captcha' });
     expect(count('site:submit')).toBe(1);
+    expect(order).not.toContain('report:waiting_human');
+    expect(order).not.toContain('site:discard');
   });
 
   it('prefers the gate to the layout error', async () => {

@@ -44,6 +44,7 @@ export const MAX_FORM_STEPS = 12;
 export const MAX_GATE_WAITS = 5;
 
 const SUBMIT_REJECTED_DETAIL = 'o site recusou o envio automático; envie por conta própria';
+const CANCELLED_AFTER_CLICK_DETAIL = 'o envio foi iniciado antes do cancelamento; confira no site se a candidatura chegou';
 const GATE_DETAIL: Record<HumanGate, string> = {
   captcha: 'o site pediu uma verificação de que você não é um robô',
   verification_code: 'o site pediu um código de verificação',
@@ -95,18 +96,27 @@ export async function runApplication(target: ApplyTarget, deps: EngineDeps): Pro
   const report = async (update: EngineUpdate) => {
     if (!(await deps.report(update))) await finish({ status: 'cancelled' });
   };
-  /** Waits for the owner to solve `gate`; returns only when solved, with the state recorded again. */
+  /**
+   * Waits for the owner to solve `gate`; returns only when solved. Before the click the wait is recorded as
+   * `waiting_human` and `filling` comes back after it. After the click the stored state stays `submitting` (that is
+   * what makes crash recovery confirm with the site instead of re-queueing): no other status is reported, and the
+   * `submitting` report before the next click is only the cancel check; a cancel there cannot promise the first
+   * click was not received, so it goes to the owner as `confirm_submission`.
+   */
   const waitGate = async (gate: HumanGate) => {
     if (gate === 'restricted') await finish(needsHuman(gate, GATE_DETAIL[gate]));
     if (solvedWaits >= MAX_GATE_WAITS) {
       await finish(needsHuman(gate, `${GATE_DETAIL[gate]} de novo, depois de ${MAX_GATE_WAITS} esperas resolvidas`));
     }
-    await report({ status: 'waiting_human', gate });
+    if (!clicked) await report({ status: 'waiting_human', gate });
     if ((await deps.waitHuman(gate)) === 'timeout') {
       await finish(needsHuman(gate, `${GATE_DETAIL[gate]} e o tempo de espera acabou`));
     }
     solvedWaits += 1;
-    await report(clicked ? { status: 'submitting', answers: records() } : { status: 'filling' });
+    if (!clicked) await report({ status: 'filling' });
+    else if (!(await deps.report({ status: 'submitting', answers: records() }))) {
+      await finish(needsHuman('confirm_submission', CANCELLED_AFTER_CLICK_DETAIL));
+    }
   };
 
   // Before the click: open, walk the steps, decide whether to send, record `submitting`.
