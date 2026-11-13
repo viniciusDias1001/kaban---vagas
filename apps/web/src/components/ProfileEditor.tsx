@@ -2,7 +2,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Plus, RotateCw, Trash2, X } from 'lucide-react';
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { LIMITS, type CandidateProfileDto, type ProfileOrigin, type ProfileWire, type ResumeLang } from '@kv/shared/client';
+import { LIMITS, type CandidateProfileDto, type ProfileOrigin, type ExperienceSection, type ProfileWire, type ResumeLang } from '@kv/shared/client';
 import { ApiError } from '../apiError';
 import { SECTION_OPTIONS, blankItem, editableProfile, profileDirty, rebaseDraft, skillGroupOptions } from '../lib/ai';
 import { cn } from '../lib/utils';
