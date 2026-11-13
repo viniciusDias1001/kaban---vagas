@@ -31,7 +31,11 @@ export interface MailQueue {
    * enviar). Nada começa com uma unidade ainda em andamento.
    */
   tick(): Promise<{ read: boolean; worked: boolean }>;
+  /** As respostas que ficaram em `enviando` são conferidas em Enviados (se a caixa é usável). Um erro sobe. */
   recoverInterrupted(): Promise<void>;
+  /** Encerramento: depois disto nenhuma verificação começa uma unidade, nem uma que já estava em andamento. */
+  stop(): void;
+  /** Resolve quando não há verificação em andamento nem unidade rodando. */
   idle(): Promise<void>;
 }
 
@@ -53,8 +57,11 @@ export function createMailQueue(deps: MailQueueDeps): MailQueue {
   const pollMs = deps.pollMs ?? MAIL_LIMITS.pollMs;
   const work: MailWorkDeps = { db, settings, ai, now, log };
 
-  let ticking = false;
+  /** A verificação em andamento (do início até começar, ou não, uma unidade). */
+  let pendingTick: Promise<unknown> | null = null;
   let inFlight: Promise<void> | null = null;
+  /** Depois de `stop`, nenhuma verificação começa uma unidade. */
+  let stopped = false;
   /** Quando a última leitura começou; null antes da primeira. */
   let lastRead: number | null = null;
   /** A última leitura trouxe um lote cheio: a próxima verificação lê de novo. */
@@ -151,36 +158,42 @@ export function createMailQueue(deps: MailQueueDeps): MailQueue {
     inFlight = done;
   }
 
+  async function check(): Promise<{ read: boolean; worked: boolean }> {
+    const result = { read: false, worked: false };
+    // `stop` pode chegar enquanto `usable` espera o banco: conferido de novo antes de começar a unidade.
+    if (!(await usable()) || stopped) return result;
+    if (lastRead === null || more || now() - lastRead >= pollMs) {
+      result.read = true;
+      start(read);
+    } else {
+      result.worked = true;
+      start(workOnce);
+    }
+    return result;
+  }
+
   return {
-    async tick() {
-      const result = { read: false, worked: false };
-      if (ticking || inFlight) return result;
-      ticking = true;
-      try {
-        if (!(await usable())) return result;
-        if (lastRead === null || more || now() - lastRead >= pollMs) {
-          result.read = true;
-          start(read);
-        } else {
-          result.worked = true;
-          start(workOnce);
-        }
-        return result;
-      } finally {
-        ticking = false;
-      }
+    tick() {
+      if (stopped || pendingTick || inFlight) return Promise.resolve({ read: false, worked: false });
+      const tick = check().finally(() => {
+        if (pendingTick === tick) pendingTick = null;
+      });
+      pendingTick = tick;
+      return tick;
     },
-    /** No início do worker: as respostas que ficaram em `enviando` são conferidas em Enviados (se a caixa é usável). */
     async recoverInterrupted() {
-      try {
-        if (!(await usable()) || (await repliesInSending(db)).length === 0) return;
-        await withMailbox((mailbox) => recoverSending({ db, mailbox, now, log, resume: deps.resume }));
-      } catch (e) {
-        log(`[mail] erro ao recuperar envios interrompidos: ${errorText(e)}`);
-      }
+      if (stopped || !(await usable()) || (await repliesInSending(db)).length === 0) return;
+      await withMailbox((mailbox) => recoverSending({ db, mailbox, now, log, resume: deps.resume }));
+    },
+    stop() {
+      stopped = true;
     },
     async idle() {
-      while (inFlight) await inFlight;
+      // A verificação em andamento pode ainda começar uma unidade: espera a verificação e depois a unidade.
+      while (pendingTick || inFlight) {
+        if (pendingTick) await pendingTick.catch(() => {}); // o erro da verificação é de quem chamou `tick`
+        if (inFlight) await inFlight;
+      }
     },
   };
 }

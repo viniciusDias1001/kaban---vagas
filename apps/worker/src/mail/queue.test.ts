@@ -283,4 +283,51 @@ describe('createMailQueue', () => {
       expect(sentFolder()).toHaveLength(0);
     });
   });
+
+  describe('shutdown', () => {
+    /** Configurações cuja leitura do e-mail espera `open()`: a verificação fica parada antes de começar a unidade. */
+    function gated(): { settings: SettingsService; open: () => void; reached: Promise<void> } {
+      let open!: () => void;
+      let reach!: () => void;
+      const gate = new Promise<void>((r) => { open = r; });
+      const reached = new Promise<void>((r) => { reach = r; });
+      const slow: SettingsService = {
+        ...settings,
+        emailConfig: async () => { reach(); await gate; return settings.emailConfig(); },
+      };
+      return { settings: slow, open, reached };
+    }
+
+    it('idle waits for a tick in progress and for the unit it starts', async () => {
+      const g = gated();
+      const queue = makeQueue({ settings: g.settings });
+      const ticking = queue.tick();
+      await g.reached;
+      let idled = false;
+      const idle = queue.idle().then(() => { idled = true; });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(idled).toBe(false);
+      g.open();
+      await idle;
+      expect(await ticking).toEqual({ read: true, worked: false });
+      // A leitura que a verificação começou já terminou quando `idle` resolveu.
+      expect((await getMailAccount(db))!.lastReadAt).not.toBeNull();
+      expect(closes).toBe(opens);
+    });
+
+    it('starts no unit after stop, also from a tick already in progress', async () => {
+      const g = gated();
+      const queue = makeQueue({ settings: g.settings });
+      const ticking = queue.tick();
+      await g.reached;
+      queue.stop();
+      g.open();
+      expect(await ticking).toEqual({ read: false, worked: false });
+      await queue.idle();
+      expect(await queue.tick()).toEqual({ read: false, worked: false });
+      await queue.idle();
+      expect(opens).toBe(0);
+      expect((await getMailAccount(db))!.lastReadAt).toBeNull();
+    });
+  });
 });

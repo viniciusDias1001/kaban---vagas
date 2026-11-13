@@ -117,9 +117,10 @@ void pollApply();
 
 // Fila de e-mail: lê a caixa a cada 3 min e, entre leituras, uma unidade de trabalho por verificação (promover, classificar,
 // agir, fechar a primeira leitura, enviar), com timer próprio. Só com HOST local, caixa conectada, e-mail ligado e caixa
-// não pausada; só num worker por banco (lock de sessão). As linhas de log saem só quando algo aconteceu.
+// não pausada; só num worker por banco (lock de sessão). As linhas de log saem só quando algo aconteceu. Os envios
+// interrompidos são conferidos na primeira verificação (não aqui: uma caixa lenta não atrasa o início, e uma falha vai
+// para o log e é tentada de novo); até lá nenhum envio sai, porque o envio espera enquanto há resposta em `enviando`.
 const mail = createMailRuntime(db, settings, { log: (msg) => log(`e-mail: ${msg.replace(/^\[mail\] /, '')}`) });
-await mail.recoverInterrupted();
 async function pollMail() {
   if (stopping) return;
   try {
@@ -142,6 +143,8 @@ async function shutdown(signal: string) {
   clearInterval(aiTimer);
   clearInterval(applyTimer);
   clearInterval(mailTimer);
+  // Uma verificação de e-mail já em andamento não começa mais nenhuma unidade (um envio, por exemplo).
+  mail.stop();
   log(`${signal} recebido, encerrando`);
   setTimeout(() => process.exit(1), DRAIN_MS + 4_000).unref();
   const drained = await Promise.race([

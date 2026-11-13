@@ -178,6 +178,7 @@ export const JOBS_WRITE_LOCK = 7461001;
 /**
  * Chave (arbitrária, fixa) do advisory lock de SESSÃO que faz da fila de e-mail uma só: o worker que o segura lê a caixa e
  * envia; outro worker no mesmo banco não faz trabalho de e-mail enquanto ele estiver no ar. Use com `pg_try_advisory_lock`
- * numa conexão reservada (o lock vive enquanto a conexão viver).
+ * numa conexão reservada (o lock vive enquanto a conexão viver). Um lock de sessão não exclui nada através de um pooler em
+ * modo transação (o do Supabase, porta 6543); a fila de e-mail só roda com HOST local e conexão direta ao Postgres.
  */
 export const MAIL_QUEUE_LOCK = 7461020;
