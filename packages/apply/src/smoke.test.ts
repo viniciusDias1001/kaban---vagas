@@ -1,10 +1,11 @@
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Page } from 'playwright';
 import { describe, expect, it, vi } from 'vitest';
 import type { PendingQuestion, Question, ResolvedAnswer } from '@kv/shared';
-import { assertOutsideRepo, parseSmokeArgs, runSmoke, smokeShotPath, smokeSiteFor, type SmokeDeps } from './smoke';
+import { assertOutsideRepo, parseSmokeArgs, runSmoke, smokeAiMode, smokeJobFor, smokeShotPath, smokeSiteFor, type SmokeDeps } from './smoke';
+import { greenhouseSite } from './sites/greenhouse';
 import { SiteLayoutError, type ApplyJob, type ApplySite, type HumanGate, type StepRead } from './types';
 
 const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
@@ -71,6 +72,10 @@ describe('paths', () => {
     expect(() => assertOutsideRepo(join(repoRoot, 'tmp', 'a.png'), repoRoot)).toThrow(/fora do repositório/);
     expect(() => assertOutsideRepo(join(repoRoot, '..', 'fora', 'a.png'), repoRoot)).not.toThrow();
   });
+  it('does not call a directory named "..x" inside the repository outside of it, and refuses a sibling of the root as outside', () => {
+    expect(() => assertOutsideRepo(join(repoRoot, '..x', 'a.png'), repoRoot)).toThrow(/fora do repositório/);
+    expect(() => assertOutsideRepo(repoRoot.replace(/[\/]+$/, '') + sep + '..', repoRoot)).not.toThrow();
+  });
 });
 
 describe('smokeSiteFor', () => {
@@ -78,6 +83,26 @@ describe('smokeSiteFor', () => {
     expect(smokeSiteFor('lever')?.id).toBe('lever');
     expect(smokeSiteFor('greenhouse')?.id).toBe('greenhouse');
     expect(smokeSiteFor('linkedin')).toBeNull();
+  });
+});
+
+describe('smokeJobFor', () => {
+  it('takes the job id from gh_jid for a Greenhouse URL on a company domain, so the site script can match it', () => {
+    const job = smokeJobFor('greenhouse', 'https://careers.acme.com/open?gh_jid=4567890');
+    expect(job).toMatchObject({ source: 'greenhouse', externalId: 'acme-4567890', company: '' });
+    expect(greenhouseSite.match(job)).toMatchObject({ ref: { board: 'acme', jobId: '4567890' } });
+  });
+  it('leaves the id empty for a Greenhouse-hosted or Lever URL', () => {
+    expect(smokeJobFor('greenhouse', 'https://job-boards.greenhouse.io/acme/jobs/123?gh_jid=123').externalId).toBe('');
+    expect(smokeJobFor('lever', ok[3]!).externalId).toBe('');
+  });
+});
+
+describe('smokeAiMode', () => {
+  it('runs in review mode only with a provider and room in the budget, and says why otherwise in the line', () => {
+    expect(smokeAiMode({ configured: true, withinBudget: true }).mode).toBe('review');
+    expect(smokeAiMode({ configured: false, withinBudget: true })).toMatchObject({ mode: 'off', line: expect.stringContaining('não configurada') });
+    expect(smokeAiMode({ configured: true, withinBudget: false })).toMatchObject({ mode: 'off', line: expect.stringContaining('limite diário') });
   });
 });
 

@@ -1,4 +1,4 @@
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { Page } from 'playwright';
 import type { AnswerValue, PendingQuestion, Question, ResolvedAnswer } from '@kv/shared';
 import type { ApplyJob, ApplySite } from './types';
@@ -52,7 +52,8 @@ export function smokeShotPath(dataDir: string, site: string, now: Date): string 
 /** A foto mostra dados do dono: nunca pode cair dentro do repositório. */
 export function assertOutsideRepo(path: string, repoRoot: string): void {
   const rel = relative(resolve(repoRoot), resolve(path));
-  if (rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))) {
+  const escapes = rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel);
+  if (rel === '' || !escapes) {
     throw new Error(`O caminho ${path} fica dentro do repositório; a foto do ensaio precisa ficar fora do repositório.`);
   }
 }
@@ -63,7 +64,35 @@ export function smokeSiteFor(id: SmokeSite): ApplySite | null {
   return sites[id] ?? null;
 }
 
-export interface SmokeResolution { answers: ResolvedAnswer[]; pending: PendingQuestion[] }
+/** O que a vaga sintética leva de uma vaga do worker, até onde o endereço permite (a empresa vem do roteiro). */
+export function smokeJobFor(site: SmokeSite, url: string): ApplyJob {
+  const job: ApplyJob = { id: 0, source: site, url, externalId: '', company: '', title: 'Ensaio' };
+  if (site !== 'greenhouse') return job;
+  try {
+    const parsed = new URL(url);
+    const jid = parsed.searchParams.get('gh_jid');
+    if (jid && !parsed.hostname.endsWith('greenhouse.io')) {
+      // Vaga no domínio da empresa: o quadro vem do nome do domínio (o melhor palpite sem rede); o roteiro confere o `gh_jid`.
+      const labels = parsed.hostname.split('.').filter((l) => !['www', 'careers', 'jobs', 'job', 'boards'].includes(l));
+      const slug = labels.length > 1 ? labels[labels.length - 2]! : (labels[0] ?? '');
+      if (slug) job.externalId = `${slug}-${jid}`;
+    }
+  } catch { /* o endereço já foi validado */ }
+  return job;
+}
+
+/** Com o modelo configurado e o limite do dia por atingir, o ensaio propõe respostas ("review"); senão fica "off". */
+export function smokeAiMode(input: { configured: boolean; withinBudget: boolean }): { mode: 'review' | 'off'; line: string } {
+  const off = (why: string) => ({ mode: 'off' as const, line: `Respostas do modelo: DESLIGADAS neste ensaio (${why}); só as regras e as respostas salvas respondem.` });
+  if (!input.configured) return off('IA não configurada');
+  if (!input.withinBudget) return off('limite diário de IA atingido');
+  return {
+    mode: 'review',
+    line: 'Respostas do modelo: LIGADAS em modo de revisão (chamadas pagas, cobradas na camada Candidatura); o que o modelo propõe só é impresso, nunca digitado.',
+  };
+}
+
+export interface SmokeResolution{ answers: ResolvedAnswer[]; pending: PendingQuestion[] }
 
 export interface SmokeDeps {
   site: ApplySite; job: ApplyJob; page: Page;
@@ -115,8 +144,12 @@ export async function runSmoke(deps: SmokeDeps): Promise<SmokeReport> {
       await site.fillStep(page, answers, { resumePath: deps.resumePath });
       steps = n;
       if (read.isLast) break;
+      if (n === MAX_STEPS) {
+        // Sem avançar: a foto mostra a etapa preenchida, não a seguinte, ainda em branco.
+        print(`Parei na etapa ${MAX_STEPS}: o formulário tem mais etapas do que o ensaio percorre.`);
+        break;
+      }
       await site.next(page);
-      if (n === MAX_STEPS) print(`Parei na etapa ${MAX_STEPS}: o formulário tem mais etapas do que o ensaio percorre.`);
     }
     const shot = await shoot();
     return { outcome: unresolved ? 'pending' : 'filled', detail: unresolved ? 'há pergunta obrigatória sem resposta aprovada' : 'preenchido, nada enviado', steps, shotPath: shot };
