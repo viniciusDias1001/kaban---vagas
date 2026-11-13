@@ -415,3 +415,48 @@ describe('saved answers the model says fit', () => {
     expect(deps.proposeMatches).not.toHaveBeenCalled();
   });
 });
+
+describe('a confirm_match proposal carries the value in the type of the question (A1-1)', () => {
+  const proposalOf = async (question: Question, row: ApplyAnswerRow, option: string | null) => {
+    modelSays({ [question.id]: 'unknown' });
+    deps.proposeMatches.mockResolvedValue(new Map([[question.id, { bankAnswerId: row.id, option }]]));
+    const res = await resolveAnswers(input([question], [row]), deps);
+    return res.pending.find((p) => p.question.id === question.id)?.proposal ?? null;
+  };
+
+  it('a boolean without options gets a boolean, read from the saved text', async () => {
+    const box = q('q1', 'Concorda em receber contato?', true, { kind: 'boolean' });
+    expect((await proposalOf(box, a({ question: 'Aceita ser contatado?', answer: 'Sim' }), null))?.value).toBe(true);
+    expect((await proposalOf(box, a({ question: 'Aceita ser contatado?', answer: 'No' }), 'Sim'))?.value).toBe(false);
+  });
+
+  it('a boolean without options and a saved text that is not yes or no gets no proposal', async () => {
+    const box = q('q1', 'Concorda em receber contato?', true, { kind: 'boolean' });
+    expect(await proposalOf(box, a({ question: 'Aceita ser contatado?', answer: 'Talvez' }), null)).toBeNull();
+  });
+
+  it('a multiselect gets the list of the saved lines mapped onto the options, even when the model named no option', async () => {
+    const multi = q('q1', 'Modelos de trabalho aceitos', true, { kind: 'multiselect', options: ['Remote', 'Hybrid', 'On-site'] });
+    const row = a({ question: 'Modelos de trabalho', answer: 'remote\nHybrid' });
+    expect((await proposalOf(multi, row, null))?.value).toEqual(['Remote', 'Hybrid']);
+    expect((await proposalOf(multi, row, 'On-site'))?.value).toEqual(['Remote', 'Hybrid']);
+  });
+
+  it('a multiselect whose saved lines do not map takes the option the model named, as a one-item list', async () => {
+    const multi = q('q1', 'Modelos de trabalho aceitos', true, { kind: 'multiselect', options: ['Remote', 'Hybrid', 'On-site'] });
+    const row = a({ question: 'Modelos de trabalho', answer: 'Remoto' });
+    expect((await proposalOf(multi, row, 'remote'))?.value).toEqual(['Remote']);
+    expect(await proposalOf(multi, row, null)).toBeNull();
+    expect(await proposalOf(multi, row, 'Anywhere')).toBeNull();
+  });
+
+  it('a select gets the one option, from the model or from the saved text', async () => {
+    const sel = select('q1', 'Nível de inglês', ['Básico', 'Fluente']);
+    expect((await proposalOf(sel, a({ question: 'Inglês', answer: 'Avançado' }), 'fluente'))?.value).toBe('Fluente');
+    expect((await proposalOf(sel, a({ question: 'Inglês', answer: 'Básico' }), null))?.value).toBe('Básico');
+  });
+
+  it('a text question gets the saved text', async () => {
+    expect((await proposalOf(q('q1', 'Qual é o seu time do coração?'), a({ question: 'Time favorito', answer: 'Náutico' }), null))?.value).toBe('Náutico');
+  });
+});

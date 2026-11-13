@@ -50,6 +50,23 @@ function readSaved(text: string, question: Question): BankValue | null {
   return text;
 }
 
+/**
+ * O valor de uma proposta de casamento (a resposta salva `saved` que o modelo disse servir para `question`), no tipo
+ * da pergunta, lido como `exactBankMatch` o leria; null se a resposta salva não serve. Múltipla escolha: as linhas
+ * salvas, todas casando com as opções; senão, só a opção que o modelo apontou (`option`), numa lista de um item.
+ * Lista de uma escolha: a opção apontada pelo modelo, ou a resposta salva. Caixa sem opções: sim ou não.
+ */
+export function proposedValue(saved: string, question: Question, option: string | null): BankValue | null {
+  if (question.kind === 'multiselect') {
+    const all = readSaved(saved, question);
+    if (all !== null) return all;
+    const one = option !== null ? optionFor(option, question.options) : null;
+    return one !== null ? [one] : null;
+  }
+  if (question.options.length > 0) return optionFor(option ?? saved, question.options);
+  return readSaved(saved, question);
+}
+
 function valueFor(row: ApplyAnswerRow, question: Question): BankValue | null {
   const normalized = normalizeQuestionText(question.label);
   if (normalized === '') return null;
