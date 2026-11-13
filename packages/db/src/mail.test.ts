@@ -271,6 +271,20 @@ describe('stored messages', () => {
     expect(facts.find((f) => f.jobId === wrong.id)).toMatchObject({ firstResponseAt: null, lostAt: null });
   });
 
+  it('linking reopens every classified incoming mail of the thread, so each one acts for the new card', async () => {
+    const job = await seedJob();
+    const invite = (await insertMailMessage(db, msg({ messageId: 'a@x', threadKey: 't1', sentAt: 100 }), 1))!;
+    const offer = (await insertMailMessage(db, msg({ messageId: 'b@x', threadKey: 't1', sentAt: 200 }), 1))!;
+    const out = (await insertMailMessage(db, msg({ messageId: 'c@x', threadKey: 't1', sentAt: 150, direction: 'out', settled: true }), 5))!;
+    for (const id of [invite, offer]) {
+      await saveClassification(db, id, classification(null), 5);
+      await markProcessed(db, id, 6);
+    }
+    expect(await linkThreadToJob(db, offer, job.id, 9000)).toBe(true);
+    for (const id of [invite, offer]) expect(await mailMessageById(db, id)).toMatchObject({ jobId: job.id, processedAt: null });
+    expect((await mailMessageById(db, out))!.processedAt).toBe(5);
+  });
+
   it('linking after an unlink clears the correction', async () => {
     const wrong = await seedJob();
     const right = await seedJob();

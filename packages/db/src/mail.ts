@@ -213,7 +213,9 @@ export async function forceClassifyAll(db: Db): Promise<number> {
 
 /**
  * O dono ligou a mensagem a um card: o fio inteiro passa a ser dele (`linkedBy = 'owner'`), deixa de estar corrigido (um
- * "Não é desta vaga" anterior não vale para o card certo) e a mensagem volta a esperar ação.
+ * "Não é desta vaga" anterior não vale para o card certo) e a mensagem volta a esperar ação, junto com as outras recebidas
+ * e já classificadas do fio: cada uma age de novo para o card certo (movimento, alerta, resposta; a ação não repete o que
+ * já fez para este mesmo card).
  */
 export async function linkThreadToJob(db: Db, messageId: number, jobId: number, _now: number = Date.now()): Promise<boolean> {
   return db.transaction(async (tx) => {
@@ -221,6 +223,10 @@ export async function linkThreadToJob(db: Db, messageId: number, jobId: number, 
     if (!msg) return false;
     await tx.update(mailMessages).set({ jobId, linkedBy: 'owner', corrected: false }).where(eq(mailMessages.threadKey, msg.threadKey));
     await tx.update(mailMessages).set({ processedAt: null }).where(eq(mailMessages.id, messageId));
+    await tx
+      .update(mailMessages)
+      .set({ processedAt: null })
+      .where(and(eq(mailMessages.threadKey, msg.threadKey), eq(mailMessages.direction, 'in'), isNotNull(mailMessages.kind)));
     return true;
   });
 }

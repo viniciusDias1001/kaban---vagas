@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 import { eq } from 'drizzle-orm';
 import {
   alertById, approveReply, discardReply, dismissAlert, editReply, forceClassifyAll, jobEmails, jobs, linkThreadToJob, listIgnored,
-  listMailMessages, mailMessageById, mailReplies, moveCardByEmail, openAlerts, reopenMessage, replyById, requestPromote, resolveAlerts,
+  listMailMessages, mailMessageById, mailReplies, moveCardByEmail, openAlerts, reopenMessage, replyById, requestPromote, resolveAlerts, threadMessages,
   toMailReplyDto, undoEmailMove, unlinkThread, type AlertRow, type Db,
 } from '@kv/db';
 import {
@@ -50,15 +50,21 @@ export function emailRoutes(app: FastifyInstance, db: Db, ctx: AiContext) {
     return jobEmails(db, id);
   });
 
-  /** O dono liga o e-mail (e o fio dele) a um card: o aviso de "e-mail sem vaga" some e o worker age de novo sobre ele. */
+  /**
+   * O dono liga o e-mail (e o fio dele) a um card: o aviso de "e-mail sem vaga" de qualquer mensagem do fio some e o worker
+   * age de novo sobre as recebidas do fio. Os outros alertas delas o worker acerta para o card novo (`raiseOnce`).
+   */
   app.post('/email/messages/:id/link', async (req, reply) => {
     if (await refuseOffLocalHost(reply)) return reply;
     const { jobId } = LinkMessageSchema.parse(req.body);
     const id = idParam(req);
-    if (id === null || !(await mailMessageById(db, id))) return reply.code(404).send(messageNotFound);
+    const message = id === null ? null : await mailMessageById(db, id);
+    if (id === null || !message) return reply.code(404).send(messageNotFound);
     if (!(await jobExists(jobId))) return reply.code(404).send(jobNotFound);
     await linkThreadToJob(db, id, jobId, ctx.now());
-    await resolveAlerts(db, { kind: 'unmatched', mailMessageId: id }, ctx.now());
+    for (const m of await threadMessages(db, message.threadKey)) {
+      await resolveAlerts(db, { kind: 'unmatched', mailMessageId: m.id }, ctx.now());
+    }
     return { ok: true };
   });
 
