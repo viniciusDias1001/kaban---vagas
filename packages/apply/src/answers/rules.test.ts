@@ -316,13 +316,18 @@ describe('fix round 2: consent by remainder', () => {
       'I consent to the processing of my personal data', 'I consent to data processing under the GDPR',
       'I consent to Acme processing my personal data for recruitment purposes',
       'Autorizo o tratamento dos meus dados pessoais conforme a LGPD',
-      'Autorizo a Acme o tratamento dos meus dados pessoais para fins de recrutamento',
       // Veracidade.
       'I certify that the information provided is true and complete', 'I confirm that all information in this application is accurate',
-      'I certify to Acme that the information in my application is true', 'Declaro que as informações prestadas são verdadeiras',
+      'Declaro que as informações prestadas são verdadeiras',
       'Confirmo que todas as informações fornecidas são verídicas e corretas',
     ])
       isConsent(label);
+  });
+
+  it('the company name after "a" or "to" is a remainder (fix round 4, R6b: not one of the two accepted positions)', () => {
+    for (const label of ['Autorizo a Acme o tratamento dos meus dados pessoais para fins de recrutamento',
+      'I certify to Acme that the information in my application is true'])
+      isNotConsent(label, 'personal');
   });
 
   it('the name of another company is a remainder', () => {
@@ -594,6 +599,19 @@ describe('fix round 4: a closed rule set for pointing words, boundaries, the com
     consent('Concordo com a política de privacidade da Acme', '', 'Acme S.A.');
     consent('Concordo com a política de privacidade da Acme Ltda', '', 'Acme');
     personal('Aceito os termos de uso da Beta', '', 'Beta Tecnologia Ltda');
+  });
+
+  it('R6b: the company name is removed only right before an object or right after a preposition', () => {
+    personal('I agree to the privacy policy and remote', '', 'Remote');
+    consent('I agree to the Remote privacy policy', '', 'Remote');
+    consent('I agree to the privacy policy of Remote', '', 'Remote');
+    personal('I agree to the privacy policy and Acme Remote Work', '', 'Acme Remote Work');
+    consent('I agree to the privacy policy of the Acme', '', 'Acme');
+    consent('I consent to the processing of my data by Acme', '', 'Acme');
+    personal('Acme: I agree to the privacy policy', '', 'Acme');
+    personal('I agree to the privacy policy, Acme', '', 'Acme');
+    personal('I agree to Acme, privacy policy', '', 'Acme');
+    personal('I agree to the privacy policy for Acme', '', 'Acme');
   });
 
   it('R7: "all" and "any" only directly before the information noun of a truthfulness phrase', () => {

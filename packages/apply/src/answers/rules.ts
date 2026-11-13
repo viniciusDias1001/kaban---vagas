@@ -193,13 +193,17 @@ const LEGAL_SUFFIX = ['inc', 'llc', 'ltd', 'ltda', 's a', 'sa', 'gmbh', 'corp', 
 
 /*
  * Marcadores. Nenhum deles sobrevive a `consentTokens` vindo do texto (viram fronteira ou espaço), então só as
- * regras abaixo os põem: `#` objeto permitido, `&` frase da candidatura, `~` trecho aceito (concordância, empresa,
- * finalidade, demonstrativo consumido), `|` fronteira (R1).
+ * regras abaixo os põem: `#` objeto permitido, `&` frase da candidatura, `%` nome da empresa (R6b decide), `~` trecho
+ * aceito (concordância, empresa na posição aceita, finalidade, demonstrativo consumido), `|` fronteira (R1).
  */
 const OBJ = '#';
 const APP = '&';
 const USED = '~';
 const BOUNDARY = '|';
+/** R6b: o nome inteiro da empresa, ainda por decidir; sobra se não estiver numa das duas posições aceitas. */
+const COMPANY = '%';
+/** R6b: as preposições depois das quais o nome da empresa sai ("of (the)", "by (the)", "da", "pela"...). */
+const COMPANY_PREPOSITION = ['of', 'by', 'from', 'with', 'at', 'de', 'da', 'do', 'pela', 'pelo', 'com', 'na', 'no'];
 
 /**
  * R1: a normalização do teste de consentimento. Como `normalizeQuestionText`, mas a pontuação e a quebra de linha entre
@@ -256,11 +260,14 @@ function markTruth(text: string): string {
 function remainder(text: string, company: string, filler: ReadonlySet<string>): { object: boolean; left: string[] } {
   const pattern = companyPattern(company);
   let rest = consentTokens(text);
-  if (pattern) rest = rest.replace(pattern, ` ${USED} `);
+  if (pattern) rest = rest.replace(pattern, ` ${COMPANY} `);
   rest = rest.replace(PURPOSE_OR_ACT, ` ${USED} `);
   for (const object of CONSENT_OBJECTS) rest = rest.replace(object, ` ${OBJ} `);
-  rest = markTruth(rest);
+  rest = markTruth(rest).replace(/\s+/g, ' ');
   const object = rest.includes(OBJ);
+  // R6b: a empresa sai só logo antes de um objeto ou logo depois de uma preposição; em outro lugar, `%` sobra.
+  rest = rest.replace(new RegExp(`${COMPANY} (?=${OBJ}( |$))`, 'g'), `${USED} `);
+  rest = rest.replace(new RegExp(`\\b(${COMPANY_PREPOSITION.join('|')})( the)? ${COMPANY}(?= |$)`, 'g'), `$1$2 ${USED}`);
   rest = rest.replace(APPLICATION_PHRASE, ` ${APP} `).replace(/\s+/g, ' ');
   rest = rest.replace(new RegExp(`\\b${DEMONSTRATIVE} (?=[${OBJ}${APP}]( |$))`, 'g'), `${USED} `);
   rest = rest.replace(new RegExp(AGREEMENT_SOURCE, 'g'), ` ${USED} `);
