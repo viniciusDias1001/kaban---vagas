@@ -108,9 +108,12 @@ export function createFakeNotifier(dir: string): PhoneNotifier {
 
 interface TelegramUpdate { message?: { chat?: { id?: unknown; type?: unknown } } }
 
-/** GET https://api.telegram.org/bot<token>/getUpdates: o id do chat privado da mensagem mais recente, ou null se ninguém escreveu ao bot. */
+/**
+ * GET https://api.telegram.org/bot<token>/getUpdates?offset=-1: o id do chat privado da mensagem mais recente, ou null se
+ * ninguém escreveu ao bot. Sem `offset=-1` o Telegram devolve as 100 mais antigas da fila, e a mensagem nova pode ficar de fora.
+ */
 export async function findTelegramChatId(opts: { token: string; fetch?: Fetch }): Promise<string | null> {
-  const result = await callTelegram(opts, 'getUpdates', null);
+  const result = await callTelegram(opts, 'getUpdates?offset=-1', null);
   const updates = Array.isArray(result) ? (result as TelegramUpdate[]) : [];
   for (let i = updates.length - 1; i >= 0; i--) {
     const chat = updates[i]?.message?.chat;
