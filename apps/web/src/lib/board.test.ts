@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Column, JobDto, JobListItemDto } from '@kv/shared/client';
+import { NO_MAIL_MARKS, type Column, type JobDto, type JobListItemDto } from '@kv/shared/client';
 import { toScoreMap } from './ai';
 import {
   applyMove, countJobs, displayColumn, filterByColumn, groupByColumn, matchesFilter, mergeServerJob, normalizeText, remainingAfter,
@@ -9,7 +9,7 @@ const job = (id: number, over: Partial<JobListItemDto> = {}): JobListItemDto => 
   id, source: 'gupy', externalId: String(id), url: `https://example.com/${id}`, title: `Vaga ${id}`, company: 'Acme',
   location: 'SP', country: 'BR', remote: false, level: null, stacks: [], postedAt: null, discoveredAt: 1,
   profileId: null, column: 'descobertas', position: id, appliedBy: null, needsHuman: false, needsHumanReason: null,
-  notes: '', descriptionFetchedAt: null, applicationStatus: null, ...over,
+  notes: '', descriptionFetchedAt: null, applicationStatus: null, mail: NO_MAIL_MARKS, ...over,
 });
 
 describe('normalizeText / matchesFilter', () => {

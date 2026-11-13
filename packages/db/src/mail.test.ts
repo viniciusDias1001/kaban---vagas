@@ -4,8 +4,10 @@ import {
   countUnclassified, deleteIgnored, deleteMailAccount, forceClassifyAll, getMailAccount, insertIgnored, insertMailMessage,
   knownMessageIds, linkThreadToJob, listIgnored, mailMatchPool, mailMessageById, markProcessed, nextPromoted, nextUnclassified,
   nextUnprocessed, pruneIgnored, reopenMessage, requestPromote, saveClassification, saveMailAccount, threadJobs, threadMessages,
-  unlinkThread, updateMailAccount, type NewIgnored, type NewMailMessage,
+  unlinkThread, updateMailAccount, jobEmails, listMailMessages, type NewIgnored, type NewMailMessage,
 } from './mail';
+import { raiseAlert, resolveAlerts } from './mail-alerts';
+import { createReply, markReplySending, markReplySent } from './mail-replies';
 import { applications, jobEvents, jobs } from './schema';
 import { createTestDb, resetTestDb } from './testing';
 
@@ -185,6 +187,77 @@ describe('stored messages', () => {
     await saveClassification(db, first, classification(jobB.id), 4);
     expect(await mailMessageById(db, first)).toMatchObject({ jobId: jobA.id, linkedBy: 'owner' });
     expect(await threadJobs(db, ['t1'])).toEqual(new Map([['t1', jobA.id]]));
+  });
+});
+
+describe('job mail lists', () => {
+  it('says what the app did with each mail', async () => {
+    // one mail moved the card to perdida and has no reply or alert; one has a sent reply (origin facts, approved auto); one has an alert
+    const job = await seedJob({ column: 'perdida' });
+    const movedId = (await insertMailMessage(db, msg({ messageId: 'a@x', jobId: job.id, linkedBy: 'auto', sentAt: 100 }), 1))!;
+    await db.insert(jobEvents).values({ jobId: job.id, fromColumn: 'aplicada', toColumn: 'perdida', actor: 'email', mailMessageId: movedId, createdAt: 500 });
+    const repliedId = (await insertMailMessage(db, msg({ messageId: 'b@x', sentAt: 200 }), 1))!;
+    const replyId = (await createReply(db, {
+      messageId: repliedId, origin: 'facts', items: ['phone'], toAddress: 'rh@acme.example', subject: 'Re: Telefone', body: 'Meu telefone.',
+      attachResume: false, state: 'aprovada', approvedBy: 'auto',
+    }, 300))!;
+    await markReplySending(db, replyId, '<out@x>', 301);
+    await markReplySent(db, replyId, 302);
+    const alertedId = (await insertMailMessage(db, msg({ messageId: 'c@x', sentAt: 300 }), 1))!;
+    await raiseAlert(db, { kind: 'interview', mailMessageId: alertedId }, 400);
+
+    const list = await listMailMessages(db, {});
+    expect(list.find((m) => m.id === movedId)).toMatchObject({ movedTo: 'perdida', replyState: null, replyOrigin: null, replyApprovedBy: null, alerted: false });
+    expect(list.find((m) => m.id === repliedId)).toMatchObject({ replyState: 'enviada', replyOrigin: 'facts', replyApprovedBy: 'auto' });
+    expect(list.find((m) => m.id === alertedId)).toMatchObject({ alerted: true });
+  });
+
+  it('counts an alert reached through the reply, also once closed, and says when a move can be undone', async () => {
+    const job = await seedJob({ column: 'entrevista', company: 'Globex', title: 'Dev Pleno' });
+    const invite = (await insertMailMessage(db, msg({ messageId: 'a@x', jobId: job.id, linkedBy: 'auto', sentAt: 100 }), 1))!;
+    await db.insert(jobEvents).values({ jobId: job.id, fromColumn: 'aplicada', toColumn: 'entrevista', actor: 'email', mailMessageId: invite, createdAt: 500 });
+    const replyId = (await createReply(db, {
+      messageId: invite, origin: 'ai', items: [], toAddress: 'rh@acme.example', subject: 'Re: Convite', body: 'Posso.',
+      attachResume: false, state: 'rascunho',
+    }, 300))!;
+    await raiseAlert(db, { kind: 'draft', replyId }, 400);
+    await resolveAlerts(db, { replyId }, 450);
+
+    const [dto] = await listMailMessages(db);
+    expect(dto).toMatchObject({
+      id: invite, company: 'Globex', jobTitle: 'Dev Pleno', movedTo: 'entrevista', canUndoMove: true, alerted: true,
+      replyState: 'rascunho', replyOrigin: 'ai', replyApprovedBy: null,
+    });
+    // O dono mexeu no card depois: o movimento do e-mail deixou de ser o último.
+    await db.insert(jobEvents).values({ jobId: job.id, fromColumn: 'entrevista', toColumn: 'oferta', actor: 'humano', createdAt: 600 });
+    expect((await listMailMessages(db))[0]).toMatchObject({ movedTo: 'entrevista', canUndoMove: false });
+  });
+
+  it('filters by kind, missing card and date, newest first', async () => {
+    const job = await seedJob();
+    const old = (await insertMailMessage(db, msg({ messageId: 'a@x', jobId: job.id, linkedBy: 'auto', sentAt: 100 }), 1))!;
+    const loose = (await insertMailMessage(db, msg({ messageId: 'b@x', sentAt: 200 }), 1))!;
+    const recent = (await insertMailMessage(db, msg({ messageId: 'c@x', jobId: job.id, linkedBy: 'auto', sentAt: 300 }), 1))!;
+    await saveClassification(db, old, { ...classification(job.id), kind: 'reprovacao' }, 2);
+    expect((await listMailMessages(db)).map((m) => m.id)).toEqual([recent, loose, old]);
+    expect((await listMailMessages(db, { kind: 'reprovacao' })).map((m) => m.id)).toEqual([old]);
+    expect((await listMailMessages(db, { unmatched: true })).map((m) => m.id)).toEqual([loose]);
+    expect((await listMailMessages(db, { since: 200 })).map((m) => m.id)).toEqual([recent, loose]);
+  });
+
+  it('gives the conversation of a card oldest first, with its replies', async () => {
+    const job = await seedJob();
+    const asked = (await insertMailMessage(db, msg({ messageId: 'a@x', jobId: job.id, linkedBy: 'auto', sentAt: 100 }), 1))!;
+    const answer = (await insertMailMessage(db, msg({ messageId: 'b@x', direction: 'out', jobId: job.id, linkedBy: 'auto', sentAt: 200 }), 1))!;
+    await insertMailMessage(db, msg({ messageId: 'c@x', sentAt: 150 }), 1);
+    const replyId = (await createReply(db, {
+      messageId: asked, origin: 'facts', items: ['phone'], toAddress: 'rh@acme.example', subject: 'Re: Telefone', body: 'Meu telefone.',
+      attachResume: false, state: 'rascunho',
+    }, 300))!;
+    const emails = await jobEmails(db, job.id);
+    expect(emails.messages.map((m) => m.id)).toEqual([asked, answer]);
+    expect(emails.replies).toEqual([expect.objectContaining({ id: replyId, messageId: asked, state: 'rascunho' })]);
+    expect(await jobEmails(db, 9999)).toEqual({ messages: [], replies: [] });
   });
 });
 
