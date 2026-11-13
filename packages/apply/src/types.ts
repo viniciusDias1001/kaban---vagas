@@ -27,8 +27,10 @@ export interface ApplySite {
   /** Avança uma etapa; nunca envia. */
   next(page: Page): Promise<void>;
   /**
-   * Clica no envio final e confirma que o site aceitou. Não clica de novo quando a confirmação já está na tela: o
-   * motor chama `submit` outra vez depois de um bloqueio resolvido pelo dono.
+   * Clica no envio final e confirma que o site aceitou. O motor chama `submit` outra vez depois de um bloqueio
+   * resolvido pelo dono; nessa chamada o roteiro não clica de novo enquanto o primeiro envio pode estar em andamento
+   * (ver `submitAndWait`): com a confirmação na tela devolve sem clicar, e na dúvida lança `SiteLayoutError`.
+   * Abrir o formulário (`open`) e sair dele (`discard`) esquecem o clique.
    */
   submit(page: Page): Promise<{ confirmation: string }>;
   humanGate(page: Page): Promise<HumanGate | null>;
@@ -36,7 +38,13 @@ export interface ApplySite {
   discard(page: Page): Promise<void>;
 }
 
-/** A página não é o que o roteiro espera. Vira `needs_human` com `unsupported_form`. */
+/**
+ * A página não é o que o roteiro espera. Antes do clique de envio vira `needs_human` com `unsupported_form`; depois
+ * dele, `confirm_submission` (um clique pode ter chegado ao site).
+ */
 export class SiteLayoutError extends Error {}
-/** O site recusou o envio sem mostrar nada para resolver. Vira `needs_human` com `captcha`. */
+/**
+ * O site recusou o envio, ou mostrou um portão logo depois do clique. Com um portão na tela, o motor espera o dono;
+ * sem portão, vira `needs_human` com `confirm_submission` (depois do clique) ou `unsupported_form` (antes dele).
+ */
 export class SubmitRejectedError extends Error {}

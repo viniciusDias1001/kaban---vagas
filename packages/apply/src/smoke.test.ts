@@ -51,8 +51,13 @@ function setup() {
 
 describe('parseSmokeArgs', () => {
   it('parses the two required flags and the optional résumé', () => {
-    expect(parseSmokeArgs(['--', ...ok], {})).toEqual({ site: 'lever', url: ok[3], resumePath: null });
+    expect(parseSmokeArgs(['--', ...ok], {})).toEqual({ site: 'lever', url: ok[3], resumePath: null, country: 'INT' });
     expect(parseSmokeArgs([...ok, '--resume', 'C:/cv.pdf'], {})).toMatchObject({ resumePath: 'C:/cv.pdf' });
+  });
+  it('takes the job country from --country (BR or INT), INT when absent (K7)', () => {
+    expect(parseSmokeArgs([...ok, '--country', 'BR'], {})).toMatchObject({ country: 'BR' });
+    expect(parseSmokeArgs([...ok, '--country', 'int'], {})).toMatchObject({ country: 'INT' });
+    expect(parseSmokeArgs([...ok, '--country', 'US'], {})).toHaveProperty('error');
   });
   it('refuses to run under CI', () => {
     expect(parseSmokeArgs(ok, { CI: 'true' })).toEqual({ error: expect.stringContaining('CI') });

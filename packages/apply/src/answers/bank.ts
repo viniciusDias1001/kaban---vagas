@@ -4,8 +4,11 @@ import type { ApplyAnswerRow } from '@kv/db';
 export interface BankContext {
   company: string;
   jobId: number;
-  /** País da vaga em ISO-2, quando se sabe. */
-  country: string | null;
+  /**
+   * O país da vaga, como a vaga o guarda: `BR` ou `INT`. Uma resposta salva com país só vale para vagas desse país
+   * (as respostas `personal` aprendidas numa vaga levam o país dela); sem país, vale para todas.
+   */
+  country: 'BR' | 'INT';
 }
 
 const SCOPE_RANK = { job: 0, company: 1, always: 2 } as const;
@@ -23,7 +26,7 @@ function inScope(row: ApplyAnswerRow, ctx: BankContext): boolean {
 export function bankCandidates(bank: ApplyAnswerRow[], ctx: BankContext): ApplyAnswerRow[] {
   return bank.filter(
     (row) =>
-      row.answer.trim() !== '' && inScope(row, ctx) && (row.country === null || (ctx.country !== null && row.country === ctx.country)),
+      row.answer.trim() !== '' && inScope(row, ctx) && (row.country === null || row.country === ctx.country),
   );
 }
 
@@ -48,6 +51,23 @@ function readSaved(text: string, question: Question): BankValue | null {
   if (question.options.length > 0) return optionFor(text, question.options);
   if (question.kind === 'boolean') return bankBoolean(text);
   return text;
+}
+
+/**
+ * O valor de uma proposta de casamento (a resposta salva `saved` que o modelo disse servir para `question`), no tipo
+ * da pergunta, lido como `exactBankMatch` o leria; null se a resposta salva não serve. Múltipla escolha: as linhas
+ * salvas, todas casando com as opções; senão, só a opção que o modelo apontou (`option`), numa lista de um item.
+ * Lista de uma escolha: a opção apontada pelo modelo, ou a resposta salva. Caixa sem opções: sim ou não.
+ */
+export function proposedValue(saved: string, question: Question, option: string | null): BankValue | null {
+  if (question.kind === 'multiselect') {
+    const all = readSaved(saved, question);
+    if (all !== null) return all;
+    const one = option !== null ? optionFor(option, question.options) : null;
+    return one !== null ? [one] : null;
+  }
+  if (question.options.length > 0) return optionFor(option ?? saved, question.options);
+  return readSaved(saved, question);
 }
 
 function valueFor(row: ApplyAnswerRow, question: Question): BankValue | null {

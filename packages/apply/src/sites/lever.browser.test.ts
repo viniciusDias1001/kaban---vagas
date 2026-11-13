@@ -164,6 +164,14 @@ describe.skipIf(!recorded)(recorded ? 'lever site' : `lever site (missing record
       expect(await page.locator(`select[name=${JSON.stringify(list.id)}]`).inputValue()).toBe('');
     });
 
+    it('a field the page will not let it fill is a layout error, not a passing error (C-4)', async () => {
+      page.setDefaultTimeout(800);
+      await page.getByLabel(/full name/i).evaluate((el) => { (el as HTMLInputElement).disabled = true; });
+      await expect(site.fillStep(page, [ans(find(questions, /full name/i).id, 'Ana Souza')], files)).rejects.toBeInstanceOf(SiteLayoutError);
+      await inForm(page, '<input type="checkbox" name="escondida" style="display:none">');
+      await expect(site.fillStep(page, [ans('escondida', true)], files)).rejects.toBeInstanceOf(SiteLayoutError);
+    });
+
     it('fills a text card field and a long text, and a lone checkbox is a boolean', async () => {
       await inForm(page, '<label><input type="checkbox" name="lgpd" required> I agree to the processing of my data</label>');
       const read = (await site.readStep(page)).questions;

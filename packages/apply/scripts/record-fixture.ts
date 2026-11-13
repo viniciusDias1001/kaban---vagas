@@ -13,7 +13,7 @@ import type { Page } from 'playwright';
 import { applyDataDir, browserProfileDir } from '../src/data-dir';
 import { detectBrowserChannel, realLaunch } from '../src/browser';
 import {
-  blockSubmitClicks, blockWrites, captureReplay, captureSnapshot, DEFAULT_KEEP, hasSessionCookie,
+  blockSubmitClicks, blockWrites, captureReplay, captureSnapshot, DEFAULT_KEEP, hasSessionCookie, newRecordingPage,
 } from '../src/recording/capture';
 import {
   findIdentityLeaks, findLeaks, NO_IDENTITY, scrubFixture, type FixtureKind, type ScrubIdentity,
@@ -114,9 +114,8 @@ async function withHeadlessPage<T>(run: (page: Page) => Promise<T>): Promise<T> 
   const { chromium } = await import('playwright');
   const browser = await chromium.launch({ headless: true });
   try {
-    // Service worker poderia refazer requisições por fora de `route`.
-    const context = await browser.newContext({ locale: 'pt-BR', serviceWorkers: 'block' });
-    return await run(await context.newPage());
+    // Sem service worker e com toda requisição que não é GET abortada (o snapshot também, não só o replay).
+    return await run(await newRecordingPage(browser));
   } finally {
     await browser.close();
   }

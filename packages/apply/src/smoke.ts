@@ -14,17 +14,21 @@ export type SmokeSite = 'linkedin' | 'greenhouse' | 'lever';
 const SMOKE_SITES: readonly SmokeSite[] = ['linkedin', 'greenhouse', 'lever'];
 const MAX_STEPS = 12;
 
-export interface SmokeArgs { site: SmokeSite; url: string; resumePath: string | null }
+export interface SmokeArgs {
+  site: SmokeSite; url: string; resumePath: string | null;
+  /** O país da vaga (BR ou INT), que decide quais respostas salvas com país valem; INT sem `--country`. */
+  country: 'BR' | 'INT';
+}
 
-/** Aceita só `--site`, `--job` e `--resume` (e ignora o `--` solto que o pnpm repassa). Com `CI` definida, recusa. */
+/** Aceita só `--site`, `--job`, `--resume` e `--country` (e ignora o `--` solto que o pnpm repassa). Com `CI` definida, recusa. */
 export function parseSmokeArgs(argv: string[], env: NodeJS.ProcessEnv): SmokeArgs | { error: string } {
   if (env.CI) return { error: 'apply:smoke não roda na CI: ele abre um formulário real em um navegador com janela.' };
   const args = argv.filter((a) => a !== '--');
   const values = new Map<string, string>();
   for (let i = 0; i < args.length; i += 2) {
     const flag = args[i]!;
-    if (flag !== '--site' && flag !== '--job' && flag !== '--resume') {
-      return { error: `Argumento não aceito: ${flag}. Use --site <linkedin|greenhouse|lever> --job <url> [--resume <pdf>]. O ensaio nunca envia a candidatura.` };
+    if (flag !== '--site' && flag !== '--job' && flag !== '--resume' && flag !== '--country') {
+      return { error: `Argumento não aceito: ${flag}. Use --site <linkedin|greenhouse|lever> --job <url> [--resume <pdf>] [--country BR|INT]. O ensaio nunca envia a candidatura.` };
     }
     const value = args[i + 1];
     if (value === undefined || value.startsWith('--')) return { error: `Falta o valor de ${flag}.` };
@@ -39,7 +43,9 @@ export function parseSmokeArgs(argv: string[], env: NodeJS.ProcessEnv): SmokeArg
   } catch {
     return { error: `O endereço da vaga não é válido: ${url}` };
   }
-  return { site: site as SmokeSite, url, resumePath: values.get('--resume') ?? null };
+  const country = (values.get('--country') ?? 'INT').toUpperCase();
+  if (country !== 'BR' && country !== 'INT') return { error: 'Use --country BR (vaga no Brasil) ou INT (vaga fora do Brasil).' };
+  return { site: site as SmokeSite, url, resumePath: values.get('--resume') ?? null, country };
 }
 
 /** `<pasta de dados>/smoke/<site>-AAAAMMDD-HHmmss.png`, na hora local. */

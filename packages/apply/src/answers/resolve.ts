@@ -3,7 +3,7 @@ import {
   type PendingQuestion, type Question, type QuestionCategory, type ResolvedAnswer,
 } from '@kv/shared';
 import type { ApplyAnswerRow } from '@kv/db';
-import { bankCandidates, exactBankMatch, optionFor, type BankContext } from './bank';
+import { bankCandidates, exactBankMatch, optionFor, proposedValue, type BankContext } from './bank';
 import { answerByRule, classifyByRule, declineOption, hasLastNameField, isWorkedHereQuestion, type RuleContext } from './rules';
 
 export interface ResolveDeps {
@@ -209,7 +209,8 @@ export async function resolveAnswers(input: ResolveInput, deps: ResolveDeps): Pr
       const p = proposals.get(q.id);
       const row = p && candidates.find((r) => r.id === p.bankAnswerId);
       if (!p || !row) continue;
-      const value = q.options.length > 0 ? optionFor(p.option ?? row.answer, q.options) : row.answer;
+      // No tipo da pergunta (lista, sim/não, opção), como a resposta salva será lida quando o dono confirmar.
+      const value = proposedValue(row.answer, q, p.option);
       if (value === null) continue;
       pending.set(q.id, {
         question: q, category: category.get(q.id)!, kind: 'confirm_match',

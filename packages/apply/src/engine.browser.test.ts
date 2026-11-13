@@ -10,7 +10,7 @@ import { siteFor } from './sites/index';
 import { FAKE_SITE_ORIGIN, createFakeSite, fakeFixturePath } from './sites/fake';
 import { runApplication, type EngineDeps, type EngineUpdate } from './engine';
 
-const VARIANTS = ['form', 'two-steps', 'captcha', 'rejected', 'broken'];
+const VARIANTS = ['form', 'two-steps', 'captcha', 'rejected', 'broken', 'captcha-sends', 'captcha-idle'];
 const site: ApplySite = createFakeSite();
 let page: Page;
 let close: () => Promise<void>;
@@ -91,5 +91,37 @@ describe('runApplication on the test site', () => {
     }));
     expect(res).toMatchObject({ status: 'needs_human', reason: 'unsupported_form' });
     expect(shots).toEqual(['blocked']);
+  });
+});
+
+describe('runApplication with a gate after the click (C-1: one application per job)', () => {
+  const quick = createFakeSite({ submitMs: 2_000 });
+  const count = async (name: 'clicks' | 'sends') => Number(await page.locator('body').getAttribute(`data-${name}`));
+  /** O dono resolve a verificação; com `hold`, o retorno do captcha não completa o envio. */
+  const owner = (hold = false) => async () => {
+    if (hold) await page.evaluate(() => { (window as unknown as { __hold: boolean }).__hold = true; });
+    await page.click('#solve');
+    return 'solved' as const;
+  };
+
+  it('a gate whose solving sends the form by itself: submitted, with one click and one application', async () => {
+    const res = await runApplication(siteFor(fakeJob('captcha-sends'), [quick])!.target, realDeps({ site: quick, waitHuman: owner() }));
+    expect(res).toMatchObject({ status: 'submitted', confirmation: expect.stringMatching(/Candidatura recebida/) });
+    expect(await count('clicks')).toBe(1);
+    expect(await count('sends')).toBe(1);
+  });
+
+  it('a gate after which the form stays idle: clicks a second time, after the wait, and one application is made', async () => {
+    const res = await runApplication(siteFor(fakeJob('captcha-idle'), [quick])!.target, realDeps({ site: quick, waitHuman: owner() }));
+    expect(res).toMatchObject({ status: 'submitted', confirmation: expect.stringMatching(/Candidatura recebida/) });
+    expect(await count('clicks')).toBe(2);
+    expect(await count('sends')).toBe(1);
+  });
+
+  it('a solved captcha with no confirmation: no second click, the owner confirms on the site', async () => {
+    const res = await runApplication(siteFor(fakeJob('captcha-sends'), [quick])!.target, realDeps({ site: quick, waitHuman: owner(true) }));
+    expect(res).toMatchObject({ status: 'needs_human', reason: 'confirm_submission' });
+    expect(await count('clicks')).toBe(1);
+    expect(await count('sends')).toBe(0);
   });
 });
