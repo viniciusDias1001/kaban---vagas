@@ -18,7 +18,8 @@ jobs:
   test:
     name: Typecheck, testes unitários e e2e
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Cabe a soma dos passos com limite (testes 10, Chromium 10, navegador 10, e2e 15) mais instalação e build.
+    timeout-minutes: 30
 
     # Postgres real só para o e2e; os testes unitários usam PGlite (em memória) e fixtures, sem rede.
     services:
@@ -79,13 +80,14 @@ jobs:
         run: pnpm test:browser
         timeout-minutes: 10
 
-      # Dois testes em sequência: o quadro e a IA de perfil. O servidor do e2e sobe com FAKE_CONNECTORS=1,
-      # AI_ALLOW_FAKE=1, as variáveis de chave vazias e um APP_SECRET sorteado na hora, tudo definido em
-      # apps/web/playwright.config.ts: nada disso precisa ser configurado aqui. O `pnpm ai:smoke` (provedores
-      # reais) não entra neste workflow e se recusa a rodar com CI definida.
+      # Cinco testes em sequência: o quadro, a IA de perfil, a candidatura automática e dois do e-mail (a caixa e o
+      # Painel; os dois esperam o worker ler a caixa falsa). O servidor do e2e sobe com FAKE_CONNECTORS=1,
+      # AI_ALLOW_FAKE=1, FAKE_MAIL=1, as variáveis de chave vazias e um APP_SECRET sorteado na hora, tudo definido em
+      # apps/web/playwright.config.ts: nada disso precisa ser configurado aqui. O `pnpm ai:smoke` e o
+      # `pnpm mail:smoke` (provedores e caixa reais) não entram neste workflow e se recusam a rodar com CI definida.
       - name: Testes e2e
         run: pnpm e2e
-        timeout-minutes: 10
+        timeout-minutes: 15
         env:
           # O nome do banco precisa terminar em _e2e ou _test (o preparo do e2e apaga os dados).
           E2E_DATABASE_URL: postgres://postgres:postgres@localhost:5432/kanban_e2e
