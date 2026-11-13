@@ -9,6 +9,7 @@
     "db:migrate": "pnpm --filter @kv/db migrate",
     "db:generate": "pnpm --filter @kv/db generate",
     "test": "vitest run",
+    "test:browser": "vitest run -c vitest.browser.config.ts",
     "typecheck": "pnpm -r exec tsc --noEmit",
     "e2e": "pnpm --filter @kv/web exec playwright test",
     "ai:smoke": "tsx scripts/ai-smoke.ts",

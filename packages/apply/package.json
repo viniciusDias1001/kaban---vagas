@@ -1,0 +1,14 @@
+{
+  "name": "@kv/apply",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@kv/db": "workspace:*",
+    "@kv/shared": "workspace:*",
+    "playwright": "^1.65.0"
+  }
+}

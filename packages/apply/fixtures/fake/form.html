@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Vaga - formulário</title>
+<style>body{font-family:sans-serif;max-width:640px;margin:2rem auto}.field{margin:.75rem 0}label{display:block;font-weight:600}#captcha-gate{position:fixed;inset:0;background:#fffe;display:flex;align-items:center;justify-content:center}</style>
+</head>
+<body>
+<h1>Desenvolvedor TypeScript</h1>
+<p>Acme Ltda. Vaga fictícia do site de teste.</p>
+<main>
+  <form data-fake-form novalidate>
+  <div class="step">
+    <div class="field"><label for="name">Nome completo</label><input id="name" name="name" type="text" required></div>
+    <div class="field"><label for="email">E-mail</label><input id="email" name="email" type="text" required></div>
+    <div class="field"><label for="phone">Telefone</label><input id="phone" name="phone" type="text"></div>
+    <div class="field"><label for="resume">Currículo</label><input id="resume" name="resume" type="file" required></div>
+    <div class="field"><label for="salary">Pretensão salarial mensal (R$)</label><input id="salary" name="salary" type="text" required></div>
+    <div class="field"><label for="years_ts">Anos de experiência com TypeScript</label><input id="years_ts" name="years_ts" type="number" required></div>
+    <div class="field"><label for="why">Por que você quer trabalhar aqui?</label><textarea id="why" name="why" maxlength="600"></textarea></div>
+    <div class="field"><label for="privacy">Li e aceito a política de privacidade</label><input id="privacy" name="privacy" type="checkbox" required></div>
+  </div>
+  <button id="submit" type="submit">Enviar candidatura</button>
+  </form>
+</main>
+<script>
+  const form = document.querySelector('form');
+  const steps = form.querySelectorAll('.step');
+  const next = document.getElementById('next');
+  const submit = document.getElementById('submit');
+  if (next) next.addEventListener('click', () => {
+    steps[0].hidden = true; steps[1].hidden = false; next.hidden = true; submit.hidden = false;
+  });
+  submit.addEventListener('click', (e) => {
+    e.preventDefault();
+    const main = document.querySelector('main');
+    main.innerHTML = '<p id="confirmation">Candidatura recebida: nº ' + (1000 + Math.floor(Math.random() * 9000)) + '</p>';
+  });
+</script>
+</body>
+</html>
