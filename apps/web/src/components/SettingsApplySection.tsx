@@ -6,6 +6,7 @@ import {
   type ApplySiteStateDto, type ApplyStatusDto, type SettingSource, type SettingsDto, type SitePauseReason, type SiteSession,
 } from '@kv/shared/client';
 import { AI_ANSWER_LABELS, accountFeedback, type AccountAction } from '../lib/apply';
+import { applySiteCopy } from '../lib/applySites';
 import { spring } from '../lib/motion';
 import { cn } from '../lib/utils';
 import { badDailyCap, collectBlockItems, type SettingsForm, type SettingsFormErrors } from '../settingsForm';
@@ -122,12 +123,14 @@ function SiteRow({ site, form, errors, capId, onChange }: {
   const resuming = actions.resumeSite.isPending && actions.resumeSite.variables === id;
   const resumeError = actions.resumeSite.isError && actions.resumeSite.variables === id ? actions.resumeSite.error : null;
   const session = SESSION_BADGE[site.session];
+  const copy = applySiteCopy(id);
 
   return (
     <li data-testid={`apply-site-${id}`} aria-labelledby={labelId} className="rounded-2xl border border-line bg-surface-2/50 px-4 py-3.5">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
-          <h4 id={labelId} className="text-[14px] font-semibold text-ink">{site.label}</h4>
+          <h4 id={labelId} className="text-[14px] font-semibold text-ink">{copy.label === id ? site.label : copy.label}</h4>
+          {copy.login && <Badge tone="outline" data-testid={`apply-login-${id}`}>{copy.login}</Badge>}
           {site.needsLogin && <Badge tone={session.tone}>{session.label}</Badge>}
           {site.paused && <Badge tone="warn">pausado</Badge>}
         </div>
@@ -141,6 +144,11 @@ function SiteRow({ site, form, errors, capId, onChange }: {
           </div>
         </div>
       </div>
+
+      {copy.how && <p data-testid={`apply-how-${id}`} className="mt-1.5 text-[13px] leading-snug text-ink-2">{copy.how}</p>}
+      {copy.warning && (
+        <Notice tone="warn" data-testid={`apply-warning-${id}`} className="mt-2.5 px-3.5 py-2.5">{copy.warning}</Notice>
+      )}
 
       <p className={cn(HINT, 'mt-1.5')}>
         {mode === 'real' ? 'Enviar: preenche e envia a candidatura.' : 'Ensaio: preenche o formulário e para antes de enviar, para você conferir.'}

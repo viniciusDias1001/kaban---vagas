@@ -5,6 +5,7 @@ import { leverSite } from './lever';
 
 /** Sites reais registrados. */
 function realSites(): ApplySite[] {
+  // linkedinSite goes first here when its script exists
   return [greenhouseSite, leverSite];
 }
 
