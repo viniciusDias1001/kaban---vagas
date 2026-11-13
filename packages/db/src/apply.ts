@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNotNull, sql } from 'drizzle-orm';
 import type {
   ApplicationDto, ApplicationEventDto, ApplicationListItemDto, ApplicationReason, ApplicationStatus, ApplyMode, ApplySiteId,
   ApplyTrigger,
@@ -399,12 +399,15 @@ export async function applicationQueueCounts(db: Db): Promise<{ queued: number; 
   return row;
 }
 
-/** A candidatura parada numa espera ao vivo (captcha, código, login), se houver. */
+/**
+ * A candidatura parada numa espera ao vivo (captcha, código, login), se houver: `waiting_gate` preenchido com o estado
+ * `waiting_human` (antes do clique de envio) ou `submitting` (depois dele, o estado gravado não muda durante a espera).
+ */
 export async function waitingApplication(db: Db): Promise<{ applicationId: number; jobId: number; gate: string } | null> {
   const [row] = await db
     .select({ applicationId: applications.id, jobId: applications.jobId, gate: applications.waitingGate })
     .from(applications)
-    .where(eq(applications.status, 'waiting_human'))
+    .where(and(isNotNull(applications.waitingGate), inArray(applications.status, ['waiting_human', 'submitting'])))
     .orderBy(asc(applications.id))
     .limit(1);
   return row ? { ...row, gate: row.gate ?? 'unknown' } : null;
