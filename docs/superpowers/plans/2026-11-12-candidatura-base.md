@@ -153,6 +153,8 @@ export class SiteLayoutError extends Error {}
 export class SubmitRejectedError extends Error {}
 ```
 
+(Nota posterior: uma decisão da Task 11 mudou isto. Depois do clique, `SubmitRejectedError` vira `needs_human` com `confirm_submission`; antes do clique, com `unsupported_form`.)
+
 Registro, em `packages/apply/src/sites/index.ts`:
 
 ```ts
@@ -1147,7 +1149,7 @@ Sequência que os testes fixam:
 7. `report({ status: 'submitting', answers })`. Se devolver false: `discard` e `cancelled`.
 8. `submit`, `shot('confirmation')`, `submitted`.
 
-`SiteLayoutError` antes do clique de envio: `shot('blocked')`, `discard` (ignorando erro) e `needs_human` com `unsupported_form`. `SubmitRejectedError`: `needs_human` com `captcha` e o detalhe "o site recusou o envio automático; envie por conta própria".
+`SiteLayoutError` antes do clique de envio: `shot('blocked')`, `discard` (ignorando erro) e `needs_human` com `unsupported_form`. `SubmitRejectedError`: `needs_human` com `captcha` e o detalhe "o site recusou o envio automático; envie por conta própria". (Nota posterior: uma decisão da Task 11 mudou isto. Depois do clique, `SubmitRejectedError` vira `needs_human` com `confirm_submission`; antes do clique, com `unsupported_form`.)
 
 Regras que o plano dos sites reais espera do motor:
 
