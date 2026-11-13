@@ -72,6 +72,8 @@ export interface MailMessageDto {
   linkedBy: 'auto' | 'owner' | null; corrected: boolean; backfill: boolean;
   /** A coluna para onde este e-mail moveu o card, e se ainda dá para desfazer. */
   movedTo: Column | null; canUndoMove: boolean;
+  /** A resposta preparada para este e-mail, quem a preparou, quem a aprovou, e se o dono já foi avisado. */
+  replyState: ReplyState | null; replyOrigin: ReplyOrigin | null; replyApprovedBy: 'auto' | 'owner' | null; alerted: boolean;
 }
 export interface MailReplyDto {
   id: number; messageId: number; origin: ReplyOrigin; items: KnownFact[]; toAddress: string; subject: string; body: string;
