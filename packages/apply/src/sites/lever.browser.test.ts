@@ -8,8 +8,9 @@ import { openFixture } from '../testing';
 import { ans, fakeResumePath, fixturePath, inject, job, linkSteps, replayRoutes, watchClicks, watchWrites } from './fixtures';
 import { createLeverSite, leverTarget } from './lever';
 
-// As páginas gravadas ficam só na máquina de quem as gravou (pasta ignorada pelo git): sem elas, este arquivo é pulado.
-const recorded = ['form/routes.json', 'rendered.html', 'closed.html'].every((f) => existsSync(fixturePath('lever', f)));
+// As páginas gravadas ficam só na máquina de quem as gravou (pasta ignorada pelo git): sem elas, os testes que as usam são pulados.
+const missing = ['form/routes.json', 'rendered.html', 'closed.html'].filter((f) => !existsSync(fixturePath('lever', f)));
+const recorded = missing.length === 0;
 const routes = recorded ? replayRoutes('lever', 'form') : {};
 const formUrl = Object.keys(routes).find((u) => /\/apply$/.test(u)) ?? 'https://jobs.lever.co/palantir/6ed76ce8-4156-4b60-b120-403538bd66cd/apply';
 const RENDERED = formUrl.replace(/\/apply$/, '/rendered');
@@ -73,7 +74,7 @@ async function emulateAutoRead(p: Page, opts: { analyzingMs: number; parsedName:
   })()`);
 }
 
-describe.skipIf(!recorded)('lever site (needs the recorded form: run pnpm apply:fixtures)', () => {
+describe.skipIf(!recorded)(recorded ? 'lever site' : `lever site (missing recording: ${missing.join(', ')}; run pnpm apply:fixtures)`, () => {
   it('opens the form and reads standard fields and custom cards', async () => {
     expect(await site.open(page, target)).toEqual({ kind: 'form' });
     const { questions, isLast } = await site.readStep(page);
@@ -201,6 +202,33 @@ describe.skipIf(!recorded)('lever site (needs the recorded form: run pnpm apply:
       await expect(site.fillStep(page, [ans('dup', 'x')], files)).rejects.toBeInstanceOf(SiteLayoutError);
     });
 
+    it('does not offer hidden inputs or a captcha response field as questions', async () => {
+      const before = (await site.readStep(page)).questions.map((q) => q.id);
+      await inForm(page, '<input type="hidden" name="token_oculto" value="x"><textarea name="h-captcha-response" style="display:none"></textarea><textarea name="g-recaptcha-response"></textarea>');
+      expect((await site.readStep(page)).questions.map((q) => q.id)).toEqual(before);
+    });
+
+    it('checks every answer before touching any field: an invalid one leaves the valid one and the upload alone', async () => {
+      const radio = find(questions, /legally authorized/i);
+      const list = find(questions, /which university/i);
+      await page.locator(`input[type="radio"][name=${JSON.stringify(radio.id)}][value="Yes"]`).evaluate((el) => { (el as HTMLInputElement).checked = true; });
+      // a primeira resposta é válida, a segunda esvazia um grupo de rádio que já tem escolha
+      for (const bad of [ans(radio.id, null), ans(list.id, 'Universidade que não existe')]) {
+        await expect(site.fillStep(page, [ans(find(questions, /full name/i).id, 'Ana Souza'), ans(find(questions, /resume|cv/i).id, 'cv.pdf'), bad], files)).rejects.toBeInstanceOf(SiteLayoutError);
+        expect(await fullName()).toBe('');
+        expect(await page.locator('input[name="resume"]').evaluate((el) => (el as HTMLInputElement).files?.length ?? 0)).toBe(0);
+      }
+    });
+
+    it('refuses a file answer for a field that is not the résumé, and a null on a list with no empty option', async () => {
+      await inForm(page, '<input type="file" name="portfolio"><select name="sem_vazio"><option value="a">A</option><option value="b">B</option></select>');
+      const read = (await site.readStep(page)).questions;
+      expect(read.find((q) => q.id === 'portfolio')).toMatchObject({ kind: 'file' });
+      await expect(site.fillStep(page, [ans('portfolio', 'cv.pdf')], files)).rejects.toBeInstanceOf(SiteLayoutError);
+      await expect(site.fillStep(page, [ans('sem_vazio', null)], files)).rejects.toBeInstanceOf(SiteLayoutError);
+      await expect(site.fillStep(page, [ans('portfolio', null)], files)).resolves.toBeUndefined();
+    });
+
     it('does not call a loaded hCaptcha a gate; only a challenge on screen is one', async () => {
       expect(await site.humanGate(page)).toBeNull();
       await inject(page, CHALLENGE);
@@ -209,7 +237,7 @@ describe.skipIf(!recorded)('lever site (needs the recorded form: run pnpm apply:
 
     it('never reports success without a confirmation, and clicks the submit button once', async () => {
       const clicks = await watchClicks(page);
-      await expect(site.submit(page)).rejects.toBeInstanceOf(Error);
+      await expect(site.submit(page)).rejects.toBeInstanceOf(SiteLayoutError); // campos obrigatórios vazios: erro de campo
       await page.waitForTimeout(300);
       expect(clicks.filter((c) => /submit application/i.test(c))).toHaveLength(1);
     });
@@ -217,7 +245,7 @@ describe.skipIf(!recorded)('lever site (needs the recorded form: run pnpm apply:
     it('does not take the phrase in the job description for a confirmation while the form is on the page', async () => {
       const clicks = await watchClicks(page);
       await inject(page, '<h3>Application submitted!</h3>');
-      await expect(site.submit(page)).rejects.toBeInstanceOf(Error);
+      await expect(site.submit(page)).rejects.toBeInstanceOf(SiteLayoutError);
       await page.waitForTimeout(300);
       expect(clicks.filter((c) => /submit application/i.test(c))).toHaveLength(1);
     });
@@ -245,7 +273,10 @@ describe.skipIf(!recorded)('lever site (needs the recorded form: run pnpm apply:
     expect(page.url()).toBe('about:blank');
     expect(writes.length).toBe(before);
   });
+});
 
+// Sem página gravada: a rota de `formUrl` é respondida pelo próprio teste, então estes sempre rodam.
+describe('open and gates on a page the test serves itself', () => {
   it('a challenge that renders after load beats layout in open', async () => {
     const late = createLeverSite({ stepMs: 1_500 });
     await page.route(formUrl, (route) => route.fulfill({ contentType: 'text/html', body: '<html><body></body></html>' }));

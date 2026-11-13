@@ -20,6 +20,8 @@ describe('leverTarget', () => {
 
   it.each([
     'https://jobs.lever.co/palantir',
+    `https://jobs.lever.co/palantir/${ID}/apply/extra`,
+    `https://jobs.lever.co/palantir/extra/${ID}`,
     `https://jobs.eu.lever.co/acme/${ID}`,
     `https://palantir.com/careers/${ID}`,
     'não é url',

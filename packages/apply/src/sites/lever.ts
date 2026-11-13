@@ -1,8 +1,10 @@
 import type { Locator, Page } from 'playwright';
 import type { Question, ResolvedAnswer } from '@kv/shared';
-import { SiteLayoutError, SubmitRejectedError } from '../types';
-import type { ApplyJob, ApplySite, ApplyTarget, HumanGate, StepRead } from '../types';
-import { SITE_TIMEOUTS, leaveForm, matchOption, visibleCaptcha, visibleCodePrompt } from './shared';
+import { SiteLayoutError } from '../types';
+import type { ApplyJob, ApplySite, ApplyTarget, StepRead } from '../types';
+import {
+  SITE_TIMEOUTS, buttonOnScreen, fieldErrorOnScreen, humanGateOf, leaveForm, matchOption, sleep, squash, submitAndWait, typeWithSuggestions,
+} from './shared';
 
 const COMPANY = /^[A-Za-z0-9_-]+$/;
 const POSTING_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -34,6 +36,8 @@ interface Field {
   question: Question;
   control: 'text' | 'textarea' | 'select' | 'radio' | 'checkbox' | 'file';
   suggests: boolean;
+  /** Um `<select>` com opção de valor vazio (a de espera) pode ser esvaziado. */
+  hasEmpty: boolean;
   /** Valor do atributo de cada opção, na mesma ordem de `question.options`. */
   values: string[];
 }
@@ -88,6 +92,7 @@ const READ_FIELDS = `(() => {
     fields.push({
       question: { id: name, label, help: '', kind, options, required, maxLength: Number.isFinite(max) ? max : null },
       control, values,
+      hasEmpty: tag === 'select' && Array.from(first.options).some((o) => o.value === ''),
       suggests: first.classList.contains('location-input') || first.id === 'location-input',
     });
   }
@@ -124,8 +129,6 @@ const readState = (name: string): string => `(() => {
 type Expected = string | string[] | boolean;
 interface Entry { field: Field; answer: ResolvedAnswer; chosen: string[]; expected: Expected }
 
-const squash = (text: string): string => text.replace(/\s+/g, ' ').trim();
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 const isEmpty = (value: ResolvedAnswer['value']): boolean => value === null || value === '' || (Array.isArray(value) && value.length === 0);
 const isTrue = (value: ResolvedAnswer['value']): boolean => value === true || value === 'true';
 const normalise = (value: Expected): Expected => (typeof value === 'string' ? value.replace(/\r\n/g, '\n').trim() : value);
@@ -162,20 +165,14 @@ function resolveOptions(field: Field, answer: ResolvedAnswer): string[] {
   });
 }
 
-/** Campo de cidade com sugestões: digita, espera a lista por até 3 s e clica na que é igual ao valor ou começa por ele. */
-async function typeWithSuggestions(page: Page, control: Locator, value: string): Promise<void> {
-  await control.fill(value);
-  const options = page.locator('.dropdown-location');
-  try {
-    await options.first().waitFor({ state: 'visible', timeout: 3_000 });
-  } catch {
-    return; // sem lista: o texto digitado fica
+/** Esvaziar é impossível quando o site não oferece como: erro antes de qualquer campo ser tocado. */
+async function assertCanEmpty(page: Page, field: Field): Promise<void> {
+  if (field.control === 'select' && field.question.kind === 'select' && !field.hasEmpty) {
+    throw new SiteLayoutError(`"${field.question.label}" não tem opção vazia: não dá para deixá-lo em branco`);
   }
-  const texts = (await options.allTextContents()).map((t) => squash(t).toLowerCase());
-  const wanted = squash(value).toLowerCase();
-  const equal = texts.indexOf(wanted);
-  const index = equal >= 0 ? equal : texts.findIndex((t) => t.startsWith(wanted));
-  if (index >= 0) await options.nth(index).click();
+  if (field.control === 'radio' && (await page.evaluate(readState(field.question.id))) !== '') {
+    throw new SiteLayoutError(`não é possível limpar a escolha já feita em "${field.question.label}"`);
+  }
 }
 
 /** Põe a resposta no campo. */
@@ -188,14 +185,11 @@ async function fillField(page: Page, { field, answer, chosen }: Entry): Promise<
     await controls.first().selectOption(picked.map((value) => ({ value })));
   } else if (field.control === 'radio') {
     if (!empty) await setChecked(controls.nth(field.question.options.indexOf(chosen[0])), true);
-    else if (await controls.evaluateAll((all) => all.some((el) => (el as HTMLInputElement).checked))) {
-      throw new SiteLayoutError(`não é possível limpar a escolha já feita em "${field.question.label}"`);
-    }
   } else if (field.control === 'checkbox') {
     if (field.question.kind === 'boolean') await setChecked(controls.first(), isTrue(answer.value));
     else for (let i = 0; i < field.question.options.length; i++) await setChecked(controls.nth(i), chosen.includes(field.question.options[i]));
   } else if (empty) await controls.first().fill('');
-  else if (field.suggests) await typeWithSuggestions(page, controls.first(), String(answer.value));
+  else if (field.suggests) await typeWithSuggestions(controls.first(), async () => page.locator('.dropdown-location'), String(answer.value));
   else await controls.first().fill(String(answer.value));
 }
 
@@ -212,19 +206,10 @@ async function expectedOf(page: Page, entry: Entry): Promise<Expected> {
 export function createLeverSite(deps: Partial<LeverDeps> = {}): ApplySite {
   const { stepMs, parseMs, settleMs, submitMs } = { ...DEFAULTS, ...deps };
 
-  async function gate(page: Page): Promise<HumanGate | null> {
-    if (await visibleCaptcha(page)) return 'captcha';
-    if (await visibleCodePrompt(page)) return 'verification_code';
-    return null;
-  }
+  const gate = humanGateOf;
+  const formOnScreen = (page: Page): Promise<boolean> => buttonOnScreen(submitButton(page));
+  const fieldErrorVisible = (page: Page): Promise<boolean> => fieldErrorOnScreen(page, `${FORM} :invalid:visible`);
 
-  const formOnScreen = async (page: Page): Promise<boolean> => {
-    const button = submitButton(page);
-    return (await button.count()) > 0 && (await button.first().isVisible());
-  };
-
-  const fieldErrorVisible = async (page: Page): Promise<boolean> =>
-    (await page.locator(`${FORM} :invalid:visible, [aria-invalid="true"]:visible, [role="alert"]:visible`).count()) > 0;
 
   /** A página de "vaga não encontrada" do Lever: sem formulário, e com o título ou o aviso de erro dizendo isso. */
   const isClosed = (page: Page): Promise<boolean> => page.evaluate(`(() => {
@@ -295,9 +280,12 @@ export function createLeverSite(deps: Partial<LeverDeps> = {}): ApplySite {
         }
         if (field.control === 'file') {
           // Só o campo de currículo recebe arquivo; o outro campo de arquivo nunca.
-          if (field.question.id === 'resume' && !isEmpty(answer.value)) upload = true;
+          if (isEmpty(answer.value)) continue;
+          if (field.question.id !== 'resume') throw new SiteLayoutError(`o campo de arquivo "${field.question.label}" não recebe arquivo: só o do currículo`);
+          upload = true;
           continue;
         }
+        if (isEmpty(answer.value)) await assertCanEmpty(page, field);
         entries.push({ field, answer, chosen: resolveOptions(field, answer), expected: '' });
       }
 
@@ -333,38 +321,19 @@ export function createLeverSite(deps: Partial<LeverDeps> = {}): ApplySite {
     async next() {
       throw new SiteLayoutError('o formulário do Lever tem uma etapa só');
     },
-
     async submit(page) {
-      const done = await confirmationText(page);
-      if (done) return { confirmation: done };
-      if (!(await formOnScreen(page))) {
-        throw new SiteLayoutError('o formulário do Lever não está na tela: confira no site se a candidatura foi enviada');
-      }
-      await submitButton(page).first().click({ timeout: stepMs });
-
-      const deadline = Date.now() + submitMs;
-      while (Date.now() < deadline) {
-        try {
-          if (await gate(page)) throw new SubmitRejectedError('apareceu um portão depois do clique no envio');
-          const confirmation = await confirmationText(page);
-          if (confirmation) return { confirmation };
-          if ((await formOnScreen(page)) && (await fieldErrorVisible(page))) {
-            throw new SiteLayoutError('o Lever mostrou erro em um campo do formulário');
-          }
-        } catch (error) {
-          if (error instanceof SiteLayoutError || error instanceof SubmitRejectedError) throw error;
-          // A página está trocando de documento; tenta de novo no próximo ciclo.
-        }
-        await sleep(150);
-      }
-      const confirmation = await confirmationText(page).catch(() => null);
-      if (confirmation) return { confirmation };
-      if (await formOnScreen(page).catch(() => false)) {
-        if (await fieldErrorVisible(page)) throw new SiteLayoutError('o Lever mostrou erro em um campo do formulário');
-        throw new SubmitRejectedError('o Lever não confirmou o envio nem apontou erro no formulário');
-      }
-      throw new SiteLayoutError('o formulário saiu da tela sem confirmação: confira no site se a candidatura foi enviada');
+      return submitAndWait(page, {
+        site: 'Lever',
+        submitButton: submitButton(page),
+        formOnScreen: () => formOnScreen(page),
+        confirmationText: () => confirmationText(page),
+        fieldErrorVisible: () => fieldErrorVisible(page),
+        gate: () => gate(page),
+        stepMs,
+        submitMs,
+      });
     },
+
 
     humanGate: gate,
 

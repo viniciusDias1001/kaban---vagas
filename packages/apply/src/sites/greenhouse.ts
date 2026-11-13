@@ -2,7 +2,9 @@ import type { Locator, Page } from 'playwright';
 import type { Question, QuestionKind, ResolvedAnswer } from '@kv/shared';
 import { SiteLayoutError, SubmitRejectedError } from '../types';
 import type { ApplyJob, ApplySite, ApplyTarget, HumanGate, StepRead } from '../types';
-import { SITE_TIMEOUTS, leaveForm, matchOption, sameText, visibleCaptcha, visibleCodePrompt } from './shared';
+import {
+  SITE_TIMEOUTS, buttonOnScreen, fieldErrorOnScreen, humanGateOf, leaveForm, matchOption, sameText, squash, submitAndWait, typeWithSuggestions,
+} from './shared';
 
 const EMBED = 'https://job-boards.greenhouse.io/embed/job_app';
 const GREENHOUSE_HOSTS = new Set(['boards.greenhouse.io', 'job-boards.greenhouse.io']);
@@ -161,7 +163,6 @@ function consentBox(page: Page, id: string): Locator {
   return page.locator(`input[type="checkbox"][name=${quoted}], input[type="checkbox"][id=${quoted}]`).first();
 }
 
-const squash = (text: string): string => text.replace(/\s+/g, ' ').trim();
 
 function listContainer(control: Locator): Locator {
   return control.locator('xpath=ancestor::div[contains(@class,"select__container")][1]');
@@ -205,22 +206,6 @@ async function pickOne(page: Page, control: Locator, wanted: string, waitMs: num
   }
 }
 
-/** Campo de cidade com sugestões: digita, espera a lista por até 3 s e clica na que é igual ao valor ou começa por ele. */
-async function typeWithSuggestions(page: Page, control: Locator, value: string): Promise<void> {
-  await control.fill(value);
-  const options = await optionsOf(page, control);
-  try {
-    await options.first().waitFor({ state: 'visible', timeout: 3_000 });
-  } catch {
-    return; // sem lista: o texto digitado fica
-  }
-  const texts = (await options.allTextContents()).map((t) => squash(t).toLowerCase());
-  const wanted = squash(value).toLowerCase();
-  const equal = texts.indexOf(wanted);
-  const index = equal >= 0 ? equal : texts.findIndex((t) => t.startsWith(wanted));
-  if (index >= 0) await options.nth(index).click();
-}
-
 /** Esvazia a lista; se alguma escolha resistir, é erro: nunca escolher por cima de uma seleção que ficou. */
 async function clearChoice(control: Locator): Promise<void> {
   const chosen = (await shownChoice(control)).length;
@@ -256,7 +241,7 @@ async function fillOne(page: Page, question: Question, control: Locator, answer:
     }
     default:
       if (empty) return control.fill('');
-      if ((await control.getAttribute('role')) === 'combobox') return typeWithSuggestions(page, control, String(value));
+      if ((await control.getAttribute('role')) === 'combobox') return typeWithSuggestions(control, () => optionsOf(page, control), String(value));
       return control.fill(String(value));
   }
 }
@@ -274,7 +259,6 @@ async function confirmationText(page: Page): Promise<string | null> {
 }
 
 const submitButton = (page: Page): Locator => page.getByRole('button', { name: SUBMIT_BUTTON });
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 export function createGreenhouseSite(deps: Partial<GreenhouseDeps> = {}): ApplySite {
   const fetchJob = deps.fetchJob ?? fetchJobFromApi;
@@ -287,19 +271,11 @@ export function createGreenhouseSite(deps: Partial<GreenhouseDeps> = {}): ApplyS
     return apis.get(page);
   };
 
-  async function gate(page: Page): Promise<HumanGate | null> {
-    if (await visibleCaptcha(page)) return 'captcha';
-    if (await visibleCodePrompt(page)) return 'verification_code';
-    return null;
-  }
+  const gate = humanGateOf;
 
-  const fieldErrorVisible = async (page: Page): Promise<boolean> =>
-    (await page.locator('[aria-invalid="true"]:visible, [role="alert"]:visible').count()) > 0;
+  const fieldErrorVisible = (page: Page): Promise<boolean> => fieldErrorOnScreen(page);
 
-  const formOnScreen = async (page: Page): Promise<boolean> => {
-    const button = submitButton(page);
-    return (await button.count()) > 0 && (await button.first().isVisible());
-  };
+  const formOnScreen = (page: Page): Promise<boolean> => buttonOnScreen(submitButton(page));
 
   return {
     id: 'greenhouse',
@@ -366,37 +342,16 @@ export function createGreenhouseSite(deps: Partial<GreenhouseDeps> = {}): ApplyS
 
     async submit(page) {
       apiOf(page);
-      const done = await confirmationText(page);
-      if (done) return { confirmation: done };
-      if (!(await formOnScreen(page))) {
-        throw new SiteLayoutError('o formulário da Greenhouse não está na tela: confira no site se a candidatura foi enviada');
-      }
-      await submitButton(page).first().click({ timeout: stepMs });
-
-      const deadline = Date.now() + submitMs;
-      while (Date.now() < deadline) {
-        try {
-          if (await gate(page)) throw new SubmitRejectedError('apareceu um portão depois do clique no envio');
-          const confirmation = await confirmationText(page);
-          const onScreen = await formOnScreen(page);
-          if (confirmation && !onScreen) return { confirmation };
-          if (!confirmation && onScreen && (await fieldErrorVisible(page))) {
-            throw new SiteLayoutError('a Greenhouse mostrou erro em um campo do formulário');
-          }
-        } catch (error) {
-          if (error instanceof SiteLayoutError || error instanceof SubmitRejectedError) throw error;
-          // A página está trocando de documento; tenta de novo no próximo ciclo.
-        }
-        await sleep(150);
-      }
-      const confirmation = await confirmationText(page).catch(() => null);
-      const onScreen = await formOnScreen(page).catch(() => false);
-      if (confirmation && !onScreen) return { confirmation };
-      if (onScreen) {
-        if (await fieldErrorVisible(page)) throw new SiteLayoutError('a Greenhouse mostrou erro em um campo do formulário');
-        throw new SubmitRejectedError('a Greenhouse não confirmou o envio nem apontou erro no formulário');
-      }
-      throw new SiteLayoutError('o formulário saiu da tela sem confirmação: confira no site se a candidatura foi enviada');
+      return submitAndWait(page, {
+        site: 'Greenhouse',
+        submitButton: submitButton(page),
+        formOnScreen: () => formOnScreen(page),
+        confirmationText: () => confirmationText(page),
+        fieldErrorVisible: () => fieldErrorVisible(page),
+        gate: () => gate(page),
+        stepMs,
+        submitMs,
+      });
     },
 
     humanGate: gate,
