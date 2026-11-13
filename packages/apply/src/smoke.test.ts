@@ -74,7 +74,7 @@ describe('paths', () => {
   });
   it('does not call a directory named "..x" inside the repository outside of it, and refuses a sibling of the root as outside', () => {
     expect(() => assertOutsideRepo(join(repoRoot, '..x', 'a.png'), repoRoot)).toThrow(/fora do repositório/);
-    expect(() => assertOutsideRepo(repoRoot.replace(/[\/]+$/, '') + sep + '..', repoRoot)).not.toThrow();
+    expect(() => assertOutsideRepo(repoRoot.replace(/[\\/]+$/, '') + sep + '..', repoRoot)).not.toThrow();
   });
 });
 
@@ -91,6 +91,11 @@ describe('smokeJobFor', () => {
     const job = smokeJobFor('greenhouse', 'https://careers.acme.com/open?gh_jid=4567890');
     expect(job).toMatchObject({ source: 'greenhouse', externalId: 'acme-4567890', company: '' });
     expect(greenhouseSite.match(job)).toMatchObject({ ref: { board: 'acme', jobId: '4567890' } });
+  });
+  it('does not take a public-suffix part as the board: careers.acme.co.uk and acme.com.br guess "acme"', () => {
+    expect(smokeJobFor('greenhouse', 'https://careers.acme.co.uk/x?gh_jid=11').externalId).toBe('acme-11');
+    expect(smokeJobFor('greenhouse', 'https://www.acme.com.br/x?gh_jid=12').externalId).toBe('acme-12');
+    expect(smokeJobFor('greenhouse', 'https://jobs.acme.org/x?gh_jid=13').externalId).toBe('acme-13');
   });
   it('leaves the id empty for a Greenhouse-hosted or Lever URL', () => {
     expect(smokeJobFor('greenhouse', 'https://job-boards.greenhouse.io/acme/jobs/123?gh_jid=123').externalId).toBe('');
@@ -162,9 +167,46 @@ describe('runSmoke', () => {
     expect(site.discard).toHaveBeenCalledTimes(1);
   });
 
-  it('has no code path that submits', () => {
+  it('stops at step 12 without calling next, so the photo shows the filled step 12', async () => {
+    const { deps, lines, page } = setup();
+    const site = stubSite([]);
+    vi.mocked(site.readStep).mockResolvedValue({ questions: [name], isLast: false });
+    expect(await runSmoke({ ...deps, site })).toMatchObject({ steps: 12, shotPath: 'out.png' });
+    expect([site.fillStep, site.next].map((f) => vi.mocked(f).mock.calls.length)).toEqual([12, 11]);
+    expect(vi.mocked(page.screenshot).mock.invocationCallOrder[0]!).toBeGreaterThan(vi.mocked(site.fillStep).mock.invocationCallOrder[11]!);
+    expect(lines.join('\n')).toContain('Parei na etapa 12');
+  });
+
+  it('reports pending and fills nothing when the resolver returns nothing for a required question', async () => {
+    const { deps } = setup();
+    const site = stubSite([{ questions: [visa], isLast: true }]);
+    const resolve = vi.fn(async () => ({ answers: [] as ResolvedAnswer[], pending: [] as PendingQuestion[] }));
+    expect(await runSmoke({ ...deps, site, resolve })).toMatchObject({ outcome: 'pending' });
+    expect(vi.mocked(site.fillStep).mock.calls[0]![1]).toEqual([]);
+  });
+
+  it('answers "unavailable" and opens nothing when the site does not match the job (match returns null)', async () => {
+    const { deps } = setup();
+    const site = stubSite([]);
+    vi.mocked(site.match).mockReturnValue(null);
+    expect(await runSmoke({ ...deps, site })).toMatchObject({ outcome: 'unavailable', steps: 0, shotPath: null });
+    expect([site.open, site.discard].map((f) => vi.mocked(f).mock.calls.length)).toEqual([0, 0]);
+  });
+
+  it('discards even when open throws', async () => {
+    const { deps } = setup();
+    const site = stubSite([]);
+    vi.mocked(site.open).mockRejectedValue(new Error('net'));
+    await expect(runSmoke({ ...deps, site })).rejects.toThrow('net');
+    expect(site.discard).toHaveBeenCalledTimes(1);
+  });
+
+  it('has no code path that submits: the bare word is absent from the code lines of both files', () => {
     for (const file of ['packages/apply/src/smoke.ts', 'scripts/apply-smoke.ts']) {
-      expect(readFileSync(join(repoRoot, file), 'utf8')).not.toMatch(/\.submit\s*\(/);
+      const code = readFileSync(join(repoRoot, file), 'utf8').split('\n')
+        .filter((l) => !/^\s*(\/\/|\/\*|\*)/.test(l))
+        .map((l) => l.replace(/\s\/\/.*$/, ''));
+      expect(code.filter((l) => /\bsubmit\b/i.test(l)), file).toEqual([]);
     }
   });
 });

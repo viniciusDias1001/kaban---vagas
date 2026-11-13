@@ -74,7 +74,9 @@ export function smokeJobFor(site: SmokeSite, url: string): ApplyJob {
     if (jid && !parsed.hostname.endsWith('greenhouse.io')) {
       // Vaga no domínio da empresa: o quadro vem do nome do domínio (o melhor palpite sem rede); o roteiro confere o `gh_jid`.
       const labels = parsed.hostname.split('.').filter((l) => !['www', 'careers', 'jobs', 'job', 'boards'].includes(l));
-      const slug = labels.length > 1 ? labels[labels.length - 2]! : (labels[0] ?? '');
+      if (labels.length > 1) labels.pop(); // o domínio de topo
+      while (labels.length > 1 && ['co', 'com', 'org', 'net'].includes(labels[labels.length - 1]!)) labels.pop(); // `acme.co.uk` -> `acme`
+      const slug = labels[labels.length - 1] ?? '';
       if (slug) job.externalId = `${slug}-${jid}`;
     }
   } catch { /* o endereço já foi validado */ }
@@ -92,7 +94,7 @@ export function smokeAiMode(input: { configured: boolean; withinBudget: boolean 
   };
 }
 
-export interface SmokeResolution{ answers: ResolvedAnswer[]; pending: PendingQuestion[] }
+export interface SmokeResolution {answers: ResolvedAnswer[]; pending: PendingQuestion[] }
 
 export interface SmokeDeps {
   site: ApplySite; job: ApplyJob; page: Page;
