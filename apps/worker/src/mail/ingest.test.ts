@@ -44,7 +44,7 @@ describe('ingestInbox', () => {
   it('stores job mail, lists the company mail without a hiring signal and drops the rest', async () => {
     await seedAppliedJob('Acme', 'Engenheira de Software', MAIL_NOW - DAY);
     deliver({ from: { address: 'careers@acme.com', name: 'Acme' }, subject: 'Sua candidatura na Acme', text: 'Recebemos sua candidatura.' });
-    deliver({ from: { address: 'faturas@acme.com', name: 'Acme' }, subject: 'Sua fatura', text: 'Segue o boleto.', bulk: true });
+    deliver({ from: { address: 'faturas@acme.com', name: 'Acme' }, subject: 'Sua fatura', text: 'Segue o boleto.', autoSubmitted: true });
     deliver({ from: { address: 'promo@loja.example', name: 'Loja' }, subject: 'Promoção', text: 'Compre já.' });
     const before = readFakeMailbox(dir);
     expect(await ingestInbox(deps)).toEqual({ stored: 1, ignored: 1, more: false });
@@ -61,7 +61,7 @@ describe('ingestInbox', () => {
   it('never stores the same message twice, also after UIDVALIDITY changes', async () => {
     await seedAppliedJob('Acme', 'Engenheira de Software', MAIL_NOW - DAY);
     deliver(acmeJobMail());
-    deliver({ from: { address: 'faturas@acme.com', name: 'Acme' }, subject: 'Sua fatura', text: 'Segue o boleto.', bulk: true });
+    deliver({ from: { address: 'faturas@acme.com', name: 'Acme' }, subject: 'Sua fatura', text: 'Segue o boleto.', autoSubmitted: true });
     expect(await ingestInbox(deps)).toEqual({ stored: 1, ignored: 1, more: false });
     writeFakeMailbox(dir, { ...readFakeMailbox(dir), uidValidity: 2 });
     expect(await ingestInbox(deps)).toEqual({ stored: 0, ignored: 0, more: false });
@@ -182,7 +182,7 @@ describe('ingestInbox', () => {
 
   it('deletes ignored lines older than 30 days', async () => {
     await seedAppliedJob('Acme', 'Engenheira de Software', MAIL_NOW - DAY);
-    deliver({ from: { address: 'faturas@acme.com', name: 'Acme' }, subject: 'Sua fatura', text: 'Segue o boleto.', bulk: true });
+    deliver({ from: { address: 'faturas@acme.com', name: 'Acme' }, subject: 'Sua fatura', text: 'Segue o boleto.', autoSubmitted: true });
     await ingestInbox({ ...deps, now: () => MAIL_NOW - 31 * DAY });
     expect(await db.select().from(mailIgnored)).toHaveLength(1);
     await ingestInbox(deps);
@@ -200,7 +200,7 @@ describe('ingestInbox', () => {
 describe('promoteNext', () => {
   it('promotes an ignored mail the owner marked', async () => {
     await seedAppliedJob('Acme', 'Engenheira de Software', MAIL_NOW - DAY);
-    deliver({ from: { address: 'faturas@acme.com', name: 'Acme' }, subject: 'Sua fatura', text: 'Segue o boleto.', bulk: true });
+    deliver({ from: { address: 'faturas@acme.com', name: 'Acme' }, subject: 'Sua fatura', text: 'Segue o boleto.', autoSubmitted: true });
     expect(await ingestInbox(deps)).toEqual({ stored: 0, ignored: 1, more: false });
     expect(await promoteNext(deps)).toBe(false);
     const [ign] = await db.select().from(mailIgnored);
@@ -213,7 +213,7 @@ describe('promoteNext', () => {
 
   it('drops the line when the mail is no longer in the inbox', async () => {
     await seedAppliedJob('Acme', 'Engenheira de Software', MAIL_NOW - DAY);
-    deliver({ from: { address: 'faturas@acme.com', name: 'Acme' }, subject: 'Sua fatura', text: 'Segue o boleto.', bulk: true });
+    deliver({ from: { address: 'faturas@acme.com', name: 'Acme' }, subject: 'Sua fatura', text: 'Segue o boleto.', autoSubmitted: true });
     await ingestInbox(deps);
     writeFakeMailbox(dir, { ...readFakeMailbox(dir), messages: [] });
     const [ign] = await db.select().from(mailIgnored);
@@ -225,7 +225,7 @@ describe('promoteNext', () => {
 
   it('pauses on a refused login', async () => {
     await seedAppliedJob('Acme', 'Engenheira de Software', MAIL_NOW - DAY);
-    deliver({ from: { address: 'faturas@acme.com', name: 'Acme' }, subject: 'Sua fatura', text: 'Segue o boleto.', bulk: true });
+    deliver({ from: { address: 'faturas@acme.com', name: 'Acme' }, subject: 'Sua fatura', text: 'Segue o boleto.', autoSubmitted: true });
     await ingestInbox(deps);
     const [ign] = await db.select().from(mailIgnored);
     await requestPromote(db, ign!.id);

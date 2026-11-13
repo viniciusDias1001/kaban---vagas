@@ -130,7 +130,7 @@ describe('summarizeSmoke and formatSmokeSummary', () => {
     rawMail({ uid: 1, messageId: 'a@x', threadKey: 'a@x', from: { address: 'joana@acme.com', name: 'Joana Lima' }, subject: 'Sua candidatura na Acme', text: 'Olá' }),
     rawMail({ uid: 2, messageId: 'b@x', threadKey: 'b@x', from: { address: 'no-reply@greenhouse.io', name: '' }, subject: 'Application received' }),
     rawMail({ uid: 3, messageId: 'c@x', threadKey: 'known@example.com', from: { address: 'pessoa@globex.com', name: 'Pessoa' }, subject: 'Re: conversa' }),
-    rawMail({ uid: 4, messageId: 'd@x', threadKey: 'd@x', from: { address: 'fatura@acme.com', name: 'Acme' }, subject: 'Sua fatura', text: 'Valor', bulk: true }),
+    rawMail({ uid: 4, messageId: 'd@x', threadKey: 'd@x', from: { address: 'fatura@acme.com', name: 'Acme' }, subject: 'Sua fatura', text: 'Valor', autoSubmitted: true }),
     rawMail({ uid: 5, messageId: 'e@x', threadKey: 'e@x', from: { address: 'news@loja.com', name: 'Loja' }, subject: 'Promoção', text: 'Compre' }),
     rawMail({ uid: 6, messageId: 'f@x', threadKey: 'f@x', from: { address: 'maria@example.com', name: 'Maria' }, subject: 'Nota para mim' }),
   ];
