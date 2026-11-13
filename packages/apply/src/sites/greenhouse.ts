@@ -323,6 +323,13 @@ export function createGreenhouseSite(deps: Partial<GreenhouseDeps> = {}): ApplyS
 
     fillStep: (page, answers, files) => siteLayoutErrors('Greenhouse', async () => {
       const byId = new Map(mapGreenhouseQuestions(apiOf(page)).map((q) => [q.id, q]));
+      // Antes de tocar em qualquer campo: só o campo de currículo recebe arquivo.
+      for (const answer of answers) {
+        const question = byId.get(answer.questionId);
+        if (question?.kind === 'file' && question.id !== 'resume' && answer.value !== null && answer.value !== '') {
+          throw new SiteLayoutError(`o campo de arquivo "${question.label}" não recebe arquivo: só o do currículo`);
+        }
+      }
       for (const answer of answers) {
         const question = byId.get(answer.questionId);
         if (!question) {

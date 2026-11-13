@@ -94,7 +94,7 @@ describe.skipIf(!recorded)('greenhouse site (needs the recorded form: run pnpm a
 
   it('fills text, picks the exact option, uploads the résumé only into the résumé field, and empties on null', async () => {
     await site.open(page, target);
-    await site.fillStep(page, [ans(text.id, 'Ana'), ans(select.id, select.options[1]), ans('resume', 'cv.pdf'), ans('cover_letter', 'cv.pdf'), ans('question_inexistente', 'x')], files);
+    await site.fillStep(page, [ans(text.id, 'Ana'), ans(select.id, select.options[1]), ans('resume', 'cv.pdf'), ans('cover_letter', null), ans('question_inexistente', 'x')], files);
     expect(await page.getByLabel(text.label, { exact: true }).inputValue()).toBe('Ana');
     expect(await shownValue(page, select)).toBe(select.options[1]);
     expect(await uploadedNames(page)).toEqual([basename(files.resumePath)]);
@@ -107,6 +107,14 @@ describe.skipIf(!recorded)('greenhouse site (needs the recorded form: run pnpm a
     page.setDefaultTimeout(800);
     await page.getByLabel(text.label, { exact: true }).evaluate((el) => { (el as HTMLInputElement).disabled = true; });
     await expect(site.fillStep(page, [ans(text.id, 'Ana')], files)).rejects.toBeInstanceOf(SiteLayoutError);
+  });
+
+  it('refuses a file answer for a field that is not the résumé before touching anything', async () => {
+    await site.open(page, target);
+    await expect(site.fillStep(page, [ans(text.id, 'Ana'), ans('resume', 'cv.pdf'), ans('cover_letter', 'cv.pdf')], files))
+      .rejects.toBeInstanceOf(SiteLayoutError);
+    expect(await page.getByLabel(text.label, { exact: true }).inputValue()).toBe('');
+    expect(await uploadedNames(page)).toEqual([]);
   });
 
   it('empties a chosen option on null', async () => {
