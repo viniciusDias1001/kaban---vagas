@@ -16,6 +16,14 @@ describe('e-mail contract', () => {
     expect(DRAFT_PLACEHOLDER.test('Posso conversar em [[seus horários]].')).toBe(true);
     expect(DRAFT_PLACEHOLDER.test('Posso conversar na terça, às 10h.')).toBe(false);
   });
+  it('finds a gap that holds a ] or was never closed, and stays non-global', () => {
+    for (const text of ['Posso em [[dia ] hora]].', 'Posso em [[dia e hora.', 'Posso em [[]].', 'Posso em [[[x]]].']) {
+      expect(DRAFT_PLACEHOLDER.test(text), text).toBe(true);
+      expect(DRAFT_PLACEHOLDER.test(text), text).toBe(true); // sem `g`, nada de lastIndex entre chamadas
+    }
+    expect(DRAFT_PLACEHOLDER.test('Uma lista [1] e outra [2].')).toBe(false);
+    expect(DRAFT_PLACEHOLDER.global).toBe(false);
+  });
   it('only allows local hosts', () => {
     expect(emailAvailability({}).available).toBe(true);
     expect(emailAvailability({ HOST: '0.0.0.0' })).toEqual({ available: false, reason: expect.stringContaining('endereço local') });
