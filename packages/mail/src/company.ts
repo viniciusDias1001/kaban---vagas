@@ -1,1 +1,63 @@
-export {};
+import type { RawMail } from './types';
+
+const CORPORATE_SUFFIXES = new Set(['ltda', 'me', 'eireli', 'sa', 'inc', 'llc', 'gmbh', 'corp', 'co', 'ltd']);
+const SECOND_LEVEL = new Set(['com', 'co', 'net', 'org', 'gov', 'edu']);
+
+function fold(value: string): string {
+  return value.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+}
+
+/** Minúsculas, sem acento, sem pontuação; `dots` diz se ponto, barra e apóstrofo somem (S.A. vira sa) ou viram espaço. */
+function words(value: string, dots: 'drop' | 'space'): string[] {
+  return fold(value)
+    .replace(/[./'’]/g, dots === 'drop' ? '' : ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .split(' ')
+    .filter(Boolean);
+}
+
+/** Minúsculas, sem acento, sem pontuação e sem sufixo societário (ltda, me, eireli, sa, s.a., inc, llc, gmbh, corp, co, ltd). */
+export function normalizeCompany(name: string): string {
+  const tokens = words(name, 'drop');
+  while (tokens.length > 1 && CORPORATE_SUFFIXES.has(tokens[tokens.length - 1]!)) tokens.pop();
+  return tokens.join(' ');
+}
+
+/** `phrase` aparece em `text` como palavra ou frase inteira (sem acento, sem diferença de caixa). */
+export function hasPhrase(text: string, phrase: string): boolean {
+  const needle = words(phrase, 'space').join(' ');
+  if (!needle) return false;
+  return ` ${words(text, 'space').join(' ')} `.includes(` ${needle} `);
+}
+
+/** O nome aparece em `text` como palavra inteira. Nome normalizado com menos de 3 letras nunca casa em texto. */
+export function companyInText(company: string, text: string): boolean {
+  const name = normalizeCompany(company);
+  if (name.replace(/ /g, '').length < 3) return false;
+  const needle = ` ${name} `;
+  return ` ${words(text, 'drop').join(' ')} `.includes(needle) || ` ${words(text, 'space').join(' ')} `.includes(needle);
+}
+
+/** Um rótulo do domínio (fora o sufixo público) é igual ao nome normalizado sem espaços. */
+export function companyInDomain(company: string, domain: string): boolean {
+  const name = normalizeCompany(company).replace(/ /g, '');
+  if (!name) return false;
+  const labels = domain.trim().toLowerCase().split('.').filter(Boolean);
+  const last = labels[labels.length - 1];
+  const second = labels[labels.length - 2];
+  const suffix = last && second && /^[a-z]{2}$/.test(last) && SECOND_LEVEL.has(second) ? 2 : 1;
+  return labels.slice(0, Math.max(0, labels.length - suffix)).includes(name);
+}
+
+export function domainOf(address: string): string {
+  return address.slice(address.lastIndexOf('@') + 1).trim().toLowerCase();
+}
+
+/** Nome do remetente, domínio do remetente ou assunto. */
+export function companyInHeaders(company: string, mail: Pick<RawMail, 'from' | 'subject'>): boolean {
+  return (
+    companyInText(company, mail.from.name) ||
+    companyInDomain(company, domainOf(mail.from.address)) ||
+    companyInText(company, mail.subject)
+  );
+}
