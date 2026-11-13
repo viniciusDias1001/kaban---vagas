@@ -1,8 +1,8 @@
 import type {
-  AnswerScope, AnswerValue, ApplicationDto, ApplicationListItemDto, ApplyAnswerDto, ApplySiteId, ApplyStatusDto,
+  AnswerScope, AnswerValue, ApplicationDto, ApplicationFilter, ApplyAnswerDto, ApplySiteId, ApplyStatusDto, JobApplicationDto,
 } from '@kv/shared/client';
 import { ApiError, NETWORK_ERROR } from './apiError';
-import { applyErrorMessage } from './lib/apply';
+import { applyErrorMessage, type ApplicationListDto } from './lib/apply';
 
 /** Corpo de POST e PUT /apply/answers (o mesmo de `ApplyAnswerInputSchema`). */
 export interface ApplyAnswerInput {
@@ -43,11 +43,12 @@ const del = (): RequestInit => ({ method: 'DELETE' });
 
 export const applyApi = {
   status: () => request<ApplyStatusDto>('/apply/status'),
-  applications: () => request<ApplicationListItemDto[]>('/applications'),
-  /** null quando a vaga não tem candidatura (200 `null`) ou não existe mais (404). */
-  jobApplication: async (jobId: number): Promise<ApplicationDto | null> => {
+  /** As 200 mais novas do filtro e as contagens de todos os filtros (contadas no banco, sobre todas as linhas). */
+  applications: (filter: ApplicationFilter) => request<ApplicationListDto>(`/applications?filter=${encodeURIComponent(filter)}`),
+  /** A candidatura da vaga e se "Aplicar com IA" pode aparecer; null quando a vaga não existe mais (404). */
+  jobApplication: async (jobId: number): Promise<JobApplicationDto | null> => {
     try {
-      return (await request<ApplicationDto | null>(`/jobs/${jobId}/application`)) ?? null;
+      return (await request<JobApplicationDto | null>(`/jobs/${jobId}/application`)) ?? null;
     } catch (e) {
       if (e instanceof ApiError && e.status === 404) return null;
       throw e;
@@ -57,7 +58,8 @@ export const applyApi = {
   retry: (id: number) => request<void>(`/applications/${id}/retry`, post()),
   cancel: (id: number) => request<void>(`/applications/${id}/cancel`, post()),
   send: (id: number) => request<void>(`/applications/${id}/send`, post()),
-  sendAll: () => request<{ queued: number }>('/applications/send-rehearsals', post()),
+  /** Envia exatamente estes ensaios (os que ainda estão prontos); a resposta diz quantos foram e quantos ficaram de fora. */
+  sendAll: (ids: number[]) => request<{ queued: number; skipped: number }>('/applications/send-rehearsals', json('POST', { ids })),
   /** A candidatura devolvida é a verdade: pode continuar em `needs_human` se faltou uma pendência obrigatória. */
   answer: (id: number, body: PendingAnswersBody) => request<ApplicationDto>(`/applications/${id}/answers`, json('PUT', body)),
 

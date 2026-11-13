@@ -26,11 +26,35 @@ describe('applyApi', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/jobs/3/application', expect.objectContaining({ method: 'POST' }));
   });
 
-  it('gives null for a job without an application (200 null) and for a job that is gone (404)', async () => {
-    reply(200, 'null');
-    await expect(applyApi.jobApplication(3)).resolves.toBeNull();
+  it('reads the job answer (application, site, canApply) and gives null for a job that is gone (404)', async () => {
+    const dto = { application: null, site: 'greenhouse', canApply: true, cannotApplyReason: null };
+    const fetchMock = reply(200, JSON.stringify(dto));
+    await expect(applyApi.jobApplication(3)).resolves.toEqual(dto);
+    expect(fetchMock).toHaveBeenCalledWith('/api/jobs/3/application', expect.anything());
     reply(404, JSON.stringify({ error: 'not_found' }));
     await expect(applyApi.jobApplication(3)).resolves.toBeNull();
+  });
+
+  it('asks the list for one filter and returns its rows and the counts of every filter', async () => {
+    const body = { items: [], counts: { active: 0, needs_human: 2, rehearsals: 0, submitted: 0, skipped: 0 } };
+    const fetchMock = reply(200, JSON.stringify(body));
+    await expect(applyApi.applications('needs_human')).resolves.toEqual(body);
+    expect(fetchMock).toHaveBeenCalledWith('/api/applications?filter=needs_human', expect.anything());
+  });
+
+  it('posts exactly the listed rehearsal ids to send-all and returns what was queued and skipped', async () => {
+    const fetchMock = reply(202, JSON.stringify({ queued: 2, skipped: 1 }));
+    await expect(applyApi.sendAll([4, 5, 6])).resolves.toEqual({ queued: 2, skipped: 1 });
+    expect(fetchMock).toHaveBeenCalledWith('/api/applications/send-rehearsals', expect.objectContaining({
+      method: 'POST', body: JSON.stringify({ ids: [4, 5, 6] }), headers: { 'content-type': 'application/json' },
+    }));
+  });
+
+  it('turns already_applied into its pt-BR message, and passes the worker reason of apply_unavailable through', async () => {
+    reply(409, JSON.stringify({ error: 'already_applied', message: 'job already applied' }));
+    await expect(applyApi.retry(1)).rejects.toThrow('Você já se candidatou a esta vaga');
+    reply(409, JSON.stringify({ error: 'apply_unavailable', message: 'Navegador não encontrado.' }));
+    await expect(applyApi.apply(1)).rejects.toThrow('Navegador não encontrado.');
   });
 
   it('rejects with the pt-BR message of a known 409 code', async () => {

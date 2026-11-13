@@ -1,8 +1,9 @@
 import {
-  ACTIVE_APPLICATION_STATUSES,
-  type AnswerScope, type AnswerSource, type AnswerValue, type ApplicationListItemDto, type ApplicationReason, type ApplicationStatus,
-  type ApplicationDto, type ApplyAiAnswers, type ApplyAnswerDto, type ApplyStatusDto, type PendingQuestion, type Question,
-  type ShotKind, bankBoolean, bankList, bankText,
+  NUMBER_FORMAT_PROBLEM,
+  type AnswerScope, type AnswerSource, type AnswerValue, type ApplicationFilter, type ApplicationListItemDto, type ApplicationReason,
+  type ApplicationStatus, type ApplicationDto, type ApplyAiAnswers, type ApplyAnswerDto, type ApplyStatusDto, type Column,
+  type JobApplicationDto, type PendingQuestion, type Question, type ShotKind, bankBoolean, bankList, bankText, isAppliedOrLater,
+  parseNumberAnswer,
 } from '@kv/shared/client';
 import { errorMessage } from '../apiError';
 import type { ApplyAnswerInput } from '../applyApi';
@@ -40,8 +41,21 @@ const REASON_TEXT: Record<ApplicationReason, string> = {
   blocked: 'A empresa ou a vaga está na sua lista de bloqueio.',
   closed: 'A vaga não aceita mais candidaturas.',
   external: 'A candidatura é feita em um site externo, que a automação não cobre.',
-  already_applied: 'Você já se candidatou a esta vaga.',
+  already_applied: 'Você já se candidatou a esta vaga por conta própria; a IA não envia de novo.',
 };
+
+/** O rótulo de uma candidatura que terminou porque o dono marcou a vaga como aplicada. */
+export const APPLIED_BY_OWNER_LABEL = 'Aplicada por você';
+
+/** O nome do estado na tela; uma pulada porque o dono já aplicou lê "Aplicada por você". */
+export function statusLabel(status: ApplicationStatus, reason: ApplicationReason | null): string {
+  return status === 'skipped' && reason === 'already_applied' ? APPLIED_BY_OWNER_LABEL : STATUS_LABELS[status];
+}
+
+/** A vaga já foi aplicada: o card está em Aplicada ou depois, ou a vaga tem a marca de quem aplicou. */
+export function jobAlreadyApplied(job: { column: Column; appliedBy: 'ia' | 'humano' | null }): boolean {
+  return isAppliedOrLater(job.column) || job.appliedBy !== null;
+}
 
 /** Frase em pt-BR para o motivo, com o detalhe quando há; '' sem motivo. */
 export function reasonText(reason: ApplicationReason | null, detail: string | null): string {
@@ -51,45 +65,62 @@ export function reasonText(reason: ApplicationReason | null, detail: string | nu
   return extra ? `${text.replace(/[.!?]$/, '')}: ${extra}` : text;
 }
 
-export type ApplicationFilter = 'active' | 'needs_human' | 'rehearsals' | 'submitted' | 'skipped';
-
-const FILTER_MATCH: Record<ApplicationFilter, (status: ApplicationStatus) => boolean> = {
-  active: (s) => (ACTIVE_APPLICATION_STATUSES as readonly string[]).includes(s),
-  needs_human: (s) => s === 'needs_human',
-  rehearsals: (s) => s === 'dry_run_ready',
-  submitted: (s) => s === 'submitted',
-  /** "Não enviadas": puladas, falhas e canceladas. */
-  skipped: (s) => s === 'skipped' || s === 'failed' || s === 'cancelled',
-};
-
+/** Os rótulos dos filtros da aba (os filtros e os estados de cada um vêm de `@kv/shared`). */
 export const FILTER_LABELS: Record<ApplicationFilter, string> = {
   active: 'Em andamento', needs_human: 'Precisam de você', rehearsals: 'Ensaios prontos', submitted: 'Enviadas', skipped: 'Não enviadas',
 };
 
-export function filterApplications(items: ApplicationListItemDto[], filter: ApplicationFilter): ApplicationListItemDto[] {
-  return items.filter((item) => FILTER_MATCH[filter](item.status));
+/** A resposta de GET /applications?filter=: as linhas do filtro (as 200 mais novas) e as contagens de todos os filtros. */
+export interface ApplicationListDto { items: ApplicationListItemDto[]; counts: Record<ApplicationFilter, number> }
+
+/** A frase sob a lista quando o filtro tem mais candidaturas do que a página mostra; null quando mostra todas. */
+export function listCutText(shown: number, total: number): string | null {
+  return shown < total ? `Mostrando as ${shown} mais recentes de ${total}.` : null;
 }
 
-export function filterCounts(items: ApplicationListItemDto[]): Record<ApplicationFilter, number> {
-  return {
-    active: filterApplications(items, 'active').length,
-    needs_human: filterApplications(items, 'needs_human').length,
-    rehearsals: filterApplications(items, 'rehearsals').length,
-    submitted: filterApplications(items, 'submitted').length,
-    skipped: filterApplications(items, 'skipped').length,
-  };
+/** Uma linha em qualquer lista de filtro já carregada (o aviso da espera ao vivo e a notificação procuram o nome da vaga). */
+export function findListItem(
+  lists: readonly ({ items: ApplicationListItemDto[] } | undefined)[], id: number,
+): ApplicationListItemDto | undefined {
+  for (const list of lists) {
+    const hit = list?.items.find((a) => a.id === id);
+    if (hit) return hit;
+  }
+  return undefined;
 }
 
-const RUNNING: readonly ApplicationStatus[] = ['preparing', 'filling', 'waiting_human', 'submitting'];
+/**
+ * "Enviar todos os ensaios": manda os ids dos ensaios prontos que a aba carregou (as 200 mais novas), nunca "todos" às
+ * cegas. `hidden` é quantos ensaios prontos existem além desses (o diálogo diz que ficam para depois).
+ */
+export function sendAllPlan(rehearsals: ApplicationListItemDto[] | undefined, total: number): { ids: number[]; hidden: number } {
+  const ids = (rehearsals ?? []).filter((a) => a.status === 'dry_run_ready').map((a) => a.id);
+  return { ids, hidden: Math.max(0, total - ids.length) };
+}
 
-/** O selo do card. A marca da vaga manda; depois, o estado da candidatura. */
+/** O que dizer depois do envio de todos: só quando algum ensaio não foi enviado (mudou de estado ou a vaga já foi aplicada). */
+export function sendAllResultText(result: { queued: number; skipped: number }): string | null {
+  if (result.skipped === 0) return null;
+  const queued = result.queued === 0
+    ? 'Nenhuma candidatura foi enviada.'
+    : result.queued === 1 ? '1 candidatura foi para a fila de envio.' : `${result.queued} candidaturas foram para a fila de envio.`;
+  const skipped = result.skipped === 1
+    ? '1 não foi enviada porque deixou de ser um ensaio pronto ou a vaga já foi aplicada.'
+    : `${result.skipped} não foram enviadas porque deixaram de ser ensaios prontos ou a vaga já foi aplicada.`;
+  return `${queued} ${skipped}`;
+}
+
+/** Os estados em que o worker está mexendo na candidatura agora. */
+export const RUNNING_STATUSES: readonly ApplicationStatus[] = ['preparing', 'filling', 'waiting_human', 'submitting'];
+
+/** O selo do card. A marca da vaga manda; depois, o estado da candidatura da vaga (vem na lista de vagas). */
 export function cardBadge(
-  job: { appliedBy: 'ia' | 'humano' | null; needsHuman: boolean },
-  status: ApplicationStatus | undefined,
+  job: { appliedBy: 'ia' | 'humano' | null; needsHuman: boolean; applicationStatus: ApplicationStatus | null },
 ): 'needs_human' | 'applying' | 'rehearsal' | 'applied_by_ai' | null {
+  const status = job.applicationStatus;
   if (job.needsHuman) return 'needs_human';
   if (job.appliedBy === 'ia') return 'applied_by_ai';
-  if (status && RUNNING.includes(status)) return 'applying';
+  if (status && RUNNING_STATUSES.includes(status)) return 'applying';
   if (status === 'dry_run_ready') return 'rehearsal';
   return null;
 }
@@ -131,22 +162,38 @@ export interface PendingDraft { questionId: string; accept: boolean; value: Answ
 const isBlank = (value: AnswerValue): boolean =>
   value === null || (typeof value === 'string' && value.trim() === '') || (Array.isArray(value) && value.length === 0);
 
-/** O corpo de PUT /applications/:id/answers. Pendência opcional deixada em branco e sem aceite fica de fora (a API recusa item vazio). */
-export function toPendingAnswersBody(drafts: PendingDraft[]): {
+/** Perguntas de arquivo: o app não envia arquivos por aqui, então elas nunca são validadas nem enviadas. */
+const fileQuestionIds = (pending: PendingQuestion[]): Set<string> =>
+  new Set(pending.filter((p) => p.question.kind === 'file').map((p) => p.question.id));
+
+/** O texto no lugar do campo de uma pergunta de arquivo. */
+export function fileQuestionText(required: boolean): string {
+  return required
+    ? 'Esta pergunta pede um arquivo: responda direto no site da vaga.'
+    : 'Pede um arquivo: é opcional e fica em branco.';
+}
+
+/**
+ * O corpo de PUT /applications/:id/answers. Pendência opcional deixada em branco e sem aceite fica de fora (a API recusa
+ * item vazio), e pergunta de arquivo também.
+ */
+export function toPendingAnswersBody(pending: PendingQuestion[], drafts: PendingDraft[]): {
   answers: { questionId: string; value: AnswerValue; scope: AnswerScope; confirmMatch: boolean }[];
 } {
+  const files = fileQuestionIds(pending);
   return {
     answers: drafts
-      .filter((d) => d.accept || !isBlank(d.value))
+      .filter((d) => !files.has(d.questionId) && (d.accept || !isBlank(d.value)))
       .map((d) => ({ questionId: d.questionId, value: d.value, scope: d.scope, confirmMatch: d.accept })),
   };
 }
 
-/** Erro em pt-BR por pendência, pela id da pergunta; {} quando pode enviar. */
+/** Erro em pt-BR por pendência, pela id da pergunta; {} quando pode enviar. Pergunta de arquivo não é validada. */
 export function validatePendingDrafts(pending: PendingQuestion[], drafts: PendingDraft[]): Record<string, string> {
   const errors: Record<string, string> = {};
   for (const p of pending) {
     const id = p.question.id;
+    if (p.question.kind === 'file') continue;
     const draft = drafts.find((d) => d.questionId === id);
     if (draft?.accept) {
       if (p.kind === 'unanswered') errors[id] = 'Não há proposta para aceitar: escreva a resposta.';
@@ -161,8 +208,7 @@ export function validatePendingDrafts(pending: PendingQuestion[], drafts: Pendin
     if ((kind === 'select' || kind === 'multiselect') && options.length > 0) {
       if (values.some((v) => typeof v !== 'string' || !options.includes(v))) errors[id] = 'Escolha uma das opções da lista.';
     } else if (kind === 'number') {
-      const n = typeof draft.value === 'string' ? Number(draft.value.trim().replace(',', '.')) : NaN;
-      if (!Number.isFinite(n)) errors[id] = 'Informe um número válido.';
+      if (typeof draft.value !== 'string' || parseNumberAnswer(draft.value) === null) errors[id] = NUMBER_FORMAT_PROBLEM;
     }
   }
   return errors;
@@ -197,28 +243,53 @@ export function accountFeedback(
 /** Mensagens em pt-BR dos códigos `{ error }` que as rotas de candidatura devolvem. */
 const ERROR_CODE_MESSAGES: Record<string, string> = {
   in_progress: 'A candidatura está em andamento agora. Espere terminar ou cancele antes de tentar de novo.',
-  confirm_submission: 'Não dá para saber se o envio já foi feito. Confira no site e só então tente de novo.',
+  confirm_submission: 'Não dá para saber se o envio já foi feito. Confira no site; se já enviou, mova o card para Aplicada, senão cancele.',
   not_rehearsal: 'Só um ensaio pronto pode ser enviado de verdade.',
   sent: 'Esta candidatura já foi enviada.',
   not_pending: 'Esta candidatura não está esperando respostas.',
   already_exists: 'Esta vaga já tem uma candidatura.',
+  already_applied: 'Você já se candidatou a esta vaga (o card está em Aplicada ou depois): a IA não envia de novo.',
   unsupported_site: 'Este site ainda não é atendido pela candidatura automática.',
   blocked: 'A empresa ou a vaga está na sua lista de bloqueio.',
-  apply_unavailable: 'A candidatura automática só funciona com o app em endereço local.',
+  apply_unavailable: 'A candidatura automática não está disponível agora.',
   apply_disabled: 'A candidatura automática está desligada nas configurações.',
   no_login: 'Este site não usa login.',
   not_cancellable: 'Esta candidatura já terminou.',
 };
 
+/**
+ * Códigos cuja mensagem do servidor diz mais que a nossa: o item da lista de bloqueio que bateu, o que fazer com um envio
+ * não confirmado, o motivo de o worker não poder rodar. Para eles a mensagem da API passa; sem mensagem, vale a nossa.
+ */
+const SERVER_DETAIL_CODES = new Set(['confirm_submission', 'blocked', 'apply_unavailable']);
+
 /** Texto para o dono quando uma rota de candidatura recusa: o código conhecido vira frase; o resto segue o tratamento geral. */
 export function applyErrorMessage(status: number, bodyText: string): string {
   try {
-    const code = (JSON.parse(bodyText) as { error?: unknown } | null)?.error;
-    if (typeof code === 'string' && status >= 400 && status < 500 && ERROR_CODE_MESSAGES[code]) return ERROR_CODE_MESSAGES[code];
+    const body = JSON.parse(bodyText) as { error?: unknown; message?: unknown } | null;
+    const code = body?.error;
+    if (typeof code === 'string' && status >= 400 && status < 500 && ERROR_CODE_MESSAGES[code]) {
+      const message = typeof body?.message === 'string' ? body.message.trim() : '';
+      if (SERVER_DETAIL_CODES.has(code) && message !== '') return message.charAt(0).toUpperCase() + message.slice(1);
+      return ERROR_CODE_MESSAGES[code];
+    }
   } catch {
     /* corpo que não é JSON */
   }
   return errorMessage(status, bodyText);
+}
+
+/**
+ * O aviso de "não disponível" (Configurações e aba Candidaturas). Quando o motivo é o do worker (navegador ausente, por
+ * exemplo), as configurações continuam editáveis; fora de endereço local, ficam travadas. Null quando está disponível.
+ */
+export function unavailableNotice(status: ApplyStatusDto | undefined): { title: string; reason: string; lockSettings: boolean } | null {
+  if (!status || status.available) return null;
+  const reason = status.unavailableReason ?? 'A candidatura automática não está disponível.';
+  const fromWorker = status.worker !== null && !status.worker.available && status.worker.reason === status.unavailableReason;
+  return fromWorker
+    ? { title: 'O worker não consegue se candidatar agora', reason, lockSettings: false }
+    : { title: 'Indisponível neste endereço', reason, lockSettings: true };
 }
 
 /* ---- Aba Candidaturas e seção "Candidatura" do painel da vaga ---- */
@@ -243,23 +314,63 @@ export interface ApplicationActions {
   cancelLater: boolean;
   /** "Já apliquei por conta própria": o envio começou e o site não confirmou. */
   alreadyApplied: boolean;
+  /** O cancelamento já foi pedido e vale no próximo ponto seguro: o botão fica desligado e a tela diz isso. */
+  cancelPending: boolean;
 }
 
-export function applicationActions(app: { status: ApplicationStatus; reason: ApplicationReason | null }): ApplicationActions {
+/** Os botões do painel. Vaga já aplicada (coluna Aplicada ou depois, ou marca de quem aplicou): nada de tentar ou enviar de novo. */
+export function applicationActions(
+  app: { status: ApplicationStatus; reason: ApplicationReason | null; cancelRequested: boolean },
+  job: { column: Column; appliedBy: 'ia' | 'humano' | null },
+): ApplicationActions {
+  const applied = jobAlreadyApplied(job);
   const unconfirmed = app.status === 'needs_human' && app.reason === 'confirm_submission';
-  const running = RUNNING.includes(app.status);
+  const running = RUNNING_STATUSES.includes(app.status);
+  const cancel = app.status === 'queued' || running || app.status === 'needs_human' || app.status === 'dry_run_ready';
   return {
-    send: app.status === 'dry_run_ready',
-    retry: (app.status === 'needs_human' && !unconfirmed) || app.status === 'failed' || app.status === 'skipped' || app.status === 'cancelled',
-    cancel: app.status === 'queued' || running || app.status === 'needs_human' || app.status === 'dry_run_ready',
+    send: !applied && app.status === 'dry_run_ready',
+    retry: !applied
+      && ((app.status === 'needs_human' && !unconfirmed) || app.status === 'failed' || app.status === 'skipped' || app.status === 'cancelled'),
+    cancel,
     cancelLater: running,
     alreadyApplied: unconfirmed,
+    cancelPending: cancel && app.cancelRequested,
   };
 }
 
-/** "Aplicar com IA": a vaga não tem candidatura (`null`; `undefined` = ainda carregando) e a função está disponível e ligada. */
-export function canApplyNow(status: ApplyStatusDto | undefined, application: unknown | null | undefined): boolean {
-  return application === null && status?.available === true && status.enabled;
+/** O que a seção "Candidatura" do painel mostra: nada, o convite "Aplicar com IA" ou a candidatura. */
+export function applySectionView(data: JobApplicationDto | null | undefined): 'hidden' | 'offer' | 'application' {
+  if (!data) return 'hidden'; // carregando, ou a vaga não existe mais
+  if (data.application) return 'application';
+  // Site não atendido, vaga já aplicada, bloqueada, função desligada ou indisponível: o painel fica como era.
+  return data.canApply ? 'offer' : 'hidden';
+}
+
+/** A resposta da vaga com a candidatura devolvida por uma ação (a vaga passa a ter candidatura). */
+export function withApplication(data: JobApplicationDto | null | undefined, application: ApplicationDto): JobApplicationDto {
+  return { application, site: data?.site ?? application.site, canApply: false, cannotApplyReason: 'already_exists' };
+}
+
+/**
+ * "Já apliquei por conta própria": um card antes de Aplicada vai para Aplicada; um card que já está em Aplicada ou depois
+ * manda a própria coluna de novo (`sameColumn`), para a API encerrar a candidatura mesmo sem o card mudar de lugar.
+ */
+export function markAppliedTarget(column: Column): { column: Column; sameColumn: boolean } {
+  return isAppliedOrLater(column) ? { column, sameColumn: true } : { column: 'aplicada', sameColumn: false };
+}
+
+/** O passo pedido agora, no painel da vaga que tem a espera ao vivo; null nas demais. */
+export function liveWaitFor(status: ApplyStatusDto | undefined, jobId: number): string | null {
+  const waiting = status?.waiting;
+  return waiting && waiting.jobId === jobId ? `${waitingText(waiting.gate)}.` : null;
+}
+
+/** O que a linha aberta da aba diz quando a candidatura não espera mais respostas. */
+export function rowAnswersText(application: ApplicationDto | null): string {
+  if (application && (application.status === 'queued' || RUNNING_STATUSES.includes(application.status))) {
+    return 'Respostas recebidas. A candidatura voltou para a fila e continua sozinha.';
+  }
+  return 'Esta candidatura não espera mais respostas. Veja o estado dela no painel da vaga.';
 }
 
 const WAITING_TEXT: Record<string, string> = {
@@ -359,21 +470,15 @@ export function booleanChoice(answer: string): BooleanChoice {
 /** O texto que se salva para a escolha: `Sim`, `Não` ou vazio. */
 export const booleanAnswer = (choice: BooleanChoice): string => (choice === 'none' ? '' : bankText(choice === 'yes'));
 
-/** Recusa de um número com três casas depois do separador (a API faz o mesmo): vale para milhar e para decimais longos. */
-export const NUMBER_FORMAT_PROBLEM = 'Use só dígitos, com no máximo duas casas decimais e sem separador de milhar (ex.: 20000 ou 1234,56).';
-
-/** Problema do número digitado, em pt-BR; null quando está vazio ou serve. Mesma regra da API: sem separador de milhar. */
+/** Problema do número digitado, em pt-BR; null quando está vazio ou serve. A regra é a única, de `@kv/shared` (a da API). */
 export function numberProblem(text: string): string | null {
-  const value = text.trim();
-  if (value === '') return null;
-  if (/\d[.,]\d{3}(\D|$)/.test(value)) return NUMBER_FORMAT_PROBLEM;
-  if (!/^\d+([.,]\d+)?$/.test(value)) return 'Use só números, com vírgula ou ponto para os decimais (por exemplo 8000 ou 8000,50).';
-  return null;
+  if (text.trim() === '') return null;
+  return parseNumberAnswer(text) === null ? NUMBER_FORMAT_PROBLEM : null;
 }
 
 /** O que é gravado a partir do que foi digitado: texto aparado, uma opção por linha, número com ponto decimal. */
 export function answerToStore(kind: ApplyAnswerDto['kind'], draft: string): string {
-  if (kind === 'number') return draft.trim().replace(',', '.');
+  if (kind === 'number') return parseNumberAnswer(draft) ?? draft.trim();
   if (kind === 'choice') return bankText(bankList(draft));
   return draft.trim();
 }
@@ -432,6 +537,11 @@ export function validateNewAnswer(draft: NewAnswerDraft): NewAnswerErrors {
   else if (draft.answer.trim() === '') errors.answer = 'Escreva a resposta.';
   if (draft.scope === 'company' && draft.company.trim() === '') errors.company = 'Escreva o nome da empresa.';
   return errors;
+}
+
+/** O campo que recebe o foco depois de um envio barrado: o primeiro com erro, na ordem do formulário. */
+export function firstNewAnswerError(errors: NewAnswerErrors): 'question' | 'company' | 'answer' | null {
+  return (['question', 'company', 'answer'] as const).find((k) => errors[k]) ?? null;
 }
 
 export function newAnswerInput(draft: NewAnswerDraft): ApplyAnswerInput {

@@ -1,11 +1,11 @@
-import { CircleCheck, CircleDashed, CircleOff, Clock, LoaderCircle, LogIn, LogOut, Plus, Play, RefreshCw, RotateCw, Send, ShieldAlert } from 'lucide-react';
+import { CircleAlert, CircleCheck, CircleDashed, CircleOff, Clock, LoaderCircle, LogIn, LogOut, Plus, Play, RefreshCw, RotateCw, Send, ShieldAlert } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useId, useState, type ReactNode } from 'react';
 import {
   APPLY_AI_ANSWER_MODES, APPLY_DEFAULTS, APPLY_SITE_IDS, APPLY_SITE_LABELS, APPLY_SETTINGS_LIMITS, APPLY_TIMING, type ApplyDailyCaps, type ApplyMode, type ApplyResumeMode,
   type ApplySiteStateDto, type ApplyStatusDto, type SettingSource, type SettingsDto, type SitePauseReason, type SiteSession,
 } from '@kv/shared/client';
-import { AI_ANSWER_LABELS, accountFeedback, type AccountAction } from '../lib/apply';
+import { AI_ANSWER_LABELS, accountFeedback, unavailableNotice, type AccountAction } from '../lib/apply';
 import { applySiteCopy } from '../lib/applySites';
 import { spring } from '../lib/motion';
 import { cn } from '../lib/utils';
@@ -264,6 +264,12 @@ function Today({ status, error, onRetry }: { status: ApplyStatusDto | undefined;
                 : <CircleOff aria-hidden className="mt-px size-4 shrink-0 text-faint" />}
               {status.enabled ? 'Salva como ligada.' : 'Salva como desligada.'}
             </li>
+            {!status.available && (
+              <li className="flex items-start gap-2.5 text-bad" data-testid="apply-today-unavailable">
+                <CircleAlert aria-hidden className="mt-px size-4 shrink-0" />
+                <span className="min-w-0 break-words">{status.unavailableReason ?? 'A candidatura automática não está disponível.'}</span>
+              </li>
+            )}
             <li className="flex items-start gap-2.5">
               <Clock aria-hidden className="mt-px size-4 shrink-0 text-faint" />
               {status.withinWindow ? 'Dentro do horário de candidaturas.' : 'Fora do horário: a fila espera o próximo início.'}
@@ -317,7 +323,9 @@ export function SettingsApplySection({ dto, form, errors, showErrors, dirty, ids
   const status = useApplyStatus();
   const currentCompany = useCurrentCompany();
   const apply = dto.apply;
-  const available = status.data?.available ?? true;
+  const unavailable = unavailableNotice(status.data);
+  // Fora de endereço local as configurações travam; com o worker sem poder rodar (navegador ausente) elas seguem editáveis.
+  const locked = unavailable?.lockSettings === true;
   const shown: SettingsFormErrors = showErrors || dirty ? errors : {};
   const badCap = badDailyCap(form);
   /** O campo de limite inválido recebe o id do erro (o foco vai para ele); os demais, um id próprio. */
@@ -344,14 +352,18 @@ export function SettingsApplySection({ dto, form, errors, showErrors, dirty, ids
         </SectionHeader>
 
         <div className="space-y-5 px-5 py-5 sm:px-6">
-          {!available && (
-            <Notice tone="bad" role="alert" data-testid="apply-unavailable" icon={<CircleOff />} title="Indisponível neste endereço">
-              <p>{status.data?.unavailableReason ?? 'A candidatura automática não está disponível.'}</p>
-              <p className="text-muted">As configurações abaixo ficam bloqueadas até o app voltar a rodar em endereço local.</p>
+          {unavailable && (
+            <Notice tone="bad" role="alert" data-testid="apply-unavailable" icon={<CircleOff />} title={unavailable.title}>
+              <p className="break-words">{unavailable.reason}</p>
+              <p className="text-muted">
+                {locked
+                  ? 'As configurações abaixo ficam bloqueadas até o app voltar a rodar em endereço local.'
+                  : 'Nenhuma candidatura começa enquanto isso. As configurações abaixo continuam editáveis, e o aviso some quando o worker voltar a poder rodar.'}
+              </p>
             </Notice>
           )}
 
-          <fieldset disabled={!available} className={cn('min-w-0 space-y-5', !available && 'opacity-60')}>
+          <fieldset disabled={locked} className={cn('min-w-0 space-y-5', locked && 'opacity-60')}>
             <Block title="Ligar" first>
               <ToggleRow
                 testId="apply-enabled" label="Candidatura automática"

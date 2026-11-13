@@ -1,14 +1,20 @@
-import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import type { ApplySiteId } from '@kv/shared/client';
+import { keepPreviousData, useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
-import type { ApplicationDto, ApplicationListItemDto, ApplyStatusDto } from '@kv/shared/client';
+import type { ApplicationDto, ApplicationFilter, ApplySiteId, ApplyStatusDto, JobApplicationDto } from '@kv/shared/client';
 import { applyApi, type ApplyAnswerInput, type PendingAnswersBody } from './applyApi';
-import { afterSend, applyPollMs, queueSignature, waitNotice, waitingText } from './lib/apply';
+import {
+  afterSend, applyPollMs, findListItem, queueSignature, waitNotice, waitingText, withApplication, type ApplicationListDto,
+} from './lib/apply';
+import { JOBS_KEY } from './useMoveJob';
 
 /** Chaves do React Query das telas de candidatura automática. */
 export const APPLY_KEYS = {
   status: ['apply', 'status'] as const,
+  /** Prefixo de todas as listas da aba (uma por filtro). */
   applications: ['applications'] as const,
+  list: (filter: ApplicationFilter) => ['applications', filter] as const,
+  /** Prefixo da resposta de todas as vagas. */
+  jobs: ['application'] as const,
   job: (jobId: number) => ['application', jobId] as const,
   answers: ['apply', 'answers'] as const,
 };
@@ -19,19 +25,23 @@ const INLINE_ERROR = { inlineError: true } as const;
 /** Intervalo de releitura pelo estado em cache de `useApplyStatus`: rápido com candidatura ativa ou espera ao vivo. */
 const pollFromStatus = (qc: QueryClient) => () => applyPollMs(qc.getQueryData(APPLY_KEYS.status));
 
-/**
- * Estado geral: sites, sessões, limites do dia, fila e espera ao vivo. Quando as contagens da fila ou a espera mudam,
- * relê na hora a lista e as candidaturas das vagas: elas andam no ritmo do estado, e quando a fila para o ritmo cai para
- * 15 s (o contador "Precisam de você" já mostraria a pergunta e a lista ainda não).
- */
+/** Estado geral: sites, sessões, limites do dia, fila, espera ao vivo e o que o worker publicou. */
 export function useApplyStatus() {
-  const qc = useQueryClient();
-  const query = useQuery({
+  return useQuery({
     queryKey: APPLY_KEYS.status,
     queryFn: applyApi.status,
     refetchInterval: (q) => applyPollMs(q.state.data),
   });
-  const signature = queueSignature(query.data);
+}
+
+/**
+ * Um único observador (no `App`): quando as contagens da fila ou a espera mudam, relê na hora as listas, as candidaturas
+ * das vagas e o quadro (os selos vêm da lista de vagas). Elas andam no ritmo do estado, e quando a fila para o ritmo cai
+ * para 15 s (o contador "Precisam de você" já mostraria a pergunta e a lista ainda não).
+ */
+export function useApplyQueueRefresh() {
+  const qc = useQueryClient();
+  const signature = queueSignature(useApplyStatus().data);
   const seen = useRef<string | null>(null);
   useEffect(() => {
     if (signature === null) return;
@@ -39,17 +49,27 @@ export function useApplyStatus() {
     seen.current = signature;
     if (before === null || before === signature) return;
     void qc.invalidateQueries({ queryKey: APPLY_KEYS.applications });
-    void qc.invalidateQueries({ queryKey: ['application'] });
+    void qc.invalidateQueries({ queryKey: APPLY_KEYS.jobs });
+    void qc.invalidateQueries({ queryKey: JOBS_KEY, exact: true });
   }, [signature, qc]);
-  return query;
 }
 
-export function useApplications() {
+/**
+ * As candidaturas de um filtro (as 200 mais novas) e as contagens de todos. Ao trocar de filtro, a resposta anterior
+ * fica como marcador (`isPlaceholderData`): as contagens não piscam, e a tela mostra o esqueleto no lugar das linhas.
+ */
+export function useApplications(filter: ApplicationFilter, enabled = true) {
   const qc = useQueryClient();
-  return useQuery({ queryKey: APPLY_KEYS.applications, queryFn: applyApi.applications, refetchInterval: pollFromStatus(qc) });
+  return useQuery({
+    queryKey: APPLY_KEYS.list(filter),
+    queryFn: () => applyApi.applications(filter),
+    refetchInterval: pollFromStatus(qc),
+    placeholderData: keepPreviousData,
+    enabled,
+  });
 }
 
-/** A candidatura de uma vaga; `null` quando não existe. */
+/** A candidatura de uma vaga e se "Aplicar com IA" pode aparecer; `null` quando a vaga não existe mais. */
 export function useJobApplication(jobId: number) {
   const qc = useQueryClient();
   return useQuery({
@@ -70,8 +90,8 @@ function useApplyRefresh() {
   return () => {
     void qc.invalidateQueries({ queryKey: APPLY_KEYS.status });
     void qc.invalidateQueries({ queryKey: APPLY_KEYS.applications });
-    void qc.invalidateQueries({ queryKey: ['application'] });
-    void qc.invalidateQueries({ queryKey: ['jobs'] });
+    void qc.invalidateQueries({ queryKey: APPLY_KEYS.jobs });
+    void qc.invalidateQueries({ queryKey: JOBS_KEY });
     void qc.invalidateQueries({ queryKey: ['stats'] });
   };
 }
@@ -93,11 +113,14 @@ export function useApplyActions() {
       mutationFn: (id: number) => applyApi.send(id),
       // O estado em cache ainda é "ensaio pronto" até a releitura: sem isto o botão voltaria a ligar nesse intervalo.
       onSuccess: (_, id) => {
-        qc.setQueriesData<ApplicationDto | null>({ queryKey: ['application'] }, (old) => (old && old.id === id ? afterSend(old) : old));
+        qc.setQueriesData<JobApplicationDto | null>(
+          { queryKey: APPLY_KEYS.jobs },
+          (old) => (old?.application && old.application.id === id ? withApplication(old, afterSend(old.application)) : old),
+        );
         refresh();
       },
     }),
-    sendAll: useMutation({ ...applyOpts, mutationFn: () => applyApi.sendAll() }),
+    sendAll: useMutation({ ...applyOpts, mutationFn: (ids: number[]) => applyApi.sendAll(ids) }),
     answer: useMutation({
       ...applyOpts,
       onSuccess: refreshAnswers,
@@ -123,6 +146,11 @@ export function useApplyActions() {
   };
 }
 
+/** Grava no cache da vaga a candidatura que uma ação devolveu (a resposta da API é a verdade). */
+export function setJobApplication(qc: QueryClient, application: ApplicationDto) {
+  qc.setQueryData<JobApplicationDto | null>(APPLY_KEYS.job(application.jobId), (old) => withApplication(old, application));
+}
+
 /**
  * Uma notificação do navegador por espera ao vivo nova (captcha, código, login), se o dono já deu a permissão. A
  * permissão só é pedida por um botão na aba Candidaturas, nunca ao carregar a página.
@@ -138,7 +166,8 @@ export function useLiveWaitNotification(waiting: ApplyStatusDto['waiting'] | und
     seen.current = next.seen;
     if (!next.notify || !waiting) return;
     if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
-    const item = qc.getQueryData<ApplicationListItemDto[]>(APPLY_KEYS.applications)?.find((a) => a.id === waiting.applicationId);
+    const lists = qc.getQueriesData<ApplicationListDto>({ queryKey: APPLY_KEYS.applications }).map(([, data]) => data);
+    const item = findListItem(lists, waiting.applicationId);
     try {
       new Notification('Uma candidatura precisa de você', {
         body: `${waitingText(waiting.gate)}.${item ? ` Vaga: ${item.jobTitle} (${item.company}).` : ''}`,

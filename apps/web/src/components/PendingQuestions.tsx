@@ -5,11 +5,11 @@ import { useId, useState, type ReactNode } from 'react';
 import type { AnswerScope, AnswerValue, ApplicationDto, PendingQuestion, Question } from '@kv/shared/client';
 import {
   ANSWER_SOURCE_LABELS, PENDING_KIND_LABELS, PROPOSAL_HINTS, SCOPE_LABELS, answerText, editPendingDraft, emptyAnswerValue,
-  initialPendingDraft, pendingErrorFor, toPendingAnswersBody, validatePendingDrafts, type PendingDraft,
+  fileQuestionText, initialPendingDraft, pendingErrorFor, toPendingAnswersBody, validatePendingDrafts, type PendingDraft,
 } from '../lib/apply';
 import { spring } from '../lib/motion';
 import { cn } from '../lib/utils';
-import { APPLY_KEYS, useApplyActions } from '../useApply';
+import { APPLY_KEYS, setJobApplication, useApplyActions } from '../useApply';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { CheckChip } from './ui/check-chip';
@@ -37,7 +37,7 @@ function AnswerField({ id, question, value, onChange, labelledBy, describedBy, i
   const text = typeof value === 'string' ? value : '';
 
   if (question.kind === 'file') {
-    return <p className="text-[13px] text-muted">Esta pergunta pede um arquivo: responda direto no site da vaga.</p>;
+    return <p className="text-[13px] text-muted">{fileQuestionText(question.required)}</p>;
   }
   if (question.kind === 'multiselect') {
     const picked = Array.isArray(value) ? value : [];
@@ -243,14 +243,16 @@ export function PendingQuestions({ application }: { application: ApplicationDto 
       document.getElementById(fieldId(application.id, first.question.id))?.focus();
       return;
     }
-    answer.mutate({ id: application.id, body: toPendingAnswersBody(list) }, {
+    answer.mutate({ id: application.id, body: toPendingAnswersBody(pending, list) }, {
       // A candidatura devolvida é a verdade: se ainda falta alguma obrigatória, o formulário segue com o que resta.
       onSuccess: (dto) => {
-        qc.setQueryData(APPLY_KEYS.job(dto.jobId), dto);
+        setJobApplication(qc, dto);
         setDrafts({});
         setSaved(true);
       },
       onError: (e) => {
+        // A candidatura pode ter mudado enquanto isso (não espera mais respostas): relê na hora, sem esperar a próxima volta.
+        void qc.invalidateQueries({ queryKey: APPLY_KEYS.job(application.jobId) });
         const hit = pendingErrorFor(pending, e.message);
         if (hit) setErrors({ [hit.questionId]: hit.text });
         else setFormError(e.message);

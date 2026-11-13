@@ -1,9 +1,10 @@
 import { ArrowUpRight, BellRing, ChevronDown, CloudOff, LoaderCircle, RotateCw, Send } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { useEffect, useMemo, useState } from 'react';
-import { APPLY_SITE_LABELS, type ApplicationListItemDto } from '@kv/shared/client';
+import { useEffect, useState } from 'react';
+import { APPLICATION_FILTERS, APPLY_SITE_LABELS, type ApplicationFilter, type ApplicationListItemDto } from '@kv/shared/client';
 import {
-  FILTER_LABELS, UNCONFIRMED_TEXT, filterApplications, filterCounts, firstFilterWithItems, reasonText, waitingText, type ApplicationFilter,
+  FILTER_LABELS, UNCONFIRMED_TEXT, findListItem, firstFilterWithItems, listCutText, reasonText, rowAnswersText, sendAllPlan,
+  sendAllResultText, unavailableNotice, waitingText,
 } from '../lib/apply';
 import { spring } from '../lib/motion';
 import { cn } from '../lib/utils';
@@ -16,7 +17,6 @@ import { ConfirmDialog } from './ui/confirm-dialog';
 import { Notice } from './ui/notice';
 import { Skeleton } from './ui/skeleton';
 
-const FILTERS = Object.keys(FILTER_LABELS) as ApplicationFilter[];
 const EMPTY_TEXT: Record<ApplicationFilter, string> = {
   active: 'Nenhuma candidatura em andamento agora.',
   needs_human: 'Nada esperando você. Quando a IA parar numa pergunta, ela aparece aqui.',
@@ -71,6 +71,7 @@ function LiveWait({ waiting, item, onOpenJob }: {
 /** Uma candidatura parada em pergunta, aberta na própria linha. */
 function RowAnswers({ jobId, onOpenJob }: { jobId: number; onOpenJob: (jobId: number) => void }) {
   const { data, isPending, isError, refetch } = useJobApplication(jobId);
+  const application = data?.application ?? null;
   let body;
   if (isPending) {
     body = (
@@ -85,14 +86,10 @@ function RowAnswers({ jobId, onOpenJob }: { jobId: number; onOpenJob: (jobId: nu
         Não foi possível carregar as perguntas desta candidatura.
       </Notice>
     );
-  } else if (data && data.status === 'needs_human' && data.pendingQuestions.length > 0) {
-    body = <PendingQuestions application={data} />;
+  } else if (application && application.status === 'needs_human' && application.pendingQuestions.length > 0) {
+    body = <PendingQuestions application={application} />;
   } else {
-    body = (
-      <p className="text-[13px] text-ink-2" role="status">
-        Respostas recebidas. A candidatura voltou para a fila e continua sozinha.
-      </p>
-    );
+    body = <p className="text-[13px] text-ink-2" role="status">{rowAnswersText(application)}</p>;
   }
   return (
     <div className="space-y-3">
@@ -149,7 +146,7 @@ function Row({ item, index, open, onToggle, onOpenJob }: {
         </span>
         <span className="hidden text-[13px] text-ink-2 md:block">{APPLY_SITE_LABELS[item.site]}</span>
         <span className="mt-2 flex flex-wrap items-center gap-1.5 md:mt-0">
-          <ApplicationStatusBadge status={item.status} />
+          <ApplicationStatusBadge status={item.status} reason={item.reason} />
           {item.mode === 'dry_run' && item.status !== 'dry_run_ready' && item.status !== 'skipped' && <Badge tone="outline">ensaio</Badge>}
           <span className="text-xs tabular-nums text-muted md:hidden">{formatWhen(when)}</span>
         </span>
@@ -180,23 +177,33 @@ function Row({ item, index, open, onToggle, onOpenJob }: {
 
 export function ApplicationsPage({ initialFilter, onOpenJob }: { initialFilter?: ApplicationFilter; onOpenJob(jobId: number): void }) {
   const status = useApplyStatus().data;
-  const list = useApplications();
-  const { sendAll } = useApplyActions();
-  const items = useMemo(() => list.data ?? [], [list.data]);
-  const counts = useMemo(() => filterCounts(items), [items]);
   const [chosen, setChosen] = useState<ApplicationFilter | undefined>(initialFilter);
+  // Antes de o dono escolher, a aba pede "Precisam de você" (o primeiro da ordem de abertura); as contagens da resposta
+  // dizem em que filtro ela abre de fato.
+  const filter = chosen ?? 'needs_human';
+  const list = useApplications(filter);
+  const { sendAll } = useApplyActions();
+  const counts = list.data?.counts;
+  // Ao trocar de filtro, a resposta do filtro anterior fica só para as contagens: as linhas esperam a do novo.
+  const shown = list.data && !list.isPlaceholderData ? list.data.items : undefined;
   const [openId, setOpenId] = useState<number | null>(null);
   const [confirmSend, setConfirmSend] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  const [sendResult, setSendResult] = useState<string | null>(null);
   // Sem escolha do dono, a aba abre no primeiro filtro com candidaturas e fica nele (não pula sozinha depois).
-  const loaded = list.data !== undefined;
   useEffect(() => {
-    if (chosen === undefined && loaded) setChosen(firstFilterWithItems(counts));
-  }, [chosen, loaded, counts]);
-  const filter = chosen ?? 'active';
-  const shown = useMemo(() => filterApplications(items, filter), [items, filter]);
+    if (chosen === undefined && counts) setChosen(firstFilterWithItems(counts));
+  }, [chosen, counts]);
+  const rehearsalCount = counts?.rehearsals ?? 0;
+  // "Enviar todos os ensaios" manda os ids dos ensaios que a aba leu, nunca "todos" às cegas.
+  const rehearsals = useApplications('rehearsals', rehearsalCount > 0);
+  const plan = sendAllPlan(rehearsals.data?.items, rehearsalCount);
   const waiting = status?.waiting ?? null;
-  const waitingItem = waiting ? items.find((a) => a.id === waiting.applicationId) : undefined;
+  // A espera ao vivo é de uma candidatura em andamento: o nome da vaga vem da lista "Em andamento".
+  const activeList = useApplications('active', waiting !== null);
+  const waitingItem = waiting ? findListItem([list.data, activeList.data], waiting.applicationId) : undefined;
+  const unavailable = unavailableNotice(status);
+  const cut = shown && counts ? listCutText(shown.length, counts[filter]) : null;
 
   return (
     <div className="h-full overflow-y-auto">
@@ -212,10 +219,13 @@ export function ApplicationsPage({ initialFilter, onOpenJob }: { initialFilter?:
               {status && status.enabled && ` Hoje: ${status.totalToday} de ${status.totalCap} formulários.`}
             </p>
           </div>
-          {counts.rehearsals > 0 && (
-            <Button type="button" variant="primary" data-testid="applications-send-all" disabled={sendAll.isPending} onClick={() => setConfirmSend(true)}>
+          {rehearsalCount > 0 && (
+            <Button
+              type="button" variant="primary" data-testid="applications-send-all" disabled={sendAll.isPending || plan.ids.length === 0}
+              onClick={() => setConfirmSend(true)}
+            >
               {sendAll.isPending ? <LoaderCircle aria-hidden className="animate-spin" /> : <Send aria-hidden />}
-              Enviar todos os ensaios ({counts.rehearsals})
+              Enviar todos os ensaios ({plan.ids.length > 0 ? plan.ids.length : rehearsalCount})
             </Button>
           )}
         </motion.div>
@@ -224,8 +234,8 @@ export function ApplicationsPage({ initialFilter, onOpenJob }: { initialFilter?:
           {waiting && <LiveWait key={`${waiting.applicationId}:${waiting.gate}`} waiting={waiting} item={waitingItem} onOpenJob={onOpenJob} />}
         </AnimatePresence>
 
-        {status && !status.available && (
-          <Notice tone="info" role="status" title="A candidatura automática não está disponível">{status.unavailableReason}</Notice>
+        {unavailable && (
+          <Notice tone="info" role="status" title={unavailable.title} data-testid="applications-unavailable">{unavailable.reason}</Notice>
         )}
         {status && status.available && !status.enabled && (
           <Notice tone="info" role="status" title="A candidatura automática está desligada">
@@ -233,15 +243,17 @@ export function ApplicationsPage({ initialFilter, onOpenJob }: { initialFilter?:
           </Notice>
         )}
         {sendError && <Notice tone="bad" role="alert">{sendError}</Notice>}
+        {sendResult && <Notice tone="info" role="status" data-testid="applications-send-all-result">{sendResult}</Notice>}
 
         <motion.div
           initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ ...spring, delay: 0.04 }}
           role="group" aria-label="Filtrar candidaturas"
           className="flex w-fit max-w-full flex-wrap gap-0.5 rounded-2xl border border-line bg-bg/55 p-1 shadow-[inset_0_1px_2px_rgb(3_5_14/0.6)]"
         >
-          {FILTERS.map((f) => {
+          {APPLICATION_FILTERS.map((f) => {
             const active = f === filter;
-            const attention = f === 'needs_human' && counts.needs_human > 0;
+            const count = counts?.[f] ?? 0;
+            const attention = f === 'needs_human' && count > 0;
             return (
               <button
                 key={f} type="button" data-testid={`applications-filter-${f}`} aria-pressed={active}
@@ -265,7 +277,7 @@ export function ApplicationsPage({ initialFilter, onOpenJob }: { initialFilter?:
                     attention ? 'bg-warn/18 text-warn' : active ? 'bg-accent/20 text-ink' : 'bg-surface-3 text-muted',
                   )}
                 >
-                  {counts[f]}
+                  {count}
                 </span>
               </button>
             );
@@ -279,7 +291,15 @@ export function ApplicationsPage({ initialFilter, onOpenJob }: { initialFilter?:
           <div aria-hidden className={cn('hidden h-10 border-b border-line bg-surface-2/60 px-5 text-[11px] font-semibold uppercase tracking-[0.06em] text-faint', GRID)}>
             <span>Vaga</span><span>Site</span><span>Estado</span><span>Data</span><span />
           </div>
-          {list.isPending ? (
+          {list.isError && !shown ? (
+            <div className="flex flex-col items-center gap-3 px-6 py-12 text-center">
+              <span className="grid size-12 place-items-center rounded-2xl bg-bad/12 text-bad ring-1 ring-inset ring-bad/25">
+                <CloudOff aria-hidden className="size-5" />
+              </span>
+              <p className="max-w-sm text-sm text-muted">Não foi possível carregar as candidaturas. Confira se a API está no ar.</p>
+              <Button onClick={() => list.refetch()}><RotateCw aria-hidden /> Tentar de novo</Button>
+            </div>
+          ) : !shown ? (
             <ul aria-busy="true" aria-label="Carregando candidaturas">
               {[0, 1, 2, 3].map((i) => (
                 <li key={i} className={cn('border-t border-line px-5 py-4 first:border-t-0', GRID)}>
@@ -290,14 +310,6 @@ export function ApplicationsPage({ initialFilter, onOpenJob }: { initialFilter?:
                 </li>
               ))}
             </ul>
-          ) : list.isError && !list.data ? (
-            <div className="flex flex-col items-center gap-3 px-6 py-12 text-center">
-              <span className="grid size-12 place-items-center rounded-2xl bg-bad/12 text-bad ring-1 ring-inset ring-bad/25">
-                <CloudOff aria-hidden className="size-5" />
-              </span>
-              <p className="max-w-sm text-sm text-muted">Não foi possível carregar as candidaturas. Confira se a API está no ar.</p>
-              <Button onClick={() => list.refetch()}><RotateCw aria-hidden /> Tentar de novo</Button>
-            </div>
           ) : shown.length === 0 ? (
             <p data-testid="applications-empty" className="px-6 py-12 text-center text-sm text-muted">{EMPTY_TEXT[filter]}</p>
           ) : (
@@ -315,21 +327,28 @@ export function ApplicationsPage({ initialFilter, onOpenJob }: { initialFilter?:
             </ul>
           )}
         </motion.div>
+        {cut && <p data-testid="applications-cut" className="-mt-2 px-1 text-xs text-faint">{cut}</p>}
       </div>
 
       <ConfirmDialog
         open={confirmSend} onOpenChange={setConfirmSend} testId="applications-send-all-dialog" busy={sendAll.isPending}
-        title={`Enviar ${counts.rehearsals === 1 ? 'o ensaio pronto' : `os ${counts.rehearsals} ensaios prontos`} de verdade?`}
-        confirmLabel={counts.rehearsals === 1 ? 'Enviar a candidatura' : `Enviar ${counts.rehearsals} candidaturas`}
+        title={`Enviar ${plan.ids.length === 1 ? 'o ensaio pronto' : `os ${plan.ids.length} ensaios prontos`} de verdade?`}
+        confirmLabel={plan.ids.length === 1 ? 'Enviar a candidatura' : `Enviar ${plan.ids.length} candidaturas`}
         onConfirm={() => {
           setSendError(null);
-          sendAll.mutate(undefined, {
-            onSuccess: () => setConfirmSend(false),
+          setSendResult(null);
+          sendAll.mutate(plan.ids, {
+            onSuccess: (result) => { setConfirmSend(false); setSendResult(sendAllResultText(result)); },
             onError: (e) => { setConfirmSend(false); setSendError(e.message); },
           });
         }}
       >
         <p>Cada candidatura é enviada com exatamente as respostas do ensaio, no ritmo e nos limites do dia. Uma candidatura enviada não pode ser desfeita.</p>
+        {plan.hidden > 0 && (
+          <p className="mt-2">
+            {plan.hidden === 1 ? 'Há mais 1 ensaio pronto, mais antigo, que fica para um próximo envio.' : `Há mais ${plan.hidden} ensaios prontos, mais antigos, que ficam para um próximo envio.`}
+          </p>
+        )}
       </ConfirmDialog>
     </div>
   );

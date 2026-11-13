@@ -1,16 +1,18 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { Bot, CircleCheckBig, FileDown, LoaderCircle, RotateCw, Send, X } from 'lucide-react';
+import { ArrowUpRight, Bot, CircleCheckBig, FileDown, LoaderCircle, RotateCw, Send, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Dialog as DialogPrimitive } from 'radix-ui';
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import {
-  APPLY_SITE_LABELS, type ApplicationDto, type ApplicationStatus, type JobDto, type ShotKind,
+  APPLY_SITE_LABELS, type ApplicationDto, type ApplicationReason, type ApplicationStatus, type JobDto, type ShotKind,
 } from '@kv/shared/client';
 import { applicationResumeUrl, applicationShotUrl } from '../applyApi';
 import {
-  ANSWER_SOURCE_LABELS, STATUS_LABELS, SHOT_LABELS, UNCONFIRMED_TEXT, answerText, applicationActions, canApplyNow, reasonText,
+  ANSWER_SOURCE_LABELS, RUNNING_STATUSES, STATUS_LABELS, SHOT_LABELS, UNCONFIRMED_TEXT, answerText, applicationActions, applySectionView,
+  liveWaitFor, markAppliedTarget, reasonText, statusLabel,
 } from '../lib/apply';
 import { spring } from '../lib/motion';
+import { EYEBROW } from '../lib/styles';
 import { cn } from '../lib/utils';
 import { APPLY_KEYS, useApplyActions, useApplyStatus, useJobApplication } from '../useApply';
 import { JOBS_KEY, useMoveJob } from '../useMoveJob';
@@ -19,27 +21,30 @@ import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Notice } from './ui/notice';
 
-const EYEBROW = 'text-[11px] font-semibold uppercase tracking-[0.08em] text-faint';
-
 type Tone = 'neutral' | 'accent' | 'ok' | 'warn' | 'bad' | 'outline';
 const STATUS_TONE: Record<ApplicationStatus, Tone> = {
   queued: 'neutral', preparing: 'accent', filling: 'accent', waiting_human: 'warn', submitting: 'accent', submitted: 'ok',
   dry_run_ready: 'accent', needs_human: 'warn', skipped: 'outline', failed: 'bad', cancelled: 'outline',
 };
-const RUNNING: readonly ApplicationStatus[] = ['preparing', 'filling', 'waiting_human', 'submitting'];
 
-/** O estado da candidatura como selo; os estados em andamento ganham um ponto pulsando. */
-export function ApplicationStatusBadge({ status, size = 'sm' }: { status: ApplicationStatus; size?: 'sm' | 'md' }) {
-  const running = RUNNING.includes(status);
+/**
+ * O estado da candidatura como selo; os estados em andamento ganham um ponto pulsando. Uma pulada porque o dono já
+ * aplicou lê "Aplicada por você", no tom de enviada.
+ */
+export function ApplicationStatusBadge({ status, reason = null, size = 'sm' }: {
+  status: ApplicationStatus; reason?: ApplicationReason | null; size?: 'sm' | 'md';
+}) {
+  const running = RUNNING_STATUSES.includes(status);
+  const byOwner = status === 'skipped' && reason === 'already_applied';
   return (
-    <Badge tone={STATUS_TONE[status]} size={size} className="gap-1.5" data-status={status}>
+    <Badge tone={byOwner ? 'ok' : STATUS_TONE[status]} size={size} className="gap-1.5" data-status={status}>
       {running && (
         <span aria-hidden className="relative flex size-1.5">
           <span className="absolute inset-0 animate-pulse-dot rounded-full bg-current" />
           <span className="relative size-1.5 rounded-full bg-current" />
         </span>
       )}
-      {STATUS_LABELS[status]}
+      {statusLabel(status, reason)}
     </Badge>
   );
 }
@@ -102,37 +107,50 @@ function Shots({ application }: { application: ApplicationDto }) {
           </li>
         ))}
       </ul>
+      {/*
+        A foto é da página inteira (pode ter milhares de pixels de altura): abre na largura da caixa e quem rola é o véu,
+        como num visualizador de imagem (o conteúdo fica dentro do véu, que é o que o Radix deixa rolar).
+      */}
       <DialogPrimitive.Root open={open !== null} onOpenChange={(o) => !o && setOpen(null)}>
         <AnimatePresence>
           {open !== null && (
             <DialogPrimitive.Portal forceMount>
               <DialogPrimitive.Overlay asChild forceMount>
                 <motion.div
-                  className="fixed inset-0 z-[70] bg-[#03040a]/80"
+                  data-testid="application-shot-overlay"
+                  className="fixed inset-0 z-[70] overflow-y-auto bg-[#03040a]/80"
                   initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.18, ease: 'easeOut' }}
-                />
+                >
+                  <div className="flex min-h-full items-center justify-center p-4">
+                    <DialogPrimitive.Content asChild forceMount aria-describedby={undefined}>
+                      <motion.div
+                        data-testid="application-shot-dialog"
+                        className="w-full max-w-5xl rounded-3xl border border-line-strong bg-surface p-3 shadow-pop outline-none"
+                        initial={{ opacity: 0, y: 10, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 6, scale: 0.98 }}
+                        transition={spring}
+                      >
+                        <div className="flex items-center justify-between gap-3 px-1.5 pb-2.5">
+                          <DialogPrimitive.Title className="text-sm font-semibold text-ink">{SHOT_LABELS[open]}</DialogPrimitive.Title>
+                          <div className="flex items-center gap-1">
+                            <Button asChild variant="ghost" size="sm">
+                              <a href={applicationShotUrl(application.id, open)} target="_blank" rel="noopener noreferrer" data-testid="application-shot-new-tab">
+                                Abrir em nova aba <ArrowUpRight aria-hidden />
+                              </a>
+                            </Button>
+                            <DialogPrimitive.Close asChild>
+                              <Button variant="ghost" size="icon" aria-label="Fechar"><X aria-hidden /></Button>
+                            </DialogPrimitive.Close>
+                          </div>
+                        </div>
+                        <img
+                          src={applicationShotUrl(application.id, open)} alt={SHOT_LABELS[open]}
+                          className="block h-auto w-full rounded-2xl border border-line"
+                        />
+                      </motion.div>
+                    </DialogPrimitive.Content>
+                  </div>
+                </motion.div>
               </DialogPrimitive.Overlay>
-              <div className="pointer-events-none fixed inset-0 z-[70] grid place-items-center p-4">
-                <DialogPrimitive.Content asChild forceMount aria-describedby={undefined}>
-                  <motion.div
-                    data-testid="application-shot-dialog"
-                    className="pointer-events-auto flex max-h-full w-full max-w-5xl flex-col rounded-3xl border border-line-strong bg-surface p-3 shadow-pop outline-none"
-                    initial={{ opacity: 0, y: 10, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 6, scale: 0.98 }}
-                    transition={spring}
-                  >
-                    <div className="flex items-center justify-between gap-3 px-1.5 pb-2.5">
-                      <DialogPrimitive.Title className="text-sm font-semibold text-ink">{SHOT_LABELS[open]}</DialogPrimitive.Title>
-                      <DialogPrimitive.Close asChild>
-                        <Button variant="ghost" size="icon" aria-label="Fechar"><X aria-hidden /></Button>
-                      </DialogPrimitive.Close>
-                    </div>
-                    <img
-                      src={applicationShotUrl(application.id, open)} alt={SHOT_LABELS[open]}
-                      className="min-h-0 w-full flex-1 rounded-2xl border border-line object-contain"
-                    />
-                  </motion.div>
-                </DialogPrimitive.Content>
-              </div>
             </DialogPrimitive.Portal>
           )}
         </AnimatePresence>
@@ -159,7 +177,9 @@ function Timeline({ application }: { application: ApplicationDto }) {
                 className={cn('relative mt-1.5 size-2.5 shrink-0 rounded-full ring-4 ring-surface', i === last ? 'bg-accent' : 'bg-line-strong')}
               />
               <div className="min-w-0 text-sm">
-                <p className="font-medium text-ink">{STATUS_LABELS[e.status]}</p>
+                <p className="font-medium text-ink">
+                  {i === last && e.status === application.status ? statusLabel(e.status, application.reason) : STATUS_LABELS[e.status]}
+                </p>
                 {e.message && <p className="break-words text-[13px] leading-snug text-ink-2">{e.message}</p>}
                 {why && <p className="break-words text-[13px] leading-snug text-ink-2">{why}</p>}
                 <p className="text-xs tabular-nums text-muted">{new Date(e.at).toLocaleString('pt-BR')}</p>
@@ -178,12 +198,15 @@ export function JobApplicationSection({ job, index }: { job: JobDto; index: numb
   const query = useJobApplication(job.id);
   const status = useApplyStatus().data;
   const actions = useApplyActions();
-  const { moveTo } = useMoveJob();
+  const { moveTo, resendColumn } = useMoveJob();
   const [error, setError] = useState<string | null>(null);
-  const application = query.data;
+  const [marking, setMarking] = useState(false);
+  const data = query.data;
+  const application = data?.application ?? null;
+  const view = applySectionView(data);
 
   // O painel aberto relê a vaga (selos, coluna, "precisa de você") quando o estado da candidatura muda.
-  const stateKey = application === undefined ? undefined : application === null ? 'none' : `${application.status}:${application.reason}`;
+  const stateKey = data === undefined ? undefined : application === null ? 'none' : `${application.status}:${application.reason}`;
   const previous = useRef(stateKey);
   useEffect(() => {
     if (previous.current !== undefined && stateKey !== undefined && previous.current !== stateKey) {
@@ -204,11 +227,30 @@ export function JobApplicationSection({ job, index }: { job: JobDto; index: numb
     setError(null);
     m.mutate(v, { onError, onSuccess: () => setError(null) });
   };
-  const busy = actions.apply.isPending || actions.retry.isPending || actions.cancel.isPending || actions.send.isPending;
+  const busy = actions.apply.isPending || actions.retry.isPending || actions.cancel.isPending || actions.send.isPending || marking;
 
-  // Função desligada e vaga sem candidatura: o painel fica exatamente como era.
-  if (query.isPending || (application === null && !canApplyNow(status, null)) || (query.isError && !application)) return null;
+  /**
+   * "Já apliquei por conta própria": o card vai para Aplicada (ou, se já está lá ou depois, a coluna é mandada de novo) e
+   * a API encerra a candidatura como "Aplicada por você". A seção relê na hora em que o PATCH termina.
+   */
+  const markApplied = () => {
+    setError(null);
+    setMarking(true);
+    const settled = () => {
+      setMarking(false);
+      void qc.invalidateQueries({ queryKey: APPLY_KEYS.job(job.id) });
+      void qc.invalidateQueries({ queryKey: APPLY_KEYS.applications });
+      void qc.invalidateQueries({ queryKey: APPLY_KEYS.status });
+    };
+    const target = markAppliedTarget(job.column);
+    if (target.sameColumn) resendColumn(job.id, target.column, settled);
+    else moveTo(job.id, target.column, null, settled);
+  };
 
+  // Sem candidatura e sem poder aplicar (site não atendido, vaga já aplicada, função desligada...): o painel fica como era.
+  if (view === 'hidden' || (query.isError && !application)) return null;
+
+  const waitText = liveWaitFor(status, job.id);
   let body: ReactNode;
   if (!application) {
     body = (
@@ -222,7 +264,7 @@ export function JobApplicationSection({ job, index }: { job: JobDto; index: numb
       </div>
     );
   } else {
-    const can = applicationActions(application);
+    const can = applicationActions(application, job);
     const unconfirmed = can.alreadyApplied;
     const asking = application.status === 'needs_human' && application.reason === 'question' && application.pendingQuestions.length > 0;
     const reason = reasonText(application.reason, application.detail);
@@ -230,7 +272,7 @@ export function JobApplicationSection({ job, index }: { job: JobDto; index: numb
       <div className="space-y-4">
         <div className="space-y-2">
           <div className="flex flex-wrap items-center gap-1.5">
-            <ApplicationStatusBadge status={application.status} size="md" />
+            <ApplicationStatusBadge status={application.status} reason={application.reason} size="md" />
             {application.status !== 'dry_run_ready' && (
               <Badge size="md" tone="outline">{application.mode === 'dry_run' ? 'Ensaio' : 'Envio de verdade'}</Badge>
             )}
@@ -248,14 +290,23 @@ export function JobApplicationSection({ job, index }: { job: JobDto; index: numb
           )}
         </div>
 
+        {waitText && (
+          <Notice tone="warn" role="status" data-testid="application-live-wait">
+            <p>{waitText} A candidatura espera você por até 10 minutos.</p>
+          </Notice>
+        )}
+
         {unconfirmed && (
           <Notice tone="warn" role="status" data-testid="application-unconfirmed">
             <p>{UNCONFIRMED_TEXT}</p>
             <div className="mt-2.5 flex flex-wrap gap-2">
-              <Button type="button" size="sm" data-testid="application-already-applied" onClick={() => moveTo(job.id, 'aplicada', null)}>
-                Já apliquei por conta própria
+              <Button type="button" size="sm" data-testid="application-already-applied" disabled={busy} onClick={markApplied}>
+                {marking && <LoaderCircle aria-hidden className="animate-spin" />} Já apliquei por conta própria
               </Button>
-              <Button type="button" size="sm" variant="danger" data-testid="application-cancel" disabled={busy} onClick={() => run(actions.cancel, application.id)}>
+              <Button
+                type="button" size="sm" variant="danger" data-testid="application-cancel" disabled={busy || can.cancelPending}
+                onClick={() => run(actions.cancel, application.id)}
+              >
                 Cancelar
               </Button>
             </div>
@@ -294,12 +345,19 @@ export function JobApplicationSection({ job, index }: { job: JobDto; index: numb
                 </Button>
               )}
               {can.cancel && !unconfirmed && (
-                <Button type="button" size="sm" variant="danger" data-testid="application-cancel" disabled={busy} onClick={() => run(actions.cancel, application.id)}>
+                <Button
+                  type="button" size="sm" variant="danger" data-testid="application-cancel" disabled={busy || can.cancelPending}
+                  onClick={() => run(actions.cancel, application.id)}
+                >
                   Cancelar
                 </Button>
               )}
             </div>
-            {can.cancelLater && (
+            {can.cancelPending ? (
+              <p className="text-xs leading-snug text-warn" role="status" data-testid="application-cancel-pending">
+                Cancelamento pedido; vale no próximo ponto seguro.
+              </p>
+            ) : can.cancelLater && (
               <p className="text-xs leading-snug text-faint">
                 O cancelamento vale no próximo ponto seguro; um envio que já começou ainda pode ser concluído.
               </p>
