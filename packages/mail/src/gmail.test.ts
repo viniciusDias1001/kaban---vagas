@@ -132,6 +132,20 @@ describe('headers and messages', () => {
     });
   });
 
+  it('drops NUL characters from the subject, names and addresses', () => {
+    const msg = {
+      seq: 1, uid: 5,
+      envelope: {
+        subject: 'Entre\u0000vista', messageId: '<n@x>',
+        from: [{ name: 'Joana\u0000 Lima', address: 'joana@acme.com\u0000' }], to: [{ address: 'maria@example.com\u0000' }],
+      },
+      headers: Buffer.from(''),
+    };
+    expect(toRawMail(msg, 'Olá', 1)).toMatchObject({
+      subject: 'Entrevista', from: { name: 'Joana Lima', address: 'joana@acme.com' }, to: ['maria@example.com'],
+    });
+  });
+
   it('fills what the server left out', () => {
     // O ENVELOPE repete o From em Reply-To quando o cabeçalho não existe: sem cabeçalho, sem Reply-To.
     const msg = {

@@ -2,7 +2,7 @@ import type { Readable } from 'node:stream';
 import { ImapFlow, type FetchMessageObject, type FetchQueryObject, type ImapFlowOptions, type ListResponse, type SearchObject } from 'imapflow';
 import { createTransport } from 'nodemailer';
 import { MAIL_LIMITS } from '@kv/shared';
-import { clipBody, htmlToText, pickTextPart, syntheticMessageId, threadKeyFromHeaders } from './text';
+import { clipBody, htmlToText, pickTextPart, stripNul, syntheticMessageId, threadKeyFromHeaders } from './text';
 import { MailAuthError, MailFolderError, MailTransientError, type Mailbox, type OutgoingMail, type RawMail } from './types';
 
 export const GMAIL = { imapHost: 'imap.gmail.com', imapPort: 993, smtpHost: 'smtp.gmail.com', smtpPort: 465 } as const;
@@ -141,7 +141,7 @@ export function threadSearch(threadKey: string): SearchObject {
 export function parseHeaderBlock(block: Buffer | undefined): Map<string, string> {
   const out = new Map<string, string>();
   if (!block) return out;
-  for (const line of block.toString('utf8').replace(/\r?\n[ \t]+/g, ' ').split(/\r?\n/)) {
+  for (const line of stripNul(block.toString('utf8')).replace(/\r?\n[ \t]+/g, ' ').split(/\r?\n/)) {
     const colon = line.indexOf(':');
     if (colon <= 0) continue;
     const name = line.slice(0, colon).trim().toLowerCase();
@@ -169,13 +169,23 @@ function replyToAddresses(list: { address?: string }[] | undefined): string | nu
   return addresses.length ? addresses.join(', ') : null;
 }
 
+/** O envelope com todo texto sem NUL (o Postgres recusa 0x00 em texto); datas e o resto ficam como vieram. */
+function withoutNul<T>(value: T): T {
+  if (typeof value === 'string') return stripNul(value) as T;
+  if (Array.isArray(value)) return value.map(withoutNul) as T;
+  if (value && typeof value === 'object' && !(value instanceof Date)) {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, withoutNul(v)])) as T;
+  }
+  return value;
+}
+
 /** Uma mensagem buscada com HEAD_QUERY, mais o texto já extraído, vira RawMail. */
 export function toRawMail(
   msg: Pick<FetchMessageObject, 'uid' | 'threadId' | 'envelope' | 'headers' | 'internalDate'>,
   text: string,
   uidValidity: number,
 ): RawMail {
-  const env = msg.envelope ?? {};
+  const env = withoutNul(msg.envelope ?? {});
   const h = parseHeaderBlock(msg.headers);
   const messageId = messageIds(env.messageId)[0] ?? syntheticMessageId(uidValidity, msg.uid);
   const inReplyTo = messageIds(env.inReplyTo)[0] ?? messageIds(h.get('in-reply-to'))[0] ?? null;

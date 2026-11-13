@@ -51,9 +51,14 @@ export function htmlToText(html: string): string {
   return tidy(decodeEntities(text));
 }
 
-/** Junta espaços e quebras repetidas e corta em MAIL_LIMITS.bodyChars. */
+/** Junta espaços e quebras repetidas, tira o NUL e corta em MAIL_LIMITS.bodyChars. */
 export function clipBody(text: string): string {
-  return tidy(text).slice(0, MAIL_LIMITS.bodyChars);
+  return tidy(stripNul(text)).slice(0, MAIL_LIMITS.bodyChars);
+}
+
+/** Sem o caractere NUL, que o Postgres recusa em texto (um cabeçalho codificado pode trazê-lo). */
+export function stripNul(value: string): string {
+  return value.replace(/\u0000/g, '');
 }
 
 interface StructureNode { part?: unknown; type?: unknown; disposition?: unknown; childNodes?: unknown }

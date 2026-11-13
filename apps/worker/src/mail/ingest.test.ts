@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { asc } from 'drizzle-orm';
+import { asc, sql } from 'drizzle-orm';
 import {
   getMailAccount, insertMailMessage, mailIgnored, mailMessages, openAlerts, requestPromote, saveMailAccount, type Db,
 } from '@kv/db';
@@ -121,7 +121,8 @@ describe('ingestInbox', () => {
       ...bed.mailbox,
       fetchThread: async (key) => {
         calls += 1;
-        if (calls === 2) throw new Error('queda no meio do lote');
+        // A caixa de verdade só lança erros da caixa (`toMailError`); um erro qualquer agora pula só a mensagem.
+        if (calls === 2) throw new MailTransientError('queda no meio do lote');
         return bed.mailbox.fetchThread(key);
       },
     };
@@ -156,6 +157,27 @@ describe('ingestInbox', () => {
     const hidden: Mailbox = { ...bed.mailbox, fetchThread: async () => { throw new MailFolderError(FOLDERS_HIDDEN_TEXT); } };
     await expect(ingestInbox({ ...deps, mailbox: hidden })).rejects.toBeInstanceOf(MailFolderError);
     expect(await getMailAccount(db)).toMatchObject({ paused: false, error: FOLDERS_HIDDEN_TEXT, lastUid: null });
+  });
+
+  it('skips a message that cannot be stored, logs only its UID and moves the reading point on', async () => {
+    await seedAppliedJob('Acme', 'Engenheira de Software', MAIL_NOW - DAY);
+    deliver(acmeJobMail({ subject: 'Sua candidatura na Acme: quebrada', messageId: 'quebrada@acme.com', threadKey: 'quebrada@acme.com' }));
+    deliver(acmeJobMail({ subject: 'Sua candidatura na Acme', messageId: 'boa@acme.com', threadKey: 'boa@acme.com' }));
+    await db.execute(sql.raw(`create or replace function kv_test_fail() returns trigger language plpgsql as $$
+      begin if new.subject like '%quebrada%' then raise exception 'falha simulada'; end if; return new; end $$`));
+    await db.execute(sql.raw('create trigger kv_test_fail before insert on mail_messages for each row execute function kv_test_fail()'));
+    const lines: string[] = [];
+    try {
+      expect(await ingestInbox({ ...deps, log: (m) => lines.push(m) })).toMatchObject({ stored: 1 });
+    } finally {
+      await db.execute(sql.raw('drop trigger kv_test_fail on mail_messages'));
+    }
+    expect((await stored()).map((m) => m.messageId)).toEqual(['boa@acme.com']);
+    expect(await getMailAccount(db)).toMatchObject({ lastUid: 2, error: null });
+    const skipped = lines.filter((l) => l.includes('UID 1'));
+    expect(skipped).toHaveLength(1);
+    expect(lines.join('\n')).not.toContain('quebrada');
+    expect(lines.join('\n')).not.toContain('careers@acme.com');
   });
 
   it('deletes ignored lines older than 30 days', async () => {

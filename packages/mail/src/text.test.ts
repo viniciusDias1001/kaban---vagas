@@ -21,6 +21,7 @@ describe('htmlToText', () => {
 
 describe('clipBody', () => {
   it('clips a long body', () => expect(clipBody('a'.repeat(50_000))).toHaveLength(MAIL_LIMITS.bodyChars));
+  it('drops NUL characters, which Postgres refuses in text', () => expect(clipBody('Olá\u0000 Maria\u0000.')).toBe('Olá Maria.'));
   it('joins repeated spaces and blank lines', () => {
     expect(clipBody('  Olá,\t\tMaria.  \r\n\r\n\r\n\r\nTudo   bem?  ')).toBe('Olá, Maria.\n\nTudo bem?');
   });
