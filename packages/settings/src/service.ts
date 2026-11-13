@@ -2,15 +2,16 @@ import { eq } from 'drizzle-orm';
 import {
   DEFAULT_BUDGET_TIME_ZONE, DEFAULT_DAILY_BUDGET_USD, DEFAULT_MODELS, resolveAiConfig, type AiConfigResult,
 } from '@kv/ai';
-import { aiKeys, settings as settingsTable, type Db } from '@kv/db';
+import { aiKeys, deleteSecretRow, saveSecretRow, secretRow, settings as settingsTable, type Db } from '@kv/db';
 import {
+  EMAIL_DEFAULTS, type EmailConfig, type SecretName,
   APPLY_DEFAULTS, APPLY_SITE_IDS, type ApplyAiAnswers, type ApplyConfig, type ApplyDailyCaps, type ApplyMode, type ApplyResumeMode,
   type ApplySiteId, type ApplyWindow,
   AI_KEY_ENV_VARS, AI_PROVIDER_IDS, AI_PROVIDER_LABELS, DEFAULT_GREENHOUSE_BOARDS, DEFAULT_LEVER_COMPANIES, SETTING_KEYS,
   SETTING_SCHEMAS, type AiKeyMetaDto, type AiProviderId, type SettingKey, type SettingSource, type SettingValue,
   type SettingsDto, type SettingsPatch,
 } from '@kv/shared';
-import { DecryptError, SecretMissingError, appSecretProblem, openApiKey, sealApiKey } from './secret-box';
+import { DecryptError, SecretMissingError, appSecretProblem, openApiKey, openSecret, sealApiKey, sealSecret } from './secret-box';
 
 type Env = Record<string, string | undefined>;
 
@@ -56,6 +57,13 @@ export interface ResolvedSettings {
     aiAnswers: SettingValue<ApplyAiAnswers>;
     blockedCompanies: SettingValue<string[]>;
     blockedTerms: SettingValue<string[]>;
+  };
+  /** Sem variável de ambiente: valor da tela, senão o padrão. */
+  email: {
+    enabled: SettingValue<boolean>;
+    moveMode: SettingValue<EmailConfig['moveMode']>;
+    factsMode: SettingValue<EmailConfig['factsMode']>;
+    aiDrafts: SettingValue<boolean>;
   };
   budgetTimeZone: string;
 }
@@ -181,6 +189,12 @@ export function createSettingsService(db: Db, opts: SettingsServiceOptions = {})
         blockedCompanies: pick<string[]>(stored.applyBlockedCompanies as string[] | undefined, undefined, []),
         blockedTerms: pick<string[]>(stored.applyBlockedTerms as string[] | undefined, undefined, []),
       },
+      email: {
+        enabled: pick(stored.emailEnabled as boolean | undefined, undefined, EMAIL_DEFAULTS.enabled),
+        moveMode: pick(stored.emailMoveMode as EmailConfig['moveMode'] | undefined, undefined, EMAIL_DEFAULTS.moveMode),
+        factsMode: pick(stored.emailFactsMode as EmailConfig['factsMode'] | undefined, undefined, EMAIL_DEFAULTS.factsMode),
+        aiDrafts: pick(stored.emailAiDrafts as boolean | undefined, undefined, EMAIL_DEFAULTS.aiDrafts),
+      },
       budgetTimeZone: tz && isTimeZone(tz) ? tz : DEFAULT_BUDGET_TIME_ZONE,
     };
   }
@@ -286,6 +300,45 @@ export function createSettingsService(db: Db, opts: SettingsServiceOptions = {})
         blockedCompanies: a.blockedCompanies.value, blockedTerms: a.blockedTerms.value, timeZone: budgetTimeZone,
       };
     },
+    /** As configurações de e-mail em vigor, para a API e o worker. */
+    async emailConfig(): Promise<EmailConfig> {
+      const { email: e } = resolve((await load()).stored);
+      return { enabled: e.enabled.value, moveMode: e.moveMode.value, factsMode: e.factsMode.value, aiDrafts: e.aiDrafts.value };
+    },
+
+    /** Cifra e grava um segredo nomeado. Lança SecretMissingError sem APP_SECRET. O texto puro não é guardado. */
+    async saveSecret(name: SecretName, plaintext: string): Promise<void> {
+      await saveSecretRow(db, name, sealSecret(plaintext, name, env.APP_SECRET), now());
+    },
+
+    /**
+     * Decifra um segredo nomeado a cada chamada; nunca guarda o valor em cache. O valor só existe no
+     * resultado: quem chama o descarta. Os problemas voltam como código, sem o valor.
+     */
+    async readSecret(name: SecretName): Promise<{ value: string } | { value: null; code: 'none' | 'no_secret' | 'undecryptable'; problem: string }> {
+      const row = await secretRow(db, name);
+      if (!row) return { value: null, code: 'none', problem: 'Não há segredo gravado com este nome.' };
+      try {
+        return { value: openSecret(row.sealed, name, env.APP_SECRET) };
+      } catch (e) {
+        if (e instanceof SecretMissingError) {
+          return { value: null, code: 'no_secret', problem: `Há um segredo gravado, mas ele não pode ser lido: ${e.message}` };
+        }
+        if (e instanceof DecryptError) {
+          return { value: null, code: 'undecryptable', problem: 'O segredo gravado não pôde ser decifrado (APP_SECRET mudou?). Grave-o de novo.' };
+        }
+        throw e;
+      }
+    },
+
+    async deleteSecret(name: SecretName): Promise<void> {
+      await deleteSecretRow(db, name);
+    },
+
+    async hasSecret(name: SecretName): Promise<boolean> {
+      return (await secretRow(db, name)) !== null;
+    },
+
     /** Descarta o cache: a próxima leitura vai ao banco. */
     invalidate(): void {
       snapshot = null;
@@ -376,6 +429,12 @@ export function createSettingsService(db: Db, opts: SettingsServiceOptions = {})
           aiAnswers: src(resolved.apply.aiAnswers),
           blockedCompanies: src(resolved.apply.blockedCompanies),
           blockedTerms: src(resolved.apply.blockedTerms),
+        },
+        email: {
+          enabled: src(resolved.email.enabled),
+          moveMode: src(resolved.email.moveMode),
+          factsMode: src(resolved.email.factsMode),
+          aiDrafts: src(resolved.email.aiDrafts),
         },
         sources: { greenhouseBoards: src(resolved.greenhouseBoards), leverCompanies: src(resolved.leverCompanies) },
         general: { nextRunAt },

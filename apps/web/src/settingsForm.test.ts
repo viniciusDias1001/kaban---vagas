@@ -38,6 +38,10 @@ const dto: SettingsDto = {
     companyCap: { value: 2, source: 'default' }, window: { value: { start: '08:00', end: '21:00' }, source: 'default' }, resumeMode: { value: 'tailored', source: 'default' },
     aiAnswers: { value: 'review', source: 'default' }, blockedCompanies: { value: [], source: 'default' }, blockedTerms: { value: [], source: 'default' },
   },
+  email: {
+    enabled: { value: true, source: 'default' }, moveMode: { value: 'auto', source: 'default' },
+    factsMode: { value: 'auto', source: 'default' }, aiDrafts: { value: true, source: 'default' },
+  },
   general: { nextRunAt: 0 },
 };
 
