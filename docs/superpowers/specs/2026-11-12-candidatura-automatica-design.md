@@ -139,20 +139,25 @@ Os dois arquivos do modelo ficam em `C:\Users\Vinicius\Documents\Curriculos\`, f
 
 3. Competências: uma linha por grupo, "**Rótulo:** itens separados por vírgula". Sem grupos, uma linha só, sem rótulo.
 4. Experiência: "Cargo - Empresa"; linha "Fev 2026 - Atual | Local · nota"; realizações com marcador e recuo.
-5. Formação: uma linha por item, "Curso - Instituição | período". Idiomas: uma linha, "Nome: nível | Nome: nível".
+5. Formação: uma linha por item, "Curso - Instituição | período". Idiomas: uma linha, "Nome: nível | Nome: nível". Certificações: uma linha por item, "Nome - Emissor | data".
 6. Rodapé em toda página. Seção vazia não aparece. Título de seção nunca fica sozinho no fim da página.
+7. Não há mais seção de links: eles vão na linha de contato, só o endereço.
+8. O nome sai em caixa alta no cabeçalho. No rodapé sai como está no perfil; se o perfil o guarda todo em maiúsculas, o rodapé usa só as iniciais maiúsculas.
 
 Datas gravadas como `AAAA-MM` saem como "Fev 2026" ou "Feb 2026"; texto em outro formato sai como foi digitado. Continua valendo: texto selecionável, sem tabelas nem imagens, e o aviso de caractere sem glifo.
 
 ### O que o perfil ganha
 
-O perfil estruturado não guarda três coisas que o modelo usa. Elas entram como campos opcionais; perfis já gravados continuam válidos.
+O perfil estruturado não guarda três coisas que o modelo usa. Elas entram como campos opcionais no perfil gravado, e perfis já gravados continuam válidos: o banco não é reescrito, e quem lê o perfil trata a ausência como vazio. O modelo e o editor passam a enviá-los sempre, vazios quando não há.
 
 - `headline`: o título profissional abaixo do nome.
 - `skills[].group`: o grupo da competência ("Back-end & APIs").
 - `experiences[].section` (`principal` ou `complementar`) e `experiences[].note` (a linha de cargos anteriores na mesma empresa).
 
 A leitura do currículo e a tradução do perfil passam a preencher esses campos. O currículo adaptado os **copia** do perfil; o modelo nunca os reescreve. No verificador de não invenção, a única mudança é contar o título, os grupos e a nota como vocabulário do perfil, para um resumo que repita o título não ser barrado como termo novo. O editor de "Meu perfil" ganha os campos. Para preencher um perfil já existente, o dono pede a releitura do currículo ou edita à mão.
+
+- Na tradução do perfil, cada grupo é traduzido uma vez, não competência por competência, para um grupo não se dividir em dois no outro idioma.
+- Um currículo adaptado já gravado não ganha os campos novos sozinho: ele passa a "desatualizado", como em qualquer mudança de perfil, e é gerado de novo quando for usado. A candidatura sempre usa um currículo em dia.
 
 ---
 
