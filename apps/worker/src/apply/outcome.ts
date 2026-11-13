@@ -95,11 +95,16 @@ export async function recordSolvedWait(db: Db, site: ApplySiteId): Promise<void>
 
 /**
  * Sequências do site: formulário desconhecido (`unsupported_form`) numa, parada depois do clique (`confirm_submission`)
- * noutra; `brakeAfter` seguidas pausam o site com `brake`. Página de restrição pausa na hora. Um envio zera as três.
+ * noutra; `brakeAfter` seguidas pausam o site com `brake`. Página de restrição pausa na hora. Um envio zera as três; um
+ * ensaio pronto zera a do formulário desconhecido (o formulário foi lido e preenchido até o fim).
  */
 async function updateSiteAfter(db: Db, site: ApplySiteId, result: EngineResult, now: number): Promise<void> {
   if (result.status === 'submitted') {
     await updateSiteState(db, site, { consecutiveFailures: 0, consecutiveRejections: 0, humanTimeouts: 0 });
+    return;
+  }
+  if (result.status === 'dry_run_ready') {
+    await updateSiteState(db, site, { consecutiveFailures: 0 });
     return;
   }
   if (result.status !== 'needs_human') return;

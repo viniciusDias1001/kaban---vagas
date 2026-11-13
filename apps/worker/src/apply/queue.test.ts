@@ -585,6 +585,14 @@ describe('the state of a site', () => {
     expect(rows.filter((r) => r.status === 'queued')).toHaveLength(1);
   });
 
+  it('a finished rehearsal resets the unknown-layout streak, and leaves the after-click one', async () => {
+    await updateSiteState(db, 'fake', { consecutiveFailures: 2, consecutiveRejections: 2 });
+    const { id: jobId } = await candidate();
+    await runUntilIdle(queue({ mode: 'dry_run' }));
+    expect((await applicationForJob(db, jobId))!.status).toBe('dry_run_ready');
+    expect(await siteState(db, 'fake')).toMatchObject({ paused: false, consecutiveFailures: 0, consecutiveRejections: 2 });
+  });
+
   it('pauses a site at once on a restriction page', async () => {
     const { id: jobId } = await candidate({ variant: 'restricted' });
     await runUntilIdle(queue({ mode: 'real' }));
