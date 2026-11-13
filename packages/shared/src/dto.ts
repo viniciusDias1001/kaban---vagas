@@ -2,7 +2,7 @@ import type { ApplicationStatus } from './apply-constants';
 import type { Column, Level } from './constants';
 import type { ProfileInput } from './schemas';
 
-export type Actor = 'ia' | 'humano' | 'sistema';
+export type Actor = 'ia' | 'humano' | 'sistema' | 'email';
 
 export interface JobDto {
   id: number;
