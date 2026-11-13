@@ -9,6 +9,7 @@ import { resetTestDb } from '@kv/db/testing';
 import {
   MailAuthError, MailTransientError, readFakeMailbox, writeFakeMailbox, type Mailbox, type OutgoingMail, type RawMail,
 } from '@kv/mail';
+import { createSettingsService } from '@kv/settings';
 import { recoverSending, resumeForReply, sendNext, type SendDeps } from './send';
 import { CONNECTED_AT, DAY, HOUR, MAIL_NOW, MINUTE, OWNER_ADDRESS, mailTestBed } from './test-helpers';
 
@@ -17,6 +18,7 @@ let bed: Bed;
 let db: Db;
 let dir: string;
 let deps: SendDeps;
+let settings: ReturnType<typeof createSettingsService>;
 let origin: MailMessageRow;
 let jobId: number;
 let replyId: number;
@@ -37,8 +39,9 @@ beforeEach(async () => {
   writeFakeMailbox(dir, { uidValidity: 1, messages: [] });
   await saveMailAccount(db, OWNER_ADDRESS, CONNECTED_AT);
   ids = 0;
+  settings = createSettingsService(db, { env: {} });
   deps = {
-    db, mailbox: bed.mailbox, now: () => MAIL_NOW, log: () => {},
+    db, mailbox: bed.mailbox, now: () => MAIL_NOW, log: () => {}, settings,
     resume: async () => PDF,
     newMessageId: () => `out-${++ids}@kanban-vagas.local`,
   };
@@ -246,6 +249,91 @@ describe('sendNext', () => {
     expect(await openAlerts(db)).toHaveLength(1);
     await sendNext(deps);
     expect(await openAlerts(db)).toEqual([]);
+  });
+
+  /** Um segundo pedido no mesmo fio, um minuto depois do primeiro, com a resposta aprovada depois da primeira. */
+  async function secondRequestInThread(): Promise<number> {
+    const mail = bed.deliver({
+      messageId: 'pedido-2@acme', threadKey: origin.threadKey, from: { address: 'joana@acme.com', name: 'Joana Lima' },
+      subject: 'Re: Pretensão salarial', text: 'Pode mandar o CV?', date: MAIL_NOW - HOUR + MINUTE,
+      inReplyTo: ORIGIN_ID, references: [ORIGIN_ID],
+    });
+    const id = (await insertMailMessage(db, {
+      messageId: mail.messageId, threadKey: origin.threadKey, direction: 'in', uid: mail.uid, fromAddress: mail.from.address,
+      fromName: mail.from.name, toAddress: OWNER_ADDRESS, replyTo: null, subject: mail.subject, sentAt: mail.date, body: mail.text,
+      inReplyTo: ORIGIN_ID, refs: [ORIGIN_ID], autoSubmitted: false, listId: false, backfill: false, jobId, linkedBy: 'auto',
+    }, MAIL_NOW))!;
+    const second = (await createReply(db, {
+      messageId: id, origin: 'facts', items: ['resume'], toAddress: 'joana@acme.com', subject: 'Re: Pretensão salarial',
+      body: 'Segue o currículo.', attachResume: false, state: 'aprovada', approvedBy: 'auto',
+    }, MAIL_NOW + 1))!;
+    return second;
+  }
+
+  it('does not take its own earlier reply in the thread as the owner answering', async () => {
+    const second = await secondRequestInThread();
+    const { mailbox, sends } = mailboxWith({});
+    await sendNext({ ...deps, mailbox });
+    // A cópia em Enviados da primeira resposta é posterior ao segundo pedido.
+    const state = readFakeMailbox(dir);
+    writeFakeMailbox(dir, { ...state, messages: state.messages.map((m) => (m.folder === 'sent' ? { ...m, date: MAIL_NOW } : m)) });
+    await sendNext({ ...deps, mailbox, now: () => MAIL_NOW + MINUTE });
+    expect(sends.map((s) => s.text)).toEqual([BODY, 'Segue o currículo.']);
+    expect(await replyById(db, second)).toMatchObject({ state: 'enviada' });
+  });
+
+  it('hands the reply back when preparing it fails, and the next approved reply still goes out', async () => {
+    await db.update(mailReplies).set({ attachResume: true }).where(eq(mailReplies.id, replyId));
+    const second = await secondRequestInThread();
+    const { mailbox, sends } = mailboxWith({});
+    const resume = async () => { throw new Error('glifo ausente: 🙂'); };
+    expect(await sendNext({ ...deps, mailbox, resume })).toBe(true);
+    expect(sends).toHaveLength(0);
+    expect(await replyById(db, replyId)).toMatchObject({
+      state: 'rascunho', note: 'Não foi possível preparar o envio. Confira a resposta e aprove de novo.', outMessageId: null,
+    });
+    expect(await openAlerts(db)).toMatchObject([{ kind: 'draft', replyId }]);
+    expect(await sendNext({ ...deps, mailbox, resume })).toBe(true);
+    expect(await replyById(db, second)).toMatchObject({ state: 'enviada' });
+  });
+
+  it('still lets a mailbox error through when preparing fails', async () => {
+    const { mailbox } = mailboxWith({ fetchThread: async () => { throw new MailTransientError('caiu'); } });
+    await expect(sendNext({ ...deps, mailbox })).rejects.toThrow('caiu');
+    expect(await replyById(db, replyId)).toMatchObject({ state: 'aprovada' });
+  });
+
+  describe('an automatic reply is checked again before it goes out', () => {
+    const CHANGED = 'As condições do envio automático mudaram. Confira e aprove.';
+    async function expectHandedBack(): Promise<void> {
+      const { mailbox, sends } = mailboxWith({});
+      expect(await sendNext({ ...deps, mailbox })).toBe(true);
+      expect(sends).toHaveLength(0);
+      expect(await replyById(db, replyId)).toMatchObject({ state: 'rascunho', note: CHANGED, approvedBy: null });
+      expect(await openAlerts(db)).toMatchObject([{ kind: 'draft', replyId, payload: { reason: CHANGED } }]);
+    }
+
+    it('when the facts mode is no longer automatic', async () => {
+      await settings.update({ emailFactsMode: 'approve' });
+      await expectHandedBack();
+    });
+
+    it('when the mail is no longer linked to a card', async () => {
+      await db.update(mailMessages).set({ jobId: null }).where(eq(mailMessages.id, origin.id));
+      await expectHandedBack();
+    });
+
+    it('when the address is no longer trusted for the card', async () => {
+      await db.update(mailReplies).set({ toAddress: 'x@acme.phish.io' }).where(eq(mailReplies.id, replyId));
+      await expectHandedBack();
+    });
+
+    it('but a reply the owner approved goes out whatever the mode', async () => {
+      await settings.update({ emailFactsMode: 'off' });
+      await db.update(mailReplies).set({ approvedBy: 'owner', toAddress: 'dados@fora.example' }).where(eq(mailReplies.id, replyId));
+      await sendNext(deps);
+      expect(await replyById(db, replyId)).toMatchObject({ state: 'enviada' });
+    });
   });
 });
 

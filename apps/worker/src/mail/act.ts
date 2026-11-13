@@ -177,7 +177,7 @@ async function jobInfo(db: Db, jobId: number): Promise<JobInfo | null> {
  * Os endereços que já apareceram no fio antes desta mensagem: quem escreveu ao dono e para quem o dono (ou o app)
  * escreveu. O `Reply-To` de uma mensagem anterior não entra: é o campo que um e-mail forjado usaria.
  */
-async function earlierThreadAddresses(db: Db, mail: MailMessageRow): Promise<string[]> {
+export async function earlierThreadAddresses(db: Db, mail: MailMessageRow): Promise<string[]> {
   const before = (await threadMessages(db, mail.threadKey)).filter(
     (m) => m.id !== mail.id && (m.sentAt < mail.sentAt || (m.sentAt === mail.sentAt && m.id < mail.id)),
   );
