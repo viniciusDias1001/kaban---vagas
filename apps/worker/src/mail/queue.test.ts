@@ -6,7 +6,7 @@ import {
   replyById, saveMailAccount, saveProfile, updateMailAccount, type Db,
 } from '@kv/db';
 import { resetTestDb } from '@kv/db/testing';
-import { MailTransientError, createFakeMailbox, readFakeMailbox, writeFakeMailbox, type Mailbox } from '@kv/mail';
+import { MailAuthError, MailTransientError, createFakeMailbox, readFakeMailbox, writeFakeMailbox, type Mailbox } from '@kv/mail';
 import { createSettingsService, type SettingsService } from '@kv/settings';
 import { MAIL_LIMITS } from '@kv/shared';
 import { eq } from 'drizzle-orm';
@@ -187,6 +187,33 @@ describe('createMailQueue', () => {
     expect((await step(queue)).read).toBe(true);
   });
 
+  it('still works between reads when every tick has a read due (read interval shorter than the timer)', async () => {
+    deliverSalaryRequest();
+    const queue = makeQueue({ pollMs: 3_000 });
+    let ticks = 0;
+    while (sentFolder().length === 0 && ticks < 6) {
+      expect((await step(queue)).read).toBe(true); // toda verificação tem leitura vencida
+      clock += 5_000;
+      ticks += 1;
+    }
+    expect(sentFolder()).toHaveLength(1);
+    expect((await db.select().from(mailMessages)).find((m) => m.messageId === 'pedido-1@acme.com')).toMatchObject({ kind: 'pedido' });
+    expect(closes).toBe(opens);
+  });
+
+  it('does no work after a read that paused the mailbox (login refused)', async () => {
+    await insertMailMessage(db, {
+      messageId: 'velha@acme.com', threadKey: 'velha', direction: 'in', uid: null, fromAddress: 'joana@acme.com', fromName: 'Joana',
+      toAddress: OWNER_ADDRESS, replyTo: null, subject: 'Acme', sentAt: MAIL_NOW - HOUR, body: 'Qual a sua pretensão salarial?',
+      inReplyTo: null, refs: [], autoSubmitted: false, listId: false, backfill: false,
+    }, MAIL_NOW);
+    const queue = makeQueue({ openMailbox: opening(() => ({ fetchInbox: async () => { throw new MailAuthError('login recusado'); } })) });
+    expect((await step(queue)).read).toBe(true);
+    expect((await getMailAccount(db))!.paused).toBe(true);
+    expect(aiCalls).toBe(0);
+    expect((await db.select().from(mailMessages))[0]!.kind).toBeNull();
+  });
+
   it('survives a failing unit', async () => {
     deliverSalaryRequest();
     const ai = mailAi();
@@ -199,13 +226,14 @@ describe('createMailQueue', () => {
       },
     };
     const queue = makeQueue({ ai: flaky });
-    await step(queue); // leitura
-    await expect(queue.tick()).resolves.toEqual({ read: false, worked: true });
+    // A leitura e, na mesma rodada, a classificação, que falha.
+    await expect(queue.tick()).resolves.toEqual({ read: true, worked: false });
     await queue.idle();
     expect(logs.some((l) => l.includes('falha inesperada'))).toBe(true);
     const [row] = await db.select().from(mailMessages);
     expect(row!.kind).toBeNull();
-    await step(queue);
+    await expect(queue.tick()).resolves.toEqual({ read: false, worked: true });
+    await queue.idle();
     expect((await db.select().from(mailMessages))[0]!.kind).toBe('pedido');
   });
 

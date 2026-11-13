@@ -26,9 +26,10 @@ export interface MailQueueDeps {
 
 export interface MailQueue {
   /**
-   * Uma verificação: no máximo uma unidade de trabalho, sem esperar por ela. `read`: começou uma leitura da caixa;
-   * `worked`: começou a procura da próxima unidade de trabalho (promover, classificar, agir, fechar a primeira leitura,
-   * enviar). Nada começa com uma unidade ainda em andamento.
+   * Uma verificação: no máximo uma leitura e uma unidade de trabalho, sem esperar por elas. `read`: começou uma rodada com
+   * leitura da caixa, que depois segue para a próxima unidade de trabalho; `worked`: começou uma rodada sem leitura, só a
+   * procura da próxima unidade (promover, classificar, agir, fechar a primeira leitura, enviar). Nada começa com uma
+   * rodada ainda em andamento.
    */
   tick(): Promise<{ read: boolean; worked: boolean }>;
   /** As respostas que ficaram em `enviando` são conferidas em Enviados (se a caixa é usável). Um erro sobe. */
@@ -44,7 +45,8 @@ const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 /**
  * A cada verificação, nada roda fora de host local, sem caixa conectada, com o e-mail desligado ou com a caixa pausada.
  * Fora disso: a cada `pollMs` (e logo na primeira verificação) uma leitura (`ingestInbox`), repetida na verificação
- * seguinte enquanto vier lote cheio; entre leituras, uma unidade por verificação, a primeira que tiver o que fazer nesta
+ * seguinte enquanto vier lote cheio; depois da leitura, na mesma rodada, e nas verificações entre leituras, uma unidade
+ * de trabalho por rodada, a primeira que tiver o que fazer nesta
  * ordem: promover um ignorado marcado pelo dono, classificar, agir, fechar a primeira leitura (só depois de uma leitura que
  * não deixou nada para trás), recuperar um envio interrompido, enviar. Uma leitura que falha (de qualquer jeito) faz a
  * próxima esperar `pollMs`. Um provedor de IA fora do ar suspende a classificação até a próxima leitura. O erro de uma
@@ -158,13 +160,24 @@ export function createMailQueue(deps: MailQueueDeps): MailQueue {
     inFlight = done;
   }
 
+  /**
+   * Uma rodada com leitura: a leitura e, em seguida, a unidade de trabalho de sempre. Com a leitura mais curta que o timer
+   * (a caixa falsa lê a cada 3 s), toda verificação tem leitura vencida, e a leitura sozinha deixaria o trabalho parado.
+   * A leitura pode pausar a caixa (login recusado): as regras são conferidas de novo antes da unidade.
+   */
+  async function readThenWork(): Promise<boolean> {
+    await read();
+    if (!stopped && (await usable())) await workOnce();
+    return true;
+  }
+
   async function check(): Promise<{ read: boolean; worked: boolean }> {
     const result = { read: false, worked: false };
     // `stop` pode chegar enquanto `usable` espera o banco: conferido de novo antes de começar a unidade.
     if (!(await usable()) || stopped) return result;
     if (lastRead === null || more || now() - lastRead >= pollMs) {
       result.read = true;
-      start(read);
+      start(readThenWork);
     } else {
       result.worked = true;
       start(workOnce);
