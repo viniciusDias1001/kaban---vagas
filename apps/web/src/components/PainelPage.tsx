@@ -343,7 +343,7 @@ function Loading() {
   );
 }
 
-export default function PainelPage() {
+export default function PainelPage({ onOpenJob }: { onOpenJob: (jobId: number) => void }) {
   const [period, setPeriod] = useState<DashboardPeriod>(loadPeriod);
   const periodLabelId = useId();
   const dashboard = useDashboard(period);
@@ -400,7 +400,7 @@ export default function PainelPage() {
           </div>
         ) : !isError && <Loading />}
 
-        <PainelEmailList period={period} />
+        <PainelEmailList period={period} onOpenJob={onOpenJob} />
       </div>
     </div>
   );

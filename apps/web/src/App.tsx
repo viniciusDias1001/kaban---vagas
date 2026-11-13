@@ -196,7 +196,7 @@ export function App() {
           {view === 'quadro' && <Board onOpen={setOpenJob} onShowNeedsHuman={showNeedsHuman} />}
           <Suspense fallback={null}>
             {view === 'candidaturas' && <ApplicationsPage initialFilter={applicationsFilter} onOpenJob={setOpenJob} />}
-            {view === 'painel' && <PainelPage />}
+            {view === 'painel' && <PainelPage onOpenJob={setOpenJob} />}
             {view === 'perfis' && <ProfilesPage onRunQueued={catchUp} />}
             {view === 'fontes' && <HealthPanel />}
             {view === 'perfil' && <MyProfilePage onOpenSettings={openSettings} />}

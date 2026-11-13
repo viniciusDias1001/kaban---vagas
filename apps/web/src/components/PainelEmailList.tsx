@@ -1,6 +1,6 @@
 import { ArrowDownLeft, ArrowUpRight, Inbox, RotateCw, X } from 'lucide-react';
 import { motion, useReducedMotion } from 'motion/react';
-import { lazy, Suspense, useId, useMemo, useState, type KeyboardEvent } from 'react';
+import { useId, useMemo, useState, type KeyboardEvent } from 'react';
 import {
   EMAIL_KINDS, EMAIL_KIND_LABELS, periodSince, type DashboardPeriod, type EmailKind, type MailMessageDto, type MailReplyDto,
 } from '@kv/shared/client';
@@ -19,8 +19,6 @@ import { Sheet, SheetClose, SheetContent, SheetTitle } from './ui/sheet';
 import { Skeleton } from './ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 
-const JobDrawer = lazy(() => import('./JobDrawer').then((m) => ({ default: m.JobDrawer })));
-
 type KindFilter = 'all' | EmailKind;
 
 const KIND_OPTIONS: { value: KindFilter; label: string }[] = [
@@ -32,7 +30,10 @@ const KIND_TONE: Record<EmailKind, 'neutral' | 'accent' | 'ok' | 'warn' | 'bad'>
   recebimento: 'neutral', reprovacao: 'bad', entrevista: 'accent', oferta: 'ok', pedido: 'warn', outro: 'neutral',
 };
 
-const dateFmt = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit' });
+const dayFmt = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit' });
+const dayYearFmt = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' });
+/** "13/11"; com o ano ("13/11/25") quando o e-mail não é do ano corrente. */
+const dateFmt = { format: (ms: number) => ((new Date(ms).getFullYear() === new Date().getFullYear() ? dayFmt : dayYearFmt).format(ms)) };
 const dateTimeFmt = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
 
 /** O que a linha mostra como texto: o resumo; nos enviados (e sem resumo), o assunto. */
@@ -43,8 +44,12 @@ function KindBadge({ m }: { m: MailMessageDto }) {
   return m.kind ? <Badge tone={KIND_TONE[m.kind]}>{EMAIL_KIND_LABELS[m.kind]}</Badge> : <Badge tone="outline">Sem tipo</Badge>;
 }
 
-function Actions({ m }: { m: MailMessageDto }) {
-  const actions = mailActions(m);
+/** Na conversa, o bloco da resposta já diz o estado dela (a enviada aparece como e-mail do fio, sem dizer quem a aprovou): a linha do app fica só com o resto. */
+const REPLY_ACTIONS = new Set(['rascunho esperando você', 'resposta descartada', 'envio falhou']);
+const sheetActions = (m: MailMessageDto): string[] => mailActions(m).filter((a) => !REPLY_ACTIONS.has(a));
+
+function Actions({ m, only }: { m: MailMessageDto; only?: string[] }) {
+  const actions = only ?? mailActions(m);
   if (actions.length === 0) return <span aria-label="Nada" className="text-faint">-</span>;
   return (
     <ul className="space-y-0.5 text-[13px] text-ink-2">
@@ -208,10 +213,10 @@ function MailSheet({ mail, open, onClose, onOpenJob }: {
               </SheetClose>
             </header>
             <div className="flex-1 space-y-4 overflow-y-auto p-5">
-              {mailActions(mail).length > 0 && (
+              {sheetActions(mail).length > 0 && (
                 <div>
                   <p className={EYEBROW}>O que o app fez</p>
-                  <div className="mt-1.5"><Actions m={mail} /></div>
+                  <div className="mt-1.5"><Actions m={mail} only={sheetActions(mail)} /></div>
                 </div>
               )}
               {mail.jobId === null ? <div className="space-y-3"><Bubble m={mail} /></div> : <JobThread mail={mail} jobId={mail.jobId} />}
@@ -239,12 +244,11 @@ function Loading() {
 }
 
 /** A lista dos e-mails de vaga do período, recebidos e enviados, do mais novo ao mais antigo; clicar abre a conversa. */
-export function PainelEmailList({ period }: { period: DashboardPeriod }) {
+export function PainelEmailList({ period, onOpenJob }: { period: DashboardPeriod; onOpenJob: (jobId: number) => void }) {
   const [kind, setKind] = useState<KindFilter>('all');
   const [unmatched, setUnmatched] = useState(false);
   const [selected, setSelected] = useState<MailMessageDto | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
-  const [jobId, setJobId] = useState<number | null>(null);
   const narrow = useMediaQuery('(max-width: 767px)');
   const reduced = useReducedMotion();
   const titleId = useId();
@@ -297,11 +301,8 @@ export function PainelEmailList({ period }: { period: DashboardPeriod }) {
 
       <MailSheet
         mail={selected} open={sheetOpen} onClose={() => setSheetOpen(false)}
-        onOpenJob={(id) => { setSheetOpen(false); setJobId(id); }}
+        onOpenJob={(id) => { setSheetOpen(false); onOpenJob(id); }}
       />
-      <Suspense fallback={null}>
-        {jobId !== null && <JobDrawer id={jobId} onClose={() => setJobId(null)} onOpenSettings={() => setJobId(null)} />}
-      </Suspense>
     </motion.section>
   );
 }
