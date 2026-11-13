@@ -5,11 +5,15 @@
  *
  *   pnpm resume:preview
  *   pnpm resume:preview -- --out "<pasta fora do repositório>"
+ *
+ * A raiz do repositório vem do lugar deste arquivo, não da pasta em que o comando roda: um `--out`
+ * relativo vale a partir dessa raiz, o `.env` é lido dela, e nada é gravado dentro dela.
  */
 import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { resolveTailored } from '../packages/ai/src/index';
 import { closeDb, createDb, profileFor } from '../packages/db/src/index';
 import { PREVIEW_FILES, ResumePdfError, previewDir, renderResumePdf } from '../packages/resume/src/index';
@@ -23,7 +27,9 @@ if (outIndex >= 0 && !requested) {
   process.exit(1);
 }
 
-if (existsSync('.env')) process.loadEnvFile('.env');
+const repoRoot = fileURLToPath(new URL('..', import.meta.url));
+const envFile = join(repoRoot, '.env');
+if (existsSync(envFile)) process.loadEnvFile(envFile);
 if (!process.env.DATABASE_URL) {
   console.error('DATABASE_URL não definida. Copie .env.example para .env e ajuste a URL do Postgres.');
   process.exit(1);
@@ -31,7 +37,7 @@ if (!process.env.DATABASE_URL) {
 
 let dir: string;
 try {
-  dir = previewDir(requested, process.cwd(), tmpdir());
+  dir = previewDir(requested, repoRoot, tmpdir());
 } catch (e) {
   console.error(e instanceof Error ? e.message : String(e));
   process.exit(1);

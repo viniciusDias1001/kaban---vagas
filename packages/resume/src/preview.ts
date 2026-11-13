@@ -4,9 +4,12 @@ import type { ResumeLang } from '@kv/shared';
 /** Nome do arquivo gravado pela prévia, por idioma. */
 export const PREVIEW_FILES: Record<ResumeLang, string> = { 'pt-BR': 'curriculo-pt-BR.pdf', en: 'resume-en.pdf' };
 
-/** Pasta de saída: `requested`, ou `<tmp>/kanban-vagas-preview`. Lança se o resultado cair dentro de `repoRoot`. */
+/**
+ * Pasta de saída: `requested` (um caminho relativo vale a partir de `repoRoot`), ou `<tmp>/kanban-vagas-preview`.
+ * Lança se o resultado cair dentro de `repoRoot`.
+ */
 export function previewDir(requested: string | undefined, repoRoot: string, tmp: string): string {
-  const dir = resolve(requested ?? resolve(tmp, 'kanban-vagas-preview'));
+  const dir = requested === undefined ? resolve(tmp, 'kanban-vagas-preview') : resolve(repoRoot, requested);
   const rel = relative(resolve(repoRoot), dir);
   // `relative` também resolve a diferença de caixa no Windows; outra unidade devolve um caminho absoluto.
   const inside = rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));

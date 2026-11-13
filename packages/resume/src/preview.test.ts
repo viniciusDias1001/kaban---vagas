@@ -12,6 +12,16 @@ describe('previewDir', () => {
     for (const inside of ['/repo', '/repo/out', '/repo/docs/../out']) expect(() => previewDir(inside, '/repo', '/tmp')).toThrow(/fora do repositório/);
     expect(() => previewDir(undefined, '/repo', '/repo/tmp')).toThrow(/fora do repositório/);
   });
+  it('resolves a relative folder against the repository root, not the working directory', () => {
+    expect(() => previewDir('out', '/repo', '/tmp')).toThrow(/fora do repositório/);
+    expect(() => previewDir('../repo/out', '/repo', '/tmp')).toThrow(/fora do repositório/);
+    expect(previewDir('../saida', '/repo', '/tmp')).toBe(resolve('/repo', '../saida'));
+  });
+  it.runIf(process.platform === 'win32')('ignores the case of the drive letter and of the folder names on Windows', () => {
+    expect(() => previewDir('c:\\repo\\out', 'C:\\Repo', 'D:\\tmp')).toThrow(/fora do repositório/);
+    expect(() => previewDir('C:\\REPO', 'c:\\repo', 'D:\\tmp')).toThrow(/fora do repositório/);
+    expect(previewDir('d:\\saida', 'C:\\repo', 'D:\\tmp')).toBe(resolve('d:\\saida')); // outra unidade
+  });
   it('names one file per language', () => {
     expect(PREVIEW_FILES).toEqual({ 'pt-BR': 'curriculo-pt-BR.pdf', en: 'resume-en.pdf' });
   });
