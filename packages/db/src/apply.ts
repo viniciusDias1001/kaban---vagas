@@ -97,7 +97,7 @@ export async function nextQueuedApplication(
 ): Promise<ApplicationRow | null> {
   const conditions = [
     eq(applications.status, 'queued'),
-    sql`(${applications.runAfter} is null or ${applications.runAfter} <= ${now})`,
+    sql`(${applications.runAfter} is null or ${applications.runAfter} <= ${sql.param(now, applications.runAfter)})`,
   ];
   if (opts.excludeSites.length > 0) conditions.push(sql`${applications.site} not in ${opts.excludeSites}`);
   const [row] = await db
@@ -182,8 +182,8 @@ export async function applyCountsSince(db: Db, since: number): Promise<ApplyCoun
   const rows = await db
     .select({
       site: applications.site,
-      forms: sql<number>`count(*) filter (where ${applications.formOpenedAt} >= ${since})::int`.mapWith(Number),
-      views: sql<number>`count(*) filter (where ${applications.viewedAt} >= ${since})::int`.mapWith(Number),
+      forms: sql<number>`count(*) filter (where ${applications.formOpenedAt} >= ${sql.param(since, applications.formOpenedAt)})::int`.mapWith(Number),
+      views: sql<number>`count(*) filter (where ${applications.viewedAt} >= ${sql.param(since, applications.viewedAt)})::int`.mapWith(Number),
     })
     .from(applications)
     .groupBy(applications.site);
