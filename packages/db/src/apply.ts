@@ -3,7 +3,7 @@ import type {
   ApplicationDto, ApplicationEventDto, ApplicationListItemDto, ApplicationReason, ApplicationStatus, ApplyMode, ApplySiteId,
   ApplyTrigger,
 } from '@kv/shared';
-import { APPLY_SITE_IDS } from '@kv/shared';
+import { APPLY_SITE_IDS, isAppliedOrLater } from '@kv/shared';
 import type { Db } from './client';
 import { applicationEvents as eventsTable, applications, applyAnswers, applyCommands, applySites, candidateProfiles, jobAi, jobs } from './schema';
 
@@ -291,10 +291,12 @@ export async function recoverApplications(db: Db, now: number = Date.now()): Pro
 /**
  * O dono moveu o card: `queued`, `needs_human` e `dry_run_ready` viram `cancelled` na hora; `preparing`, `filling`,
  * `waiting_human` e `submitting` ganham `cancel_requested` (o worker para). `submitted`, `skipped`, `failed` e `cancelled`
- * ficam como estão. Devolve se havia o que cancelar.
+ * ficam como estão. Devolve se havia o que cancelar. Trava a vaga e depois a candidatura.
  */
 export async function requestCancel(db: Db, jobId: number, now: number = Date.now()): Promise<boolean> {
   return db.transaction(async (tx) => {
+    const [job] = await tx.select({ id: jobs.id }).from(jobs).where(eq(jobs.id, jobId)).for('update');
+    if (!job) return false;
     const [row] = await tx.select().from(applications).where(eq(applications.jobId, jobId)).for('update');
     if (!row) return false;
     if (row.status === 'queued' || row.status === 'needs_human' || row.status === 'dry_run_ready') {
@@ -397,6 +399,60 @@ export async function lockApplication(db: Db, id: number): Promise<ApplicationRo
   return row ?? null;
 }
 
+export type JobRow = typeof jobs.$inferSelect;
+
+/**
+ * A vaga e a candidatura travadas, nesta ordem (`db` é a transação): a ordem dos locks é uma só em todo lugar, a vaga
+ * primeiro (a rota que move o card trava a vaga e depois a candidatura). Null se a candidatura não existe.
+ */
+export async function lockApplicationWithJob(db: Db, id: number): Promise<{ row: ApplicationRow; job: JobRow } | null> {
+  const [ref] = await db.select({ jobId: applications.jobId }).from(applications).where(eq(applications.id, id));
+  if (!ref) return null;
+  const [job] = await db.select().from(jobs).where(eq(jobs.id, ref.jobId)).for('update');
+  if (!job) return null;
+  const row = await lockApplication(db, id);
+  return row ? { row, job } : null;
+}
+
+/** O dono já se candidatou a esta vaga: o card está em Aplicada ou depois, ou `applied_by` está preenchido. */
+export function jobAlreadyApplied(job: Pick<JobRow, 'column' | 'appliedBy'>): boolean {
+  return isAppliedOrLater(job.column) || job.appliedBy !== null;
+}
+
+const APPLIED_BY_OWNER_MESSAGE = 'Você marcou esta vaga como aplicada.';
+
+/**
+ * O dono moveu o card para Aplicada ou depois (ou disse "Já apliquei por conta própria"): uma candidatura em `queued`,
+ * `needs_human` (qualquer motivo, `confirm_submission` também) ou `dry_run_ready` vira `skipped` com `already_applied`, sem
+ * pendências, e a marca "precisa de você" do card sai; uma em andamento só ganha o pedido de cancelamento. As demais ficam
+ * como estão. Trava a vaga e depois a candidatura. Devolve se havia o que mudar.
+ */
+export async function settleAppliedByOwner(db: Db, jobId: number, now: number = Date.now()): Promise<boolean> {
+  return db.transaction(async (tx) => {
+    const [job] = await tx.select({ id: jobs.id }).from(jobs).where(eq(jobs.id, jobId)).for('update');
+    if (!job) return false;
+    const [row] = await tx.select().from(applications).where(eq(applications.jobId, jobId)).for('update');
+    if (!row) return false;
+    if (row.status === 'queued' || row.status === 'needs_human' || row.status === 'dry_run_ready') {
+      await writeTransition(
+        tx, row,
+        {
+          status: 'skipped', reason: 'already_applied', message: APPLIED_BY_OWNER_MESSAGE,
+          set: { pendingQuestions: [], cancelRequested: false, waitingGate: null, runAfter: null },
+        },
+        now,
+      );
+      await tx.update(jobs).set({ needsHuman: false, needsHumanReason: null }).where(eq(jobs.id, jobId));
+      return true;
+    }
+    if ((RUNNING_STATUSES as readonly string[]).includes(row.status)) {
+      await tx.update(applications).set({ cancelRequested: true }).where(eq(applications.id, row.id));
+      return true;
+    }
+    return false;
+  });
+}
+
 /** Quantas candidaturas esperam na fila, quantas esperam o dono e quantas estão em andamento. */
 export async function applicationQueueCounts(db: Db): Promise<{ queued: number; needsHuman: number; running: number }> {
   const [row] = await db
@@ -423,19 +479,23 @@ export async function waitingApplication(db: Db): Promise<{ applicationId: numbe
   return row ? { ...row, gate: row.gate ?? 'unknown' } : null;
 }
 
-export type RetryOutcome = 'queued' | 'not_found' | 'sent' | 'in_progress' | 'confirm_submission' | 'not_retryable';
+export type RetryOutcome = 'queued' | 'not_found' | 'sent' | 'in_progress' | 'already_applied' | 'confirm_submission' | 'not_retryable';
 
 /**
  * Botão "Tentar de novo": `needs_human`, `failed`, `skipped` e `cancelled` voltam a `queued` (sem espera e sem tentativas
  * gastas; uma pulada pela conferência, `below_min_score` ou `not_eligible`, volta como manual). Nunca copia nada para `approved_answers`. `submitted` é recusada (`sent`), uma linha em andamento também
- * (`in_progress`), e uma parada em `confirm_submission` nunca volta por botão: depois do clique ninguém sabe se o site recebeu.
+ * (`in_progress`), uma vaga que o dono já aplicou (`already_applied`: card em Aplicada ou depois, ou `applied_by`
+ * preenchido) também, e uma parada em `confirm_submission` nunca volta por botão: depois do clique ninguém sabe se o site
+ * recebeu. Trava a vaga e depois a candidatura.
  */
 export async function retryApplication(db: Db, id: number, now: number = Date.now()): Promise<RetryOutcome> {
   return db.transaction(async (tx) => {
-    const row = await lockApplication(tx, id);
-    if (!row) return 'not_found';
+    const locked = await lockApplicationWithJob(tx, id);
+    if (!locked) return 'not_found';
+    const { row, job } = locked;
     if (row.status === 'submitted') return 'sent';
     if ((RUNNING_STATUSES as readonly string[]).includes(row.status)) return 'in_progress';
+    if (jobAlreadyApplied(job)) return 'already_applied';
     if (row.status === 'needs_human' && row.reason === 'confirm_submission') return 'confirm_submission';
     if (!['needs_human', 'failed', 'skipped', 'cancelled'].includes(row.status)) return 'not_retryable';
     // Tentar de novo uma vaga que a conferência pulou é a mesma decisão de "Aplicar com IA": volta como manual.
@@ -470,12 +530,19 @@ async function approveRow(tx: Db, row: ApplicationRow, now: number): Promise<voi
   });
 }
 
-/** "Enviar de verdade": só de `dry_run_ready`. As respostas do ensaio viram `approved_answers`. */
-export async function sendRehearsal(db: Db, id: number, now: number = Date.now()): Promise<'queued' | 'not_found' | 'not_rehearsal'> {
+/**
+ * "Enviar de verdade": só de `dry_run_ready` e de uma vaga que o dono ainda não aplicou (`already_applied`). As respostas
+ * do ensaio viram `approved_answers`. Trava a vaga e depois a candidatura.
+ */
+export async function sendRehearsal(
+  db: Db, id: number, now: number = Date.now(),
+): Promise<'queued' | 'not_found' | 'not_rehearsal' | 'already_applied'> {
   return db.transaction(async (tx) => {
-    const row = await lockApplication(tx, id);
-    if (!row) return 'not_found';
+    const locked = await lockApplicationWithJob(tx, id);
+    if (!locked) return 'not_found';
+    const { row, job } = locked;
     if (row.status !== 'dry_run_ready') return 'not_rehearsal';
+    if (jobAlreadyApplied(job)) return 'already_applied';
     await approveRow(tx, row, now);
     return 'queued';
   });
@@ -500,12 +567,24 @@ export async function sendAllRehearsals(db: Db, now: number = Date.now()): Promi
  * desligada: uma resposta nova pode servir a elas. Mantêm `approved_answers` e `mode`. Devolve os ids.
  */
 export async function requeueQuestionWaits(db: Db, exceptId: number, now: number = Date.now()): Promise<number[]> {
+  const waiting = and(eq(applications.status, 'needs_human'), eq(applications.reason, 'question'), sql`${applications.id} <> ${exceptId}`);
+  const candidates = await db.select({ jobId: applications.jobId }).from(applications).where(waiting);
+  if (candidates.length === 0) return [];
+  // A vaga primeiro, depois a candidatura (a ordem de todo lugar). Uma vaga ou linha que outra ação do dono já travou
+  // (outro PUT de respostas, que recoloca a linha dele na fila; uma mudança de card, que a cancela) fica de fora:
+  // pular evita o impasse entre as duas.
+  const lockedJobs = await db
+    .select({ id: jobs.id })
+    .from(jobs)
+    .where(inArray(jobs.id, candidates.map((c) => c.jobId)))
+    .orderBy(asc(jobs.id))
+    .for('update', { skipLocked: true });
+  if (lockedJobs.length === 0) return [];
   const rows = await db
     .select()
     .from(applications)
-    .where(and(eq(applications.status, 'needs_human'), eq(applications.reason, 'question'), sql`${applications.id} <> ${exceptId}`))
+    .where(and(waiting, inArray(applications.jobId, lockedJobs.map((j) => j.id))))
     .orderBy(asc(applications.id))
-    // Uma linha que outro PUT de respostas já travou é recolocada na fila por ele: pular evita o impasse entre os dois.
     .for('update', { skipLocked: true });
   for (const row of rows) {
     await writeTransition(db, row, { status: 'queued', message: 'Uma resposta nova foi salva: voltou para a fila.', set: { runAfter: null, cancelRequested: false } }, now);

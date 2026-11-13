@@ -2,7 +2,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
 import {
   ACTIVE_APPLICATION_STATUSES, APPLY_DEFAULTS, APPLY_TIMING, applyAvailability, isActiveApplication,
   normalizeQuestionText, bankBoolean, bankList, bankText, SHOT_KINDS, PendingAnswersBodySchema, ApplyAnswerInputSchema, type AnswerValue, type ApplicationStatus,
-  type PendingQuestion,
+  type PendingQuestion, COLUMNS, isAppliedOrLater, type CannotApplyReason, type JobApplicationDto,
 } from './index';
 
 describe('apply constants', () => {
@@ -40,6 +40,19 @@ describe('apply constants', () => {
     expect(APPLY_DEFAULTS.minScore).toBe(70);
     expect(APPLY_DEFAULTS.dailyCaps).toMatchObject({ linkedin: 10, greenhouse: 15, lever: 15, total: 30, linkedinViews: 30 });
     expect(APPLY_TIMING.humanWaitMs).toBe(600_000);
+  });
+});
+
+describe('already applied', () => {
+  it('counts Aplicada and every column after it as applied', () => {
+    expect(COLUMNS.filter(isAppliedOrLater)).toEqual(['aplicada', 'entrevista', 'oferta', 'arquivada']);
+  });
+  it('describes the application of a job and why it cannot be applied to', () => {
+    const dto: JobApplicationDto = { application: null, site: null, canApply: false, cannotApplyReason: 'unsupported_site' };
+    expectTypeOf(dto.cannotApplyReason).toEqualTypeOf<CannotApplyReason | null>();
+    expectTypeOf<CannotApplyReason>().toEqualTypeOf<
+      'unsupported_site' | 'already_applied' | 'blocked' | 'apply_unavailable' | 'apply_disabled' | 'already_exists'
+    >();
   });
 });
 

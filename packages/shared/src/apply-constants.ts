@@ -123,6 +123,10 @@ export interface ApplicationDto {
   attempts: number; createdAt: number; startedAt: number | null; submittedAt: number | null; finishedAt: number | null;
   events: ApplicationEventDto[];
 }
+/** Por que "Aplicar com IA" não pode aparecer para uma vaga (a primeira checagem da rota que falha). */
+export type CannotApplyReason = 'unsupported_site' | 'already_applied' | 'blocked' | 'apply_unavailable' | 'apply_disabled' | 'already_exists';
+/** Resposta de GET /jobs/:id/application: a candidatura (ou null) e se o botão "Aplicar com IA" pode aparecer. */
+export interface JobApplicationDto { application: ApplicationDto | null; site: ApplySiteId | null; canApply: boolean; cannotApplyReason: CannotApplyReason | null }
 export interface ApplicationListItemDto {
   id: number; jobId: number; jobTitle: string; company: string; site: ApplySiteId; status: ApplicationStatus;
   reason: ApplicationReason | null; detail: string | null; mode: ApplyMode; gateScore: number | null;

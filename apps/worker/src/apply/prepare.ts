@@ -1,7 +1,9 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { eq } from 'drizzle-orm';
-import { baseProfile, applications, companyFormsSince, jobs, profileFor, updateSiteState, type ApplicationRow, type Db } from '@kv/db';
+import {
+  baseProfile, applications, companyFormsSince, jobAlreadyApplied, jobs, profileFor, updateSiteState, type ApplicationRow, type Db,
+} from '@kv/db';
 import { gateJob, type JobForAi } from '@kv/ai';
 import { decideGate, isBlocked, siteFor, type ApplySite, type ApplyTarget, type BrowserSession } from '@kv/apply';
 import { MAX_DESCRIPTION_CHARS, type DescriptionFetcher } from '@kv/connectors';
@@ -89,6 +91,11 @@ export async function prepare(c: PrepareContext, row: ApplicationRow): Promise<P
 
   const [found] = await db.select().from(jobs).where(eq(jobs.id, row.jobId));
   if (!found) return null; // vaga apagada: a candidatura foi junto
+  // O dono já se candidatou (card em Aplicada ou depois, ou `applied_by`): nada se abre, nem a conferência.
+  if (jobAlreadyApplied(found)) {
+    await settle(db, row.id, { status: 'skipped', reason: 'already_applied', message: 'Você já se candidatou a esta vaga.' }, c.now());
+    return null;
+  }
   const match = siteFor(
     { id: found.id, source: found.source, url: found.url, externalId: found.externalId, company: found.company, title: found.title },
     c.sites,

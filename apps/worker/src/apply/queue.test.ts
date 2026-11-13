@@ -194,6 +194,18 @@ describe('one application', () => {
     expect(await jobRow(jobId)).toMatchObject({ column: 'aplicada', appliedBy: 'humano' });
   });
 
+  it('ends without opening anything an application of a job the owner already applied to', async () => {
+    for (const extra of [{ column: 'entrevista' as const }, { appliedBy: 'humano' as const }]) {
+      const { id: jobId } = await seedJob(db, { version, score: null });
+      await db.update(jobs).set(extra).where(eq(jobs.id, jobId));
+      await createApplication(db, { jobId, site: 'fake', trigger: 'manual', mode: 'real' }, NOON);
+      await runUntilIdle(queue({ mode: 'real' }));
+      expect(await applicationForJob(db, jobId)).toMatchObject({ status: 'skipped', reason: 'already_applied' });
+    }
+    expect(site.calls).toEqual([]);
+    expect(tasks).toEqual([]);
+  });
+
   it('records usage in the apply layer', async () => {
     await candidate();
     await runUntilIdle(queue({ mode: 'real' }));

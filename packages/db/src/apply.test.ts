@@ -7,6 +7,7 @@ import {
   waitingApplication, listApplicationEvents, applicationForJob, applyCandidates, applyCountsSince, companyFormsSince, createApplication,
   deleteApplyData, enqueueApplyCommand, finishApplyCommand, listApplications, nextApplyCommand, nextQueuedApplication,
   recoverApplications, recoverApplyCommands, requestCancel, siteState, toApplicationDto, transitionApplication, updateSiteState,
+  settleAppliedByOwner, lockApplicationWithJob,
 } from './apply';
 import { deleteAllAiData } from './ai';
 import { applications, applyAnswers, applyCommands, candidateProfiles, jobAi, jobs } from './schema';
@@ -433,6 +434,70 @@ describe('sendRehearsal / sendAllRehearsals', () => {
     expect(await applicationForJob(db, two.job.id)).toMatchObject({ status: 'queued', mode: 'real' });
     expect(await applicationForJob(db, other.job.id)).toMatchObject({ status: 'failed', approvedAnswers: [] });
     expect(await sendAllRehearsals(db)).toBe(0);
+  });
+});
+
+describe('a job the owner already applied to', () => {
+  const applied = [{ column: 'aplicada' }, { column: 'arquivada' }, { appliedBy: 'humano' }] as const;
+  const answer = { questionId: 'q', value: 'x', source: 'bank' as const, category: 'profile_fact' as const, basis: [], bankAnswerId: null, label: 'q', help: '', kind: 'text' as const, options: [], required: true };
+
+  it('is never retried', async () => {
+    for (const extra of applied) {
+      const { id, job } = await create();
+      await transitionApplication(db, id, { status: 'cancelled' });
+      await db.update(jobs).set(extra).where(eq(jobs.id, job.id));
+      expect(await retryApplication(db, id)).toBe('already_applied');
+      expect((await applicationForJob(db, job.id))!.status).toBe('cancelled');
+    }
+  });
+
+  it('is never sent, alone or with the others', async () => {
+    for (const extra of applied) {
+      const { id, job } = await create();
+      await transitionApplication(db, id, { status: 'dry_run_ready', set: { answers: [answer] } });
+      await db.update(jobs).set(extra).where(eq(jobs.id, job.id));
+      expect(await sendRehearsal(db, id)).toBe('already_applied');
+      expect((await applicationForJob(db, job.id))!.status).toBe('dry_run_ready');
+    }
+  });
+
+  it('settles a waiting application as applied by the owner, flags a running one and leaves the rest', async () => {
+    const message = 'Você marcou esta vaga como aplicada.';
+    const cases = [
+      { status: 'queued', reason: null }, { status: 'needs_human', reason: 'question' },
+      { status: 'needs_human', reason: 'confirm_submission' }, { status: 'dry_run_ready', reason: null },
+    ] as const;
+    for (const c of cases) {
+      const { id, job } = await create();
+      if (c.status !== 'queued') await transitionApplication(db, id, { status: c.status, reason: c.reason }, 2000);
+      await db.update(jobs).set({ needsHuman: true, needsHumanReason: 'x' }).where(eq(jobs.id, job.id));
+      expect(await settleAppliedByOwner(db, job.id, 3000)).toBe(true);
+      expect(await applicationForJob(db, job.id)).toMatchObject({
+        status: 'skipped', reason: 'already_applied', finishedAt: 3000, pendingQuestions: [], cancelRequested: false,
+      });
+      expect((await listApplicationEvents(db, id)).at(-1)).toEqual({ status: 'skipped', message, at: 3000 });
+      expect((await db.select().from(jobs).where(eq(jobs.id, job.id)))[0]).toMatchObject({ needsHuman: false });
+      await db.update(jobs).set({ column: 'aplicada', appliedBy: 'humano' }).where(eq(jobs.id, job.id)); // o que a rota grava
+      expect(await retryApplication(db, id)).toBe('already_applied');
+    }
+    const running = await create();
+    await transitionApplication(db, running.id, { status: 'submitting' }, 2000);
+    expect(await settleAppliedByOwner(db, running.job.id, 3000)).toBe(true);
+    expect(await applicationForJob(db, running.job.id)).toMatchObject({ status: 'submitting', cancelRequested: true });
+    const failed = await create();
+    await transitionApplication(db, failed.id, { status: 'failed' }, 2000);
+    expect(await settleAppliedByOwner(db, failed.job.id, 3000)).toBe(false);
+    expect((await applicationForJob(db, failed.job.id))!.status).toBe('failed');
+    expect(await settleAppliedByOwner(db, 123_456, 3000)).toBe(false);
+  });
+
+  it('locks the job row before the application', async () => {
+    const { id, job } = await create();
+    await db.transaction(async (tx) => {
+      const locked = await lockApplicationWithJob(tx, id);
+      expect(locked).toMatchObject({ row: { id }, job: { id: job.id } });
+    });
+    expect(await db.transaction((tx) => lockApplicationWithJob(tx, 999_999))).toBeNull();
   });
 });
 
