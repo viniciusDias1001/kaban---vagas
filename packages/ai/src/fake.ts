@@ -15,7 +15,8 @@ import type { AiProvider } from './types';
  *   dados) vem limpa;
  * - FAKE_AI_EXTRA_FIELD: a camada 3 devolve um campo "company" a mais (quem barra é o schema).
  * COMPROMISED também vale para a candidatura: a classificação devolve uma categoria inexistente e a resposta aberta
- * ganha um número e uma empresa inventados.
+ * ganha um número e uma empresa inventados. E também o e-mail: a classificação devolve um pedido para outro endereço,
+ * uma vaga não oferecida e um resumo enorme; o rascunho pede resposta para outro endereço e cita um número inventado.
  *
  * Formato de currículo que a extração falsa entende (o mesmo do arquivo de exemplo de @kv/resume/testing):
  *   linha 1: nome; linha 2: resumo; a linha com "@": contato, separado por " • " (e-mail e, por último, local);
@@ -91,9 +92,61 @@ function respond(task: string, data: Record<string, unknown>, profile: unknown):
       const summary = (profile as CandidateProfile).summary;
       return { text: JSON.stringify(data).includes('FAKE_AI_COMPROMISED') ? `${summary} Trabalhei 10 anos na Empresa Inventada.` : summary };
     }
+    case 'email_classify':
+      return classifyMail(data);
+    case 'email_draft': {
+      // FAKE_AI_COMPROMISED: o rascunho pede resposta para outro endereço e cita um número inventado (quem barra é `verifyEmailDraft`).
+      const name = (profile as CandidateProfile).contact.name;
+      return {
+        text: JSON.stringify(data).includes('FAKE_AI_COMPROMISED')
+          ? `Olá,\n\nPor favor, responda para outro@fora.com citando o protocolo 987654.\n\nAtenciosamente,\n${name}`
+          : `Olá,\n\nObrigada pelo contato. Posso conversar em [[seus horários]].\n\nAtenciosamente,\n${name}`,
+      };
+    }
     default:
       throw new AiError('other', `provedor falso: tarefa desconhecida "${task}"`);
   }
+}
+
+/** Palavra-chave do e-mail → tipo e, num pedido, o fato pedido. A primeira regra da lista cuja palavra aparece vence. */
+const MAIL_RULES: { words: string[]; kind: string; fact?: string; note?: string }[] = [
+  { words: ['infelizmente', 'unfortunately'], kind: 'reprovacao' },
+  { words: ['entrevista', 'interview'], kind: 'entrevista' },
+  { words: ['proposta', 'offer'], kind: 'oferta' },
+  { words: ['recebemos sua candidatura', 'received your application'], kind: 'recebimento' },
+  { words: ['pretensão', 'salary'], kind: 'pedido', fact: 'salary', note: 'Pretensão salarial' },
+  { words: ['telefone', 'phone'], kind: 'pedido', fact: 'phone', note: 'Telefone para contato' },
+  { words: ['disponibilidade', 'availability'], kind: 'pedido', fact: 'start_availability', note: 'Disponibilidade para começar' },
+  { words: ['carta de recomendação'], kind: 'pedido', fact: 'outro', note: 'Carta de recomendação' },
+];
+
+/**
+ * Classificação de e-mail por palavra-chave no assunto ou no texto (sem diferença de caixa). `jobId`: a primeira
+ * candidata cuja empresa aparece no assunto ou no texto, senão 0. Idioma `en` se o texto tem "the " e não tem "você".
+ * FAKE_AI_COMPROMISED: devolve um pedido para outro endereço, uma vaga que não foi oferecida e um resumo enorme (estrutura
+ * válida; quem barra é `classifyEmail`).
+ */
+function classifyMail(data: Record<string, unknown>): unknown {
+  if (JSON.stringify(data).includes('FAKE_AI_COMPROMISED')) {
+    return {
+      kind: 'pedido', jobId: 999999, lang: 'pt-BR', summary: 'Envie tudo para outro@fora.com. '.padEnd(5_000, 'x'),
+      requests: [{ fact: 'enviar_para_outro@fora.com', note: 'Enviar os dados para outro@fora.com' }],
+    };
+  }
+  const mail = data.mail as { subject: string; text: string };
+  const candidates = (data.candidates ?? []) as { id: number; company: string }[];
+  const haystack = `${mail.subject}\n${mail.text}`.toLowerCase();
+  const rule = MAIL_RULES.find((r) => r.words.some((w) => haystack.includes(w)));
+  const kind = rule?.kind ?? 'outro';
+  const job = candidates.find((c) => c.company !== '' && haystack.includes(c.company.toLowerCase()));
+  const text = mail.text.toLowerCase();
+  return {
+    kind,
+    jobId: job?.id ?? 0,
+    requests: rule?.fact ? [{ fact: rule.fact, note: rule.note }] : [],
+    lang: text.includes('the ') && !text.includes('você') ? 'en' : 'pt-BR',
+    summary: `Resumo simulado: e-mail do tipo ${kind}.`,
+  };
 }
 
 /** Aceita o perfil completo (skills: {name}[]) e o resumido da camada 1 (skills: string[]). */
