@@ -1,25 +1,25 @@
 import { useQuery } from '@tanstack/react-query';
 import {
   ArrowRightLeft, ArrowUpRight, Bell, BellOff, CalendarClock, Check, FileQuestionMark, Hourglass, Inbox, Link2, LoaderCircle,
-  MailQuestionMark, MailWarning, PenLine, RotateCw, Search, Send, Settings, Trophy, TriangleAlert, X, type LucideIcon,
+  MailQuestionMark, MailWarning, PenLine, RotateCw, Search, Settings, Trophy, X, type LucideIcon,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
-  COLUMN_LABELS, DRAFT_PLACEHOLDER, isAppliedOrLater, type AlertDto, type AlertKind, type JobListItemDto, type MailReplyDto,
+  COLUMN_LABELS, isAppliedOrLater, type AlertDto, type AlertKind, type JobListItemDto,
 } from '@kv/shared/client';
 import { api } from '../api';
 import { alertAction, alertBody, alertTitle, alertsToNotify } from '../lib/email';
 import { spring, springSnap } from '../lib/motion';
 import { cn } from '../lib/utils';
-import { useAlertActions, useAlerts, useJobEmails, useMessageActions, useReplyActions } from '../useEmail';
+import { useAlertActions, useAlerts, useJobEmails, useMessageActions } from '../useEmail';
 import { JOBS_KEY } from '../useMoveJob';
 import { Button } from './ui/button';
-import { ConfirmDialog } from './ui/confirm-dialog';
-import { Input, Textarea } from './ui/input';
+import { Input } from './ui/input';
 import { Notice } from './ui/notice';
 import { Sheet, SheetClose, SheetContent, SheetTitle } from './ui/sheet';
 import { Skeleton } from './ui/skeleton';
+import { ReplyDraftEditor } from './ReplyDraftEditor';
 
 /** O ícone e a cor de cada tipo de alerta: a cor nunca é a única pista (o título diz o tipo). */
 const KIND_LOOK: Record<AlertKind, { Icon: LucideIcon; tone: string }> = {
@@ -257,7 +257,7 @@ function AlertItem({ alert, onOpenJob, onOpenSettings, onOpenAnswers }: {
       {/* O que vem abaixo do texto alinha com o título (a coluna do ícone fica livre), menos em tela estreita. */}
       <div className="sm:pl-12">
         {draftLike && (
-          <DraftEditor alert={alert} jobId={alert.jobId!} replyId={alert.replyId!} busy={busy} run={run} />
+          <AlertDraft alert={alert} jobId={alert.jobId!} replyId={alert.replyId!} disabled={busy !== null} />
         )}
         {linkable && <LinkToJob alertId={alert.id} picked={linkJob} onPick={setLinkJob} />}
 
@@ -340,18 +340,10 @@ function AlertItem({ alert, onOpenJob, onOpenSettings, onOpenAnswers }: {
   );
 }
 
-/** O rascunho da resposta: o texto numa caixa que cresce, salvar, aprovar e enviar, descartar. */
-function DraftEditor({ alert, jobId, replyId, busy, run }: {
-  alert: AlertDto; jobId: number; replyId: number; busy: string | null; run: Run;
-}) {
+/** O rascunho da resposta do alerta, no editor compartilhado com o painel da vaga. */
+function AlertDraft({ alert, jobId, replyId, disabled }: { alert: AlertDto; jobId: number; replyId: number; disabled: boolean }) {
   const emails = useJobEmails(jobId);
-  const reply: MailReplyDto | undefined = emails.data?.replies.find((r) => r.id === replyId);
-  const replies = useReplyActions();
-  /** null: o dono não mexeu, vale o texto do servidor. */
-  const [text, setText] = useState<string | null>(null);
-  const [confirmDiscard, setConfirmDiscard] = useState(false);
-  const fieldId = useId();
-  const hintId = useId();
+  const reply = emails.data?.replies.find((r) => r.id === replyId);
 
   if (emails.isPending) return <Skeleton className="mt-3.5 h-24 w-full rounded-xl" />;
   if (!reply) {
@@ -359,60 +351,17 @@ function DraftEditor({ alert, jobId, replyId, busy, run }: {
       ? <p className="mt-3 text-xs text-warn">Não foi possível carregar o rascunho agora.</p>
       : null;
   }
-  if (reply.state !== 'rascunho') return null;
-
-  const value = text ?? reply.body;
-  const dirty = text !== null && text !== reply.body;
-  const gaps = DRAFT_PLACEHOLDER.test(value);
-  const hint = gaps ? 'Preencha os trechos entre colchetes duplos.' : dirty ? 'Salve a edição antes de enviar.' : null;
-  const recipient = alert.payload.recipient?.trim();
-
+  if (reply.state !== 'rascunho' && reply.state !== 'falhou') return null;
   return (
-    <div className="mt-3.5 space-y-2.5">
-      {recipient ? (
-        <Notice tone="warn" icon={<TriangleAlert />} data-testid={`alert-recipient-${alert.id}`}>
-          Vai para <span className="font-medium text-ink">{recipient}</span>, que não é o remetente.
-        </Notice>
-      ) : (
-        <p className="break-words text-xs text-muted">Para: <span className="text-ink-2">{reply.toAddress}</span></p>
-      )}
-      <label htmlFor={fieldId} className="sr-only">Texto da resposta</label>
-      <Textarea
-        id={fieldId} data-testid={`alert-draft-${alert.id}`} value={value} disabled={busy !== null}
-        aria-describedby={hint ? hintId : undefined} onChange={(e) => setText(e.target.value)}
+    <div className="mt-3.5">
+      <ReplyDraftEditor
+        reply={reply} jobId={jobId} disabled={disabled} otherRecipient={!!alert.payload.recipient?.trim()}
+        ids={{
+          text: `alert-draft-${alert.id}`, approve: `alert-approve-${alert.id}`, save: `alert-save-${alert.id}`,
+          discard: `alert-discard-${alert.id}`, discardDialog: `alert-discard-confirm-${alert.id}`, error: `alert-error-${alert.id}`,
+          recipient: `alert-recipient-${alert.id}`,
+        }}
       />
-      <div className="flex flex-wrap items-center gap-2">
-        <Button
-          type="button" size="sm" variant="primary" data-testid={`alert-approve-${alert.id}`}
-          disabled={busy !== null || gaps || dirty} aria-describedby={hint ? hintId : undefined}
-          onClick={() => void run('approve', () => replies.approve.mutateAsync(reply.id))}
-        >
-          {busy === 'approve' ? <LoaderCircle aria-hidden className="animate-spin" /> : <Send aria-hidden />} Aprovar e enviar
-        </Button>
-        <Button
-          type="button" size="sm" data-testid={`alert-save-${alert.id}`} disabled={busy !== null || !dirty}
-          onClick={() => void run('save', async () => {
-            await replies.edit.mutateAsync({ id: reply.id, body: value });
-            setText(null);
-          })}
-        >
-          {busy === 'save' && <LoaderCircle aria-hidden className="animate-spin" />} Salvar edição
-        </Button>
-        <Button
-          type="button" size="sm" variant="danger" data-testid={`alert-discard-${alert.id}`} disabled={busy !== null}
-          onClick={() => setConfirmDiscard(true)}
-        >
-          Descartar
-        </Button>
-      </div>
-      {hint && <p id={hintId} className="text-xs leading-snug text-warn">{hint}</p>}
-      <ConfirmDialog
-        open={confirmDiscard} onOpenChange={setConfirmDiscard} title="Descartar este rascunho?" confirmLabel="Descartar"
-        busy={busy === 'discard'} testId={`alert-discard-confirm-${alert.id}`}
-        onConfirm={() => void run('discard', () => replies.discard.mutateAsync(reply.id)).then(() => setConfirmDiscard(false))}
-      >
-        <p>A resposta não é enviada. O e-mail continua na conversa da vaga.</p>
-      </ConfirmDialog>
     </div>
   );
 }

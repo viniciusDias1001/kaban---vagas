@@ -1,28 +1,27 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { CircleAlert, LoaderCircle, Paperclip, RotateCcw, Save, Send, TriangleAlert, Unlink } from 'lucide-react';
+import { CircleAlert, LoaderCircle, Paperclip, RotateCcw, TriangleAlert, Unlink } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import {
-  COLUMN_LABELS, DRAFT_PLACEHOLDER, EMAIL_KIND_LABELS, MAIL_LIMITS, type JobDto, type MailMessageDto, type MailReplyDto, type ReplyState,
+  COLUMN_LABELS, EMAIL_KIND_LABELS, type JobDto, type MailMessageDto, type MailReplyDto, type ReplyState,
 } from '@kv/shared/client';
 import { emailConversation, replyStateLabel, type ConversationItem } from '../lib/email';
 import { spring } from '../lib/motion';
 import { EYEBROW } from '../lib/styles';
 import { cn } from '../lib/utils';
-import { useJobEmails, useMessageActions, useReplyActions } from '../useEmail';
+import { useJobEmails, useMessageActions } from '../useEmail';
 import { formatWhen } from './JobApplicationSection';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { ConfirmDialog } from './ui/confirm-dialog';
-import { Textarea } from './ui/input';
 import { Notice } from './ui/notice';
+import { ReplyDraftEditor } from './ReplyDraftEditor';
 
 type Tone = 'neutral' | 'accent' | 'ok' | 'warn' | 'bad' | 'outline';
 const REPLY_TONE: Record<ReplyState, Tone> = {
   rascunho: 'warn', aprovada: 'accent', enviando: 'accent', enviada: 'ok', falhou: 'bad', descartada: 'outline',
 };
 const ORIGIN_LABEL = { ai: 'escrita pela IA', facts: 'com seus dados salvos' } as const;
-const GAP_HINT = 'Preencha os trechos entre colchetes duplos.';
 
 /** As mutações do e-mail não abrem o aviso flutuante: o erro vem por aqui e aparece junto do botão que falhou. */
 const messageOf = (e: unknown): string => (e instanceof Error && e.message ? e.message : 'Não foi possível concluir. Tente de novo.');
@@ -126,122 +125,24 @@ function Recipient({ reply, origin }: { reply: MailReplyDto; origin: MailMessage
   );
 }
 
-/** Rascunho: o texto numa caixa que cresce, "Salvar edição", "Aprovar e enviar" (sem lacunas e sem edição pendente) e "Descartar". */
-function DraftEditor({ reply }: { reply: MailReplyDto }) {
-  const actions = useReplyActions();
-  const fail = useFailure();
-  const hintId = useId();
-  const [text, setText] = useState(reply.body);
-  const [base, setBase] = useState(reply.body);
-  const [error, setError] = useState<string | null>(null);
-  const [confirming, setConfirming] = useState(false);
-  // O texto do servidor mudou (outra tela, outra aba) e não há edição aqui: a caixa acompanha.
-  if (reply.body !== base && text === base) {
-    setBase(reply.body);
-    setText(reply.body);
-  }
-  const dirty = text !== base;
-  const empty = text.trim() === '';
-  const gap = DRAFT_PLACEHOLDER.test(text);
-  const busy = actions.edit.isPending || actions.approve.isPending || actions.discard.isPending;
-  const hint = empty ? 'Escreva o texto da resposta.' : gap ? GAP_HINT : dirty ? 'Salve a edição antes de enviar.' : null;
-
-  const save = async () => {
-    setError(null);
-    try {
-      const saved = await actions.edit.mutateAsync({ id: reply.id, body: text });
-      setBase(saved.body);
-      setText(saved.body);
-    } catch (e) {
-      setError(fail(e));
-    }
-  };
-  const approve = async () => {
-    setError(null);
-    try {
-      await actions.approve.mutateAsync(reply.id);
-    } catch (e) {
-      setError(fail(e));
-    }
-  };
-  const discard = async () => {
-    setError(null);
-    try {
-      await actions.discard.mutateAsync(reply.id);
-    } catch (e) {
-      setError(fail(e));
-    } finally {
-      setConfirming(false);
-    }
-  };
-
-  return (
-    <div className="space-y-2.5">
-      <Textarea
-        value={text} onChange={(e) => setText(e.target.value)} maxLength={MAIL_LIMITS.draftChars} disabled={busy}
-        aria-label="Texto da resposta" aria-describedby={hint ? hintId : undefined} aria-invalid={gap || undefined}
-        data-testid={`job-reply-text-${reply.id}`} className="min-h-28 bg-bg/40"
-      />
-      <div className="flex flex-wrap items-center gap-2">
-        <Button
-          type="button" variant="primary" size="sm" data-testid={`job-reply-approve-${reply.id}`}
-          disabled={busy || hint !== null} aria-describedby={hint ? hintId : undefined} onClick={approve}
-        >
-          {actions.approve.isPending ? <LoaderCircle aria-hidden className="animate-spin" /> : <Send aria-hidden />} Aprovar e enviar
-        </Button>
-        <Button type="button" size="sm" data-testid={`job-reply-save-${reply.id}`} disabled={busy || !dirty || empty} onClick={save}>
-          {actions.edit.isPending ? <LoaderCircle aria-hidden className="animate-spin" /> : <Save aria-hidden />} Salvar edição
-        </Button>
-        <Button
-          type="button" variant="danger" size="sm" data-testid={`job-reply-discard-${reply.id}`} disabled={busy}
-          onClick={() => setConfirming(true)}
-        >
-          Descartar
-        </Button>
-        {hint && <p id={hintId} className="min-w-40 flex-1 text-xs leading-snug text-faint">{hint}</p>}
-      </div>
-      <InlineError error={error} testId={`job-reply-error-${reply.id}`} />
-      <ConfirmDialog
-        open={confirming} onOpenChange={setConfirming} title="Descartar esta resposta?" confirmLabel="Descartar"
-        onConfirm={discard} busy={actions.discard.isPending} testId={`job-reply-discard-dialog-${reply.id}`}
-      >
-        <p>Nada é enviado à empresa. Para responder depois, escreva do seu próprio e-mail.</p>
-      </ConfirmDialog>
-    </div>
-  );
-}
-
-/** Uma resposta que falhou: o motivo, o texto e "Aprovar e enviar" de novo. */
-function FailedReply({ reply }: { reply: MailReplyDto }) {
-  const { approve } = useReplyActions();
-  const fail = useFailure();
-  const [error, setError] = useState<string | null>(null);
-  const retry = async () => {
-    setError(null);
-    try {
-      await approve.mutateAsync(reply.id);
-    } catch (e) {
-      setError(fail(e));
-    }
-  };
-  return (
-    <div className="space-y-2.5">
-      <FoldedText text={reply.body} />
-      <Button type="button" variant="primary" size="sm" data-testid={`job-reply-approve-${reply.id}`} disabled={approve.isPending} onClick={retry}>
-        {approve.isPending ? <LoaderCircle aria-hidden className="animate-spin" /> : <Send aria-hidden />} Aprovar e enviar
-      </Button>
-      <InlineError error={error} testId={`job-reply-error-${reply.id}`} />
-    </div>
-  );
-}
-
 /** A resposta preparada para um e-mail recebido, presa a ele por um fio à esquerda. */
-function ReplyBlock({ reply, origin }: { reply: MailReplyDto; origin: MailMessageDto | undefined }) {
+function ReplyBlock({ reply, origin, jobId }: { reply: MailReplyDto; origin: MailMessageDto | undefined; jobId: number }) {
   const note = reply.note?.trim() || null;
+  // Rascunho e falha: o editor compartilhado com o sino (ele mesmo diz para quem vai).
+  const pending = reply.state === 'rascunho' || reply.state === 'falhou';
   let body: ReactNode = null;
-  if (reply.state === 'rascunho') body = <DraftEditor reply={reply} />;
-  else if (reply.state === 'falhou') body = <FailedReply reply={reply} />;
-  else if (reply.state !== 'descartada') body = <FoldedText text={reply.body} />;
+  if (pending) {
+    body = (
+      <ReplyDraftEditor
+        reply={reply} jobId={jobId} failedText={<FoldedText text={reply.body} />}
+        otherRecipient={origin !== undefined && !sameAddress(reply.toAddress, origin.fromAddress)}
+        ids={{
+          text: `job-reply-text-${reply.id}`, approve: `job-reply-approve-${reply.id}`, save: `job-reply-save-${reply.id}`,
+          discard: `job-reply-discard-${reply.id}`, discardDialog: `job-reply-discard-dialog-${reply.id}`, error: `job-reply-error-${reply.id}`,
+        }}
+      />
+    );
+  } else if (reply.state !== 'descartada') body = <FoldedText text={reply.body} />;
 
   return (
     <div data-testid={`job-reply-${reply.id}`} data-state={reply.state} className="mt-3 space-y-2.5 border-l-2 border-line-strong pl-3.5">
@@ -259,7 +160,7 @@ function ReplyBlock({ reply, origin }: { reply: MailReplyDto; origin: MailMessag
           <span>{note}</span>
         </p>
       )}
-      {reply.state !== 'descartada' && <Recipient reply={reply} origin={origin} />}
+      {reply.state !== 'descartada' && !pending && <Recipient reply={reply} origin={origin} />}
       {body}
       {reply.state === 'enviada' && <SentBy approvedBy={origin?.replyApprovedBy ?? null} sentAt={reply.sentAt} />}
     </div>
@@ -324,7 +225,7 @@ function MessageActions({ m }: { m: MailMessageDto }) {
   );
 }
 
-function MessageItem({ item }: { item: ConversationItem }) {
+function MessageItem({ item, jobId }: { item: ConversationItem; jobId: number }) {
   const { message: m, reply, sentReply: sentCopy, origin } = item;
   const incoming = m.direction === 'in';
   return (
@@ -348,7 +249,7 @@ function MessageItem({ item }: { item: ConversationItem }) {
       <FoldedText text={m.body} />
       {sentCopy && <div className="mt-1.5"><SentBy approvedBy={origin?.replyApprovedBy ?? null} sentAt={null} /></div>}
       {incoming && <MessageActions m={m} />}
-      {reply && <ReplyBlock reply={reply} origin={m} />}
+      {reply && <ReplyBlock reply={reply} origin={m} jobId={jobId} />}
     </motion.li>
   );
 }
@@ -377,7 +278,7 @@ export function JobEmailSection({ job, index }: { job: JobDto; index: number }) 
       </div>
       <ol className="space-y-2.5">
         <AnimatePresence initial={false}>
-          {items.map((item) => <MessageItem key={item.message.id} item={item} />)}
+          {items.map((item) => <MessageItem key={item.message.id} item={item} jobId={job.id} />)}
         </AnimatePresence>
       </ol>
     </motion.section>

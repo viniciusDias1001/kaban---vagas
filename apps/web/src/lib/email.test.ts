@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ALERT_KINDS, type AlertDto } from '@kv/shared/client';
 import {
-  alertAction, alertBody, alertTitle, alertsToNotify, mailBadgeLabel, mailPasswordProblem, replyStateLabel, summaryLine,
+  alertAction, alertBody, alertTitle, alertsToNotify, draftGate, mailBadgeLabel, mailPasswordProblem, replyStateLabel, summaryLine,
 } from './email';
 
 const alert = (over: Partial<AlertDto> = {}): AlertDto => ({
@@ -89,5 +89,37 @@ describe('mailPasswordProblem', () => {
     expect(mailPasswordProblem('a'.repeat(65))).not.toBeNull();
     expect(mailPasswordProblem('a'.repeat(64))).toBeNull();
     expect(mailPasswordProblem('abcdefgé12345')).not.toBeNull();
+  });
+});
+
+describe('draftGate', () => {
+  it('allows approving only the stored text, without a gap', () => {
+    expect(draftGate('Olá, tudo bem?', 'Olá, tudo bem?')).toEqual({ gap: false, unsaved: false, empty: false, canApprove: true, hint: null });
+  });
+
+  it('blocks a gap in the text and says how to fix it', () => {
+    const gate = draftGate('Posso às [[horário]].', 'Posso às [[horário]].');
+    expect(gate).toMatchObject({ gap: true, unsaved: false, canApprove: false });
+    expect(gate.hint).toBe('Preencha os trechos entre colchetes duplos.');
+  });
+
+  it('blocks unsaved edits, even when the edited text has no gap', () => {
+    const gate = draftGate('Posso às [[horário]].', 'Posso às 10h.');
+    expect(gate).toMatchObject({ gap: false, unsaved: true, canApprove: false });
+    expect(gate.hint).toBe('Salve a edição antes de enviar.');
+  });
+
+  it('judges the text in the box: a gap typed into a saved text blocks too', () => {
+    expect(draftGate('Posso às 10h.', 'Posso às [[x]].')).toMatchObject({ gap: true, unsaved: true, canApprove: false });
+  });
+
+  it('blocks an empty text', () => {
+    const gate = draftGate('', '  ');
+    expect(gate).toMatchObject({ empty: true, canApprove: false });
+    expect(gate.hint).toBe('Escreva o texto da resposta.');
+  });
+
+  it('compares exactly: a trailing space is an unsaved edit', () => {
+    expect(draftGate('Olá', 'Olá ').canApprove).toBe(false);
   });
 });
