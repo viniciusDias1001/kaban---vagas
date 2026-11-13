@@ -6,14 +6,18 @@
  */
 import { createInterface } from 'node:readline/promises';
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import type { Page } from 'playwright';
 import { applyDataDir, browserProfileDir } from '../src/data-dir';
 import { detectBrowserChannel, realLaunch } from '../src/browser';
-import { blockSubmitClicks, captureReplay, captureSnapshot, DEFAULT_KEEP } from '../src/recording/capture';
-import { findLeaks, NO_IDENTITY, scrubFixture, type FixtureKind, type ScrubIdentity } from '../src/recording/scrub';
+import {
+  blockSubmitClicks, blockWrites, captureReplay, captureSnapshot, DEFAULT_KEEP, hasSessionCookie,
+} from '../src/recording/capture';
+import {
+  findIdentityLeaks, findLeaks, NO_IDENTITY, scrubFixture, type FixtureKind, type ScrubIdentity,
+} from '../src/recording/scrub';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const RECORDED = /\.(html|json|js|css)$/i;
@@ -25,7 +29,10 @@ Modos:
   replay    --url <url> --out <pasta>
   snapshot  --url <url> --out <arquivo.html> [--keep <seletor>]
   profile   --staging <pasta fora do repositório>
-  scrub     --from <staging> --to <pasta de fixtures> --identity <json fora do repositório>
+            Abre o perfil do navegador do dono, que já precisa estar com a sessão aberta (entre no site antes, pelo
+            uso normal). Só leitura: toda requisição que não é GET é abortada e todo envio de formulário é barrado,
+            então algumas páginas podem não avançar. Isso é intencional.
+  scrub    --from <staging> --to <pasta de fixtures> --identity <json fora do repositório>
 `;
 
 class UsageError extends Error {}
@@ -48,7 +55,7 @@ function real(path: string): string {
 
 function insideRepo(path: string): boolean {
   const rel = relative(realpathSync(REPO_ROOT), real(path));
-  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 }
 
 function outsideRepo(flag: string, path: string | undefined): string {
@@ -84,7 +91,9 @@ function writeScrubbed(outputs: Output[], identity: ScrubIdentity): void {
   const cleaned = outputs.map((o) => {
     const kind = kindOf(o.path);
     const text = scrubFixture(o.content.toString('utf8'), identity, kind);
-    return { path: o.path, text, leaks: findLeaks(text, kind) };
+    const leaks: Array<{ rule: string; sample: string }> = findLeaks(text, kind);
+    if (kind === 'markup') leaks.push(...findIdentityLeaks(text, identity));
+    return { path: o.path, text, leaks };
   });
   const leaking = cleaned.filter((c) => c.leaks.length > 0);
   if (leaking.length) {
@@ -158,8 +167,19 @@ async function recordProfile(values: Record<string, string | undefined>): Promis
   const context = await realLaunch(choice)(browserProfileDir(applyDataDir()));
   let closed = false;
   context.on('close', () => { closed = true; });
-  const first = context.pages()[0] ?? (await context.newPage());
-  await blockSubmitClicks(first);
+  try {
+    // Só leitura, antes de qualquer outra coisa: nenhuma requisição que não seja GET sai do navegador.
+    await blockWrites(context);
+    const first = context.pages()[0] ?? (await context.newPage());
+    await blockSubmitClicks(first);
+    // Não se faz login neste modo: a sessão precisa já existir no perfil.
+    if (!hasSessionCookie(await context.cookies('https://www.linkedin.com'), 'li_at', 'linkedin.com')) {
+      fail('o perfil não tem sessão aberta no LinkedIn (sem o cookie de sessão). Abra o navegador, entre no LinkedIn normalmente, feche-o e rode de novo.');
+    }
+  } catch (err) {
+    await context.close().catch(() => {});
+    throw err;
+  }
 
   console.log('Navegue até a página e digite um nome de arquivo para gravá-la (sem limpeza) em', staging);
   console.log('Linha vazia encerra.');

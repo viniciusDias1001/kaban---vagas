@@ -2,7 +2,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Page } from 'playwright';
 import { openFixture } from '../testing';
-import { blockSubmitClicks, captureReplay, captureSnapshot } from './capture';
+import { blockSubmitClicks, blockWrites, captureReplay, captureSnapshot, hasSessionCookie } from './capture';
 
 const fixture = (name: string) => fileURLToPath(new URL(`../../fixtures/recording/${name}`, import.meta.url));
 const routes = {
@@ -48,5 +48,68 @@ describe('recording capture', () => {
     await page.goto('https://form.test/vaga');
     await page.getByRole('button', { name: 'Enviar candidatura' }).click();
     expect(await page.evaluate(() => (window as { enviado?: boolean }).enviado)).toBeUndefined();
+  });
+});
+
+describe('recording guards', () => {
+  const guardRoutes = { ...routes, 'https://form.test/forms': fixture('forms.html'), 'https://form.test/enviar': fixture('forms.html') };
+  async function openForms(): Promise<Page> {
+    const opened = await openFixture(guardRoutes);
+    close = opened.close;
+    return opened.page;
+  }
+  const flag = (page: Page, name: string) => page.evaluate((n) => (window as unknown as Record<string, unknown>)[n], name);
+
+  it('blockSubmitClicks stops a click on a button inside an open shadow root', async () => {
+    const page = await openForms();
+    await blockSubmitClicks(page);
+    await page.goto('https://form.test/forms');
+    await page.locator('#sombra').click();
+    expect(await flag(page, 'enviado')).toBeUndefined();
+  });
+
+  it('blockSubmitClicks stops Enter in a single-field form, requestSubmit() and a submit button with another label', async () => {
+    const page = await openForms();
+    await blockSubmitClicks(page);
+    await page.goto('https://form.test/forms');
+    await page.locator('#campo').press('Enter');
+    expect(await flag(page, 'formEnviado')).toBe(false);
+    await page.evaluate(() => (document.getElementById('solo') as HTMLFormElement).requestSubmit());
+    expect(await flag(page, 'formEnviado')).toBe(false);
+    await page.locator('#salvar').click();
+    expect(await flag(page, 'formEnviado')).toBe(false);
+    expect(page.url()).toBe('https://form.test/forms');
+  });
+
+  it('blockSubmitClicks fails when the guard cannot be installed on an open page', async () => {
+    const broken = {
+      context: () => ({
+        addInitScript: async () => {},
+        pages: () => [{ evaluate: async () => { throw new Error('sem acesso'); }, url: () => 'chrome://newtab/' }],
+      }),
+    } as unknown as Page;
+    await expect(blockSubmitClicks(broken)).rejects.toThrow(/chrome:\/\/newtab/);
+  });
+
+  it('blockWrites aborts a fetch POST and a form POST made by the page', async () => {
+    const page = await openForms();
+    await blockWrites(page.context());
+    const failed: string[] = [];
+    const finished: string[] = [];
+    page.on('requestfailed', (r) => { if (r.method() === 'POST') failed.push(r.url()); });
+    page.on('requestfinished', (r) => { if (r.method() === 'POST') finished.push(r.url()); });
+    await page.goto('https://form.test/forms');
+    await page.locator('#gravar').click();
+    await expect.poll(() => flag(page, 'fetchResult')).toBe('blocked');
+    await page.evaluate(() => (document.getElementById('outro') as HTMLFormElement).submit());
+    await expect.poll(() => failed.length).toBe(2);
+    expect(finished).toEqual([]);
+  });
+
+  it('hasSessionCookie looks for a named cookie on a domain', () => {
+    const cookies = [{ name: 'li_at', domain: '.linkedin.com', value: 'x' }, { name: 'other', domain: 'a.test', value: 'y' }];
+    expect(hasSessionCookie(cookies, 'li_at', 'linkedin.com')).toBe(true);
+    expect(hasSessionCookie(cookies, 'li_at', 'lever.co')).toBe(false);
+    expect(hasSessionCookie([{ name: 'li_at', domain: '.linkedin.com', value: '' }], 'li_at', 'linkedin.com')).toBe(false);
   });
 });

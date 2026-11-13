@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { Page, Response } from 'playwright';
+import type { BrowserContext, Page, Response } from 'playwright';
 
 // O código que roda dentro da página é texto, não função: o transpilador dos scripts (tsx) injeta auxiliares
 // em funções serializadas, e eles não existem no navegador.
@@ -35,13 +35,23 @@ function fileNameFor(url: URL, contentType: string): string {
   return `${safe}-${hash}${extensionFor(url, contentType)}`;
 }
 
+/** Aborta toda requisição que não é GET, na página ou no contexto inteiro. Deixa as demais para o próximo tratador. */
+export async function blockWrites(target: Page | BrowserContext): Promise<void> {
+  await target.route('**/*', (route) => (route.request().method() === 'GET' ? route.fallback() : route.abort()));
+}
+
+/** Há um cookie com esse nome, não vazio, no domínio (ou em um subdomínio dele)? */
+export function hasSessionCookie(cookies: Array<{ name: string; domain: string; value: string }>, name: string, domain: string): boolean {
+  return cookies.some((c) => c.name === name && c.value !== '' && c.domain.replace(/^\./, '').endsWith(domain));
+}
+
 /**
  * Navega até `url`, espera a rede parar (mais 2 s) e guarda toda resposta GET bem-sucedida de documento, script,
  * estilo, `fetch` e `xhr` do mesmo domínio registrável. Toda requisição que não é GET é abortada.
  */
 export async function captureReplay(page: Page, url: string): Promise<ReplayCapture> {
   const site = registrableDomain(new URL(url).hostname);
-  await page.route('**/*', (route) => (route.request().method() === 'GET' ? route.fallback() : route.abort()));
+  await blockWrites(page);
 
   const pending: Array<Promise<{ url: URL; contentType: string; body: Buffer; isDocument: boolean } | null>> = [];
   const onResponse = (response: Response) => {
@@ -50,7 +60,7 @@ export async function captureReplay(page: Page, url: string): Promise<ReplayCapt
     const target = new URL(response.url());
     if (registrableDomain(target.hostname) !== site) return;
     const contentType = response.headers()['content-type'] ?? '';
-    if (contentType && !TEXT_TYPE.test(contentType)) return;
+    if (!TEXT_TYPE.test(contentType)) return;
     const isDocument = request.resourceType() === 'document' && request.frame() === page.mainFrame();
     pending.push(
       response.body().then(
@@ -155,23 +165,38 @@ const BLOCK_SUBMIT_SOURCE = `(() => {
   window.__applyBlockSubmit = true;
   const pattern = ${SUBMIT_TEXT};
   const textOf = (el) => [el.textContent, el.value, el.getAttribute && el.getAttribute('aria-label')].filter(Boolean).join(' ');
-  const isSubmit = (el) => {
-    const button = el && el.closest && el.closest('button, [role="button"], input[type="submit"], input[type="button"], a');
-    return !!button && pattern.test(textOf(button));
+  const BUTTON = 'button, [role="button"], input[type="submit"], input[type="button"], a';
+  // O alvo do clique é reposicionado para o hospedeiro quando o botão está em um shadow root: o caminho
+  // composto traz o botão de verdade.
+  const isSubmitClick = (e) => {
+    for (const el of e.composedPath()) {
+      if (el.nodeType === 1 && el.matches && el.matches(BUTTON)) return pattern.test(textOf(el));
+    }
+    return false;
   };
   window.addEventListener('click', (e) => {
-    if (isSubmit(e.target)) { e.preventDefault(); e.stopImmediatePropagation(); }
+    if (isSubmitClick(e)) { e.preventDefault(); e.stopImmediatePropagation(); }
   }, true);
+  // Uma sessão de gravação nunca precisa enviar formulário: Enter em campo único, requestSubmit() e botão com
+  // outro rótulo também são barrados.
   window.addEventListener('submit', (e) => {
-    if (isSubmit(e.submitter)) { e.preventDefault(); e.stopImmediatePropagation(); }
+    e.preventDefault();
+    e.stopImmediatePropagation();
   }, true);
 })()`;
 
 /**
  * Instala, em toda página do contexto (a de agora e as futuras), um tratador que barra o clique em botão cujo
- * texto casa `/enviar candidatura|submit application/i`.
+ * texto casa `/enviar candidatura|submit application/i` (também dentro de shadow root) e todo evento `submit`
+ * de formulário. Se não conseguir instalar em uma página já aberta, lança: a gravação não segue sem a proteção.
  */
 export async function blockSubmitClicks(page: Page): Promise<void> {
   await page.context().addInitScript(BLOCK_SUBMIT_SOURCE);
-  for (const open of page.context().pages()) await open.evaluate(BLOCK_SUBMIT_SOURCE).catch(() => {});
+  for (const open of page.context().pages()) {
+    try {
+      await open.evaluate(BLOCK_SUBMIT_SOURCE);
+    } catch (err) {
+      throw new Error(`não foi possível instalar a proteção contra envio em ${open.url()}: ${err instanceof Error ? err.message : err}`);
+    }
+  }
 }
