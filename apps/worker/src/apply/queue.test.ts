@@ -661,11 +661,12 @@ describe('waiting for the owner', () => {
     site.variants.form = { gate: () => (Date.now() < solveAt ? 'captcha' : null) };
     const orig = site.open;
     site.open = async (page, target) => {
-      if (solveAt === 0) solveAt = Date.now() + 150;
+      // A espera (1,5 s) é maior que o tempo de trabalho permitido (1 s): só passa se a espera não contar.
+      if (solveAt === 0) solveAt = Date.now() + 1_500;
       return orig(page, target);
     };
     const { id: jobId } = await candidate();
-    await runUntilIdle(queue({ mode: 'real', deps: { workTimeoutMs: 100, humanWaitMs: 2_000 } }));
+    await runUntilIdle(queue({ mode: 'real', deps: { workTimeoutMs: 1_000, humanWaitMs: 10_000 } }));
     expect((await applicationForJob(db, jobId))!.status).toBe('submitted');
   });
 });
