@@ -372,6 +372,148 @@ export async function deleteApplyData(db: Db): Promise<void> {
     await tx.delete(applyAnswers);
     await tx
       .update(applications)
-      .set({ answers: [], pendingQuestions: [], resumePdf: null, shots: {}, contactEmail: null, confirmation: null });
+      .set({ answers: [], approvedAnswers: [], pendingQuestions: [], resumePdf: null, shots: {}, contactEmail: null, confirmation: null });
   });
+}
+
+/** A linha da candidatura travada até o fim da transação (`db` é a transação). Null se não existe. Traz o PDF: não use em listagens. */
+export async function lockApplication(db: Db, id: number): Promise<ApplicationRow | null> {
+  const [row] = await db.select().from(applications).where(eq(applications.id, id)).for('update');
+  return row ?? null;
+}
+
+/** Quantas candidaturas esperam na fila e quantas esperam o dono. */
+export async function applicationQueueCounts(db: Db): Promise<{ queued: number; needsHuman: number }> {
+  const [row] = await db
+    .select({
+      queued: sql<number>`count(*) filter (where ${applications.status} = 'queued')::int`.mapWith(Number),
+      needsHuman: sql<number>`count(*) filter (where ${applications.status} = 'needs_human')::int`.mapWith(Number),
+    })
+    .from(applications);
+  return row;
+}
+
+/** A candidatura parada numa espera ao vivo (captcha, código, login), se houver. */
+export async function waitingApplication(db: Db): Promise<{ applicationId: number; jobId: number; gate: string } | null> {
+  const [row] = await db
+    .select({ applicationId: applications.id, jobId: applications.jobId, gate: applications.waitingGate })
+    .from(applications)
+    .where(eq(applications.status, 'waiting_human'))
+    .orderBy(asc(applications.id))
+    .limit(1);
+  return row ? { ...row, gate: row.gate ?? 'unknown' } : null;
+}
+
+export type RetryOutcome = 'queued' | 'not_found' | 'sent' | 'in_progress' | 'confirm_submission' | 'not_retryable';
+
+/**
+ * Botão "Tentar de novo": `needs_human`, `failed`, `skipped` e `cancelled` voltam a `queued` (sem espera e sem tentativas
+ * gastas). Nunca copia nada para `approved_answers`. `submitted` é recusada (`sent`), uma linha em andamento também
+ * (`in_progress`), e uma parada em `confirm_submission` nunca volta por botão: depois do clique ninguém sabe se o site recebeu.
+ */
+export async function retryApplication(db: Db, id: number, now: number = Date.now()): Promise<RetryOutcome> {
+  return db.transaction(async (tx) => {
+    const row = await lockApplication(tx, id);
+    if (!row) return 'not_found';
+    if (row.status === 'submitted') return 'sent';
+    if ((RUNNING_STATUSES as readonly string[]).includes(row.status)) return 'in_progress';
+    if (row.status === 'needs_human' && row.reason === 'confirm_submission') return 'confirm_submission';
+    if (!['needs_human', 'failed', 'skipped', 'cancelled'].includes(row.status)) return 'not_retryable';
+    await writeTransition(
+      tx, row,
+      {
+        status: 'queued', message: 'O dono pediu para tentar de novo.',
+        set: { runAfter: null, attempts: 0, cancelRequested: false, waitingGate: null },
+      },
+      now,
+    );
+    await tx.update(jobs).set({ needsHuman: false, needsHumanReason: null }).where(eq(jobs.id, row.jobId));
+    return 'queued';
+  });
+}
+
+async function approveRow(tx: Db, row: ApplicationRow, now: number): Promise<void> {
+  // Um único UPDATE: estado, modo e as respostas aprovadas (as que o dono viu no ensaio) mudam juntos.
+  await tx
+    .update(applications)
+    .set({
+      status: 'queued', mode: 'real', approvedAnswers: row.answers, reason: null, detail: null, runAfter: null,
+      attempts: 0, cancelRequested: false, finishedAt: null,
+    })
+    .where(eq(applications.id, row.id));
+  await tx.insert(eventsTable).values({
+    applicationId: row.id, status: 'queued', message: 'O dono aprovou o ensaio e pediu o envio de verdade.', createdAt: now,
+  });
+}
+
+/** "Enviar de verdade": só de `dry_run_ready`. As respostas do ensaio viram `approved_answers`. */
+export async function sendRehearsal(db: Db, id: number, now: number = Date.now()): Promise<'queued' | 'not_found' | 'not_rehearsal'> {
+  return db.transaction(async (tx) => {
+    const row = await lockApplication(tx, id);
+    if (!row) return 'not_found';
+    if (row.status !== 'dry_run_ready') return 'not_rehearsal';
+    await approveRow(tx, row, now);
+    return 'queued';
+  });
+}
+
+/** O mesmo para todos os ensaios prontos. Devolve quantos. */
+export async function sendAllRehearsals(db: Db, now: number = Date.now()): Promise<number> {
+  return db.transaction(async (tx) => {
+    const rows = await tx
+      .select()
+      .from(applications)
+      .where(eq(applications.status, 'dry_run_ready'))
+      .orderBy(asc(applications.id))
+      .for('update');
+    for (const row of rows) await approveRow(tx, row, now);
+    return rows.length;
+  });
+}
+
+/**
+ * Candidaturas paradas em `needs_human` por `question` (exceto `exceptId`) voltam à fila, com a marca "precisa de você"
+ * desligada: uma resposta nova pode servir a elas. Mantêm `approved_answers` e `mode`. Devolve os ids.
+ */
+export async function requeueQuestionWaits(db: Db, exceptId: number, now: number = Date.now()): Promise<number[]> {
+  const rows = await db
+    .select()
+    .from(applications)
+    .where(and(eq(applications.status, 'needs_human'), eq(applications.reason, 'question'), sql`${applications.id} <> ${exceptId}`))
+    .orderBy(asc(applications.id))
+    .for('update');
+  for (const row of rows) {
+    await writeTransition(db, row, { status: 'queued', message: 'Uma resposta nova foi salva: voltou para a fila.', set: { runAfter: null } }, now);
+  }
+  if (rows.length > 0) {
+    await db
+      .update(jobs)
+      .set({ needsHuman: false, needsHumanReason: null })
+      .where(inArray(jobs.id, rows.map((r) => r.jobId)));
+  }
+  return rows.map((r) => r.id);
+}
+
+/**
+ * O dono respondeu parte (ou todas) das perguntas: grava o que sobrou em `pending_questions`. Se não resta pergunta
+ * obrigatória, a candidatura volta a `queued` sem pendências e a marca "precisa de você" sai; senão fica em `needs_human`.
+ * Devolve se voltou à fila. Chame dentro da transação que gravou as respostas, depois das gravações.
+ */
+export async function settlePendingQuestions(
+  db: Db,
+  row: ApplicationRow,
+  remaining: ApplicationRow['pendingQuestions'],
+  now: number = Date.now(),
+): Promise<boolean> {
+  if (remaining.some((p) => p.question.required)) {
+    await db.update(applications).set({ pendingQuestions: remaining }).where(eq(applications.id, row.id));
+    return false;
+  }
+  await writeTransition(
+    db, row,
+    { status: 'queued', message: 'O dono respondeu as perguntas.', set: { pendingQuestions: [], runAfter: null } },
+    now,
+  );
+  await db.update(jobs).set({ needsHuman: false, needsHumanReason: null }).where(eq(jobs.id, row.jobId));
+  return true;
 }

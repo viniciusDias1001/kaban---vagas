@@ -2,20 +2,23 @@ import { z } from 'zod';
 
 /** Schemas Zod da candidatura automática. O navegador não importa este arquivo (só `apply-constants.ts`). */
 
-const AnswerValueSchema = z.union([z.string(), z.array(z.string()), z.boolean(), z.null()]);
+/** Tetos do que o navegador manda: valor de texto até 2000 caracteres; lista de até 50 itens de até 300. */
+const AnswerValueSchema = z.union([
+  z.string().max(2000), z.array(z.string().max(300)).max(50), z.boolean(), z.null(),
+]);
 const AnswerScopeSchema = z.enum(['always', 'company', 'job']);
 
 /** Corpo de PUT /applications/:id/answers. */
 export const PendingAnswersBodySchema = z.strictObject({
   answers: z.array(z.strictObject({
-    questionId: z.string(), value: AnswerValueSchema, scope: AnswerScopeSchema, confirmMatch: z.boolean(),
+    questionId: z.string().max(200), value: AnswerValueSchema, scope: AnswerScopeSchema, confirmMatch: z.boolean(),
   })).max(60),
 });
 
 /** Corpo de POST e PUT /apply/answers. */
 export const ApplyAnswerInputSchema = z.strictObject({
-  question: z.string(), answer: z.string(), kind: z.enum(['text', 'number', 'boolean', 'choice']),
-  scope: AnswerScopeSchema, scopeValue: z.string().nullable(), country: z.string().nullable(),
+  question: z.string().trim().min(1).max(500), answer: z.string().max(2000), kind: z.enum(['text', 'number', 'boolean', 'choice']),
+  scope: AnswerScopeSchema, scopeValue: z.string().max(200).nullable(), country: z.string().max(2).nullable(),
 });
 
 // Saídas do modelo: só campos obrigatórios, strings, inteiros, booleanos e listas (mesma regra de ProfileWireSchema).
