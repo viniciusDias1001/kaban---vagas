@@ -66,7 +66,7 @@ O dono escolheu a senha de app (descarta a 3) e o envio automático só de fatos
 
 ### Conectar a caixa
 
-Nova seção **E-mail** em Configurações: endereço, senha de app (campo só de escrita, como as chaves de IA: gravada cifrada, nunca devolvida à tela), botão **Testar e conectar** e o estado da conexão (conectada, última leitura, erro com a causa em português). **Desconectar** apaga a credencial. Um texto curto explica como criar a senha de app no Google e avisa que ela dá acesso à caixa inteira.
+Nova seção **E-mail** em Configurações: endereço, senha de app (campo só de escrita, como as chaves de IA: gravada cifrada, nunca devolvida à tela), botão **Testar e conectar** e o estado da conexão (conectada, última leitura, erro com a causa em português). **Desconectar** apaga a credencial. Um texto curto explica como criar a senha de app no Google e avisa que ela dá acesso à caixa inteira. Se o endereço conectado for diferente do e-mail do perfil (o que vai nas candidaturas), a seção avisa: as respostas das empresas chegam no outro endereço.
 
 A senha usa o mesmo cofre das chaves de IA (AES-256-GCM com `APP_SECRET`). Sem `APP_SECRET`, a seção explica o que falta e não deixa conectar. Como na candidatura automática, a função só fica disponível com o app servido em endereço local; API e worker conferem cada um por si.
 
@@ -74,10 +74,14 @@ A senha usa o mesmo cofre das chaves de IA (AES-256-GCM com `APP_SECRET`). Sem `
 
 Uma **fila de e-mail** no worker, separada das outras três. A cada 3 minutos, com a caixa conectada e a função ligada:
 
-- lê a **Caixa de entrada** (só ela) a partir do último ponto lido; na primeira vez, a partir de **30 dias antes** da conexão;
+- procura mensagens novas só na **Caixa de entrada**, a partir do último ponto lido; na primeira vez, a partir de **30 dias antes** da conexão;
 - de cada mensagem pega cabeçalhos (remetente, destinatários, assunto, data, `Message-ID`, `In-Reply-To`, `References`, `Auto-Submitted`, `List-Id`) e o texto (parte de texto puro; se só houver HTML, o HTML convertido em texto), cortado em um tamanho máximo;
 - não baixa anexos, não segue links, não carrega imagens;
 - nunca altera a caixa: não marca como lida, não move, não apaga.
+
+Para um **fio de vaga** (um e-mail que passou no filtro abaixo), o app também lê as outras mensagens daquele mesmo fio, inclusive as que o dono enviou do celular ou do Gmail. Serve para duas coisas: saber se ele **já respondeu** e mostrar a conversa completa. Nenhuma outra pasta é varrida.
+
+**Primeira leitura (os 30 dias para trás).** As mensagens anteriores à conexão são registradas, classificadas e ligadas aos cards, e movem os cards (é o estado verdadeiro do processo). Mas não geram resposta, nem rascunho, nem um alerta por mensagem: o dono recebe um único alerta de resumo ("li 14 e-mails de vagas: 5 reprovações, 2 convites, 1 oferta") que abre a lista.
 
 Erro de login (senha revogada) pausa a fila, mostra a causa em Configurações e gera um alerta. Erro passageiro tenta de novo na próxima rodada.
 
@@ -87,9 +91,9 @@ Só segue adiante a mensagem que parece ser de vaga, decidida por regras no comp
 
 - é resposta em um fio em que o app já enviou algo; ou
 - o remetente é de um sistema de candidatura conhecido (lista acima, extensível); ou
-- o nome de uma empresa com card em **Aplicada ou depois** (ou com candidatura enviada) aparece no nome ou no domínio do remetente, ou no assunto.
+- o nome de uma empresa com card em **Aplicada ou depois** (ou com candidatura enviada) aparece no nome ou no domínio do remetente, ou no assunto, **e** há um sinal de que o assunto é contratação: o título da vaga daquele card, palavras de processo seletivo (candidatura, vaga, entrevista, application, interview, position e afins), um remetente de recrutamento (careers, jobs, talent, rh, people), ou uma mensagem escrita por uma pessoa diretamente para o dono (sem marcas de envio em massa).
 
-O resto é ignorado: nada é guardado além de uma contagem, e nada vai para a IA. Mensagens do próprio dono, de listas (`List-Id`) e boletins não passam.
+O nome da empresa sozinho não basta: quem se candidatou a um banco ou a um aplicativo de entrega também é cliente deles, e extrato e recibo não são e-mail de vaga. O que não passa não vai para a IA e não tem o texto guardado. Para não perder um convite por causa do filtro, as mensagens de empresas do quadro que **não** passaram ficam 30 dias em uma lista local só com remetente, assunto e data ("ignorados"); o dono pode marcar uma delas como "é de vaga", e ela segue o caminho normal. Mensagens do próprio dono, de listas (`List-Id`) e boletins não passam e não entram nessa lista.
 
 ### Classificação
 
@@ -118,7 +122,18 @@ O código monta as candidatas: cards em Aplicada ou depois (e candidaturas envia
 | Pedido com algo fora dos fatos salvos | fica | **sim** | rascunho escrito pela IA, esperando o OK |
 | Outro | fica | não | nenhuma |
 
-Um card nunca volta de coluna por causa de um e-mail (uma reprovação antiga não desfaz uma entrevista marcada depois; vale a data do e-mail). Card em Perdida ou Arquivada por decisão do dono não é movido.
+**A regra dos movimentos.** Só três tipos movem card: reprovação, entrevista e oferta. Vale o e-mail **mais recente** entre eles, pela data do e-mail, e a mão do dono vale mais que qualquer e-mail:
+
+| Chega | Card em Aplicada | em Entrevista | em Oferta | em Perdida por e-mail | em Perdida ou Arquivada pelo dono |
+|---|---|---|---|---|---|
+| Entrevista | vai para Entrevista | fica | fica | vai para Entrevista | fica; alerta |
+| Oferta | vai para Oferta | vai para Oferta | fica | vai para Oferta | fica; alerta |
+| Reprovação | vai para Perdida | vai para Perdida | vai para Perdida | fica | fica |
+
+- Um e-mail com data **anterior** ao último e-mail que moveu o card, ou anterior ao último movimento feito pelo dono, só é registrado: não move. Assim uma reprovação antiga lida depois não desfaz uma entrevista.
+- "Pelo dono" quer dizer que o último movimento do card para a coluna em que ele está foi feito por uma pessoa.
+- Convite e oferta geram alerta mesmo quando o card não se move.
+- Card em Arquivada nunca é movido por e-mail.
 
 ### Mover cards
 
@@ -136,8 +151,10 @@ A coluna nova **Perdida** fica entre Oferta e Arquivada. Para a candidatura auto
 
 **Envio** (pelo SMTP do Gmail, com a mesma senha de app):
 
-- sempre no fio do e-mail recebido, para o remetente dele (ou o `Reply-To`, se for do mesmo domínio); o destinatário é decidido pelo código;
-- nunca para endereço "no-reply", mensagem com `Auto-Submitted` ou lista: nesses casos o app só avisa "este e-mail não aceita resposta";
+- sempre no fio do e-mail recebido. O destinatário é decidido pelo código, a partir dos cabeçalhos: o `Reply-To`, se houver; senão o remetente. Os sistemas de candidatura costumam escrever de um endereço "no-reply" com o `Reply-To` apontando para o recrutador, e é para ele que a resposta vai;
+- se o endereço escolhido for "no-reply" ou de lista, não há para quem responder: o app avisa "este e-mail não aceita resposta" e não envia;
+- **envio sem aprovação só para endereço confiável**: o do próprio remetente, um do domínio da empresa do card, um de sistema de candidatura conhecido, ou um que já apareceu antes naquele fio. Qualquer outro `Reply-To` (um e-mail que se passa pela empresa e pede os dados para outro endereço) vira rascunho com alerta, mostrando para quem iria;
+- antes de enviar, o app olha o fio: se o dono **já respondeu** depois daquele pedido, não envia nada e registra "você já respondeu";
 - **uma resposta por pedido**: o estado `enviando` é gravado antes do envio e nunca é refeito às cegas. Se o worker cair no meio, na volta ele procura a mensagem pelo `Message-ID` na pasta Enviados: achou, marca como enviada; não achou, volta a esperar o dono;
 - o que foi enviado fica registrado com o texto exato.
 
@@ -153,7 +170,7 @@ O card ganha um selo quando há e-mail novo ("entrevista", "oferta", "pediu info
 
 ### Custo
 
-Uma camada nova de gasto, **E-mail**, dentro do mesmo limite diário. Atingido o limite, as mensagens esperam o dia seguinte sem serem perdidas (a leitura continua; a classificação espera).
+Uma camada nova de gasto, **E-mail**, dentro do mesmo limite diário. Atingido o limite, a leitura continua e a classificação espera o dia seguinte. Para um convite não ficar parado em silêncio, o app mostra um alerta "N e-mails de vaga esperando classificação (limite diário de IA atingido)" com o botão **Classificar mesmo assim**, o mesmo mecanismo de confirmação que as análises da IA de perfil já usam.
 
 ### Segurança e privacidade
 
@@ -188,7 +205,7 @@ Nova aba **Painel**. No topo, o período: 7 dias, 30 dias (padrão), 90 dias, tu
 
 ### Métricas
 
-Todas calculadas no servidor a partir do que o app já grava, no período escolhido:
+Todas calculadas no servidor a partir do que o app já grava, no período escolhido. As etapas (respondeu, entrevista, oferta, perdida) contam pelo **histórico do card**, venha o movimento de um e-mail ou da mão do dono, porque parte das respostas chega por telefone ou LinkedIn. "Respondeu" é o card que recebeu um e-mail da empresa que não seja só recebimento, ou que o dono moveu para Entrevista, Oferta ou Perdida. Os números de e-mail contam pelas mensagens.
 
 - **Candidaturas enviadas** (pela IA e por você), **taxa de resposta** (candidaturas com algum e-mail da empresa que não seja só recebimento), **taxa de entrevista**, **taxa de oferta**, **reprovações**.
 - **Funil**: aplicadas, responderam, entrevista, oferta; e perdidas.
@@ -231,6 +248,11 @@ No tema escuro e com os componentes do app. Gráficos simples e legíveis (barra
 11. O Painel mostra as métricas do período e a lista de e-mails, e se comporta bem com poucos dados.
 12. O gasto respeita o limite diário e aparece na camada "E-mail".
 13. Nada disso roda fora de endereço local; a caixa do dono nunca é alterada.
+14. Na primeira leitura, as mensagens antigas movem cards e geram um único alerta de resumo, sem respostas nem rascunhos.
+15. Se o dono já respondeu no fio, o app não responde.
+16. Resposta para um `Reply-To` fora dos endereços confiáveis nunca sai sem aprovação.
+17. Um e-mail de uma empresa do quadro sem sinal de contratação não vai para a IA e aparece na lista de ignorados.
+18. Com o limite diário atingido, o dono é avisado de que há e-mails esperando classificação.
 
 ## Decisões do autor
 
@@ -248,6 +270,14 @@ No tema escuro e com os componentes do app. Gráficos simples e legíveis (barra
 12. Camada de gasto "E-mail".
 13. Painel calculado no servidor, sem tabela própria; gráficos em SVG, sem biblioteca nova.
 14. Servidor de e-mail falso para os testes; `pnpm mail:smoke` só de leitura.
+15. Primeira leitura: registra e move cards, sem respostas, rascunhos ou alertas individuais.
+16. O app lê o fio inteiro de um e-mail de vaga (inclusive o que o dono enviou) para não responder duas vezes.
+17. Destinatário: `Reply-To` ou remetente; envio sem aprovação só para endereço confiável.
+18. Nome da empresa sozinho não passa no filtro; os ignorados de empresas do quadro ficam 30 dias em lista local, só com remetente, assunto e data.
+19. Movimentos: vale o e-mail decisivo mais recente; a mão do dono vale mais; Arquivada nunca é movida.
+20. Limite diário atingido: alerta com "Classificar mesmo assim".
+21. Etapas do Painel contam pelo histórico do card; números de e-mail, pelas mensagens.
+22. Aviso quando o endereço conectado difere do e-mail do perfil.
 
 ## O que fica para quem constrói
 
