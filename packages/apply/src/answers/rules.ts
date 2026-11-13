@@ -101,8 +101,8 @@ const AGREEMENT_SOURCE = [
   'consenting', 'acknowledge', 'acknowledges', 'acknowledged', 'acknowledging', 'certify', 'certifies', 'attest', 'affirm',
   'understood', 'i (confirm|declare|understand)',
   // "eu" só como sujeito da concordância: solto, sobraria (e "EU" pode ser a União Europeia).
-  '(eu )?(li|concordo|aceito|consinto|declaro|confirmo|certifico|atesto|autorizo)', 'lido', 'concorda', 'concordamos', 'concordar',
-  'aceita', 'aceitar', '(eu )?(estou |esta |fico |estamos )?cientes?', '(eu )?(estou|esta|fico|estamos) de acordo', 'compreendi',
+  '(eu )?(li|concordo|aceito|consinto|declaro|confirmo|certifico|atesto|autorizo)', 'ter lido', 'lido', 'concorda', 'concordamos', 'concordar',
+  'aceita', 'aceitar', 'aceite', '(eu )?(estou |esta |fico |estamos )?cientes?', '(eu )?(estou|esta|fico|estamos) de acordo', 'compreendi',
   'compreendo', 'entendi',
 ].map((x) => `\\b${x}\\b`).join('|');
 const AGREEMENT = new RegExp(AGREEMENT_SOURCE);
@@ -128,8 +128,14 @@ const TRUTH_ADJ = '(true|accurate|complete|correct|truthful|verdadeir[ao]s?|veri
 const TRUTH = new RegExp(`\\b${TRUTH_NOUN}\\b.*\\b${TRUTH_ADJ}\\b`);
 const TRUTH_WORDS = new RegExp(`\\b(${TRUTH_NOUN}|${TRUTH_ADJ})\\b`, 'g');
 const TRUTH_ADJ_ONLY = new RegExp(`^${TRUTH_ADJ}$`);
-/** R7: "all"/"todas" só logo antes do substantivo da veracidade: "all (of) (the) information", "todas as informações". */
-const ALL_INFO = new RegExp(`\\b(all|todas|todos)( of)?( the| my| as| os| minhas| meus)? ${INFO_NOUN}\\b`, 'g');
+/**
+ * R7: "all"/"todas" só logo antes do substantivo da própria frase de veracidade ("all (of) (the) information ... true",
+ * "todas as informações ... verdadeiras"): nenhum outro substantivo de informação entre ele e o adjetivo.
+ */
+const ALL_INFO = new RegExp(`\\b(all|todas|todos)( of)?( the| my| as| os| minhas| meus)? ${INFO_NOUN}\\b`
+  + `(?!.*\\b${INFO_NOUN}\\b.*\\b${TRUTH_ADJ}\\b)(?=.*\\b${TRUTH_ADJ}\\b)`, 'g');
+/** "provided"/"prestadas" só dentro de uma frase de veracidade (fora dela apontam para um conteúdo não dito). */
+const TRUTH_PROVIDED = /\b((i )?(have )?provided|fornecid[ao]s?|prestad[ao]s?)\b/g;
 
 /**
  * R3: as frases da candidatura que um demonstrativo pode determinar. "process", "processo", "selection", "seleção" e
@@ -162,17 +168,17 @@ const CONSENT_FILLER = new Set([
   // Artigos, preposições, conjunções.
   'the', 'a', 'an', 'o', 'os', 'as', 'um', 'uma', 'of', 'to', 'in', 'on', 'at', 'with', 'by', 'for', 'from', 'de', 'da', 'do',
   'das', 'dos', 'em', 'na', 'nos', 'nas', 'ao', 'aos', 'com', 'por', 'pelo', 'pela', 'para', 'and', 'e', 'or', 'ou',
-  // Pronomes, "s" do possessivo ("Acme's" vira "acme s"). "that"/"que" são tratados à parte (R4).
+  // Pronomes, "s" do possessivo ("Acme's" vira "acme s"). "that"/"que" são tratados à parte (R10).
   'i', 'me', 'my', 'you', 'your', 'we', 'our', 'its', 'meu', 'meus', 'minha', 'minhas', 'voce', 'seu', 'sua',
   'seus', 'suas', 'nosso', 'nossa', 's',
-  // Auxiliares sem conteúdo; "hereby" aponta para o próprio ato, não para um conteúdo.
-  'is', 'are', 'sao', 'estao', 'have', 'has', 'been', 'hereby',
-  // O resto da lista do controlador e formas próximas.
-  'please', 'review', 'read', 'understand', 'submitting', 'submit', 'enviar', 'leia', 'consulte', 'veja', 'acesse', 'clique',
-  'application', 'candidatura', 'form', 'formulario', 'recruitment', 'recrutamento', 'selection', 'selecao', 'seletivo', 'hiring',
-  'process', 'processo', 'provided', 'fornecidas', 'fornecidos', 'prestadas', 'prestados', 'information', 'informacoes',
-  'data', 'dados', 'personal', 'pessoais', 'candidate', 'candidato', 'candidata', 'applicant', 'click', 'view',
-  'ter', 'required', 'obrigatorio', 'obrigatoria', 'accordance', 'according', 'conforme',
+  // Cópulas da veracidade; "hereby" aponta para o próprio ato, não para um conteúdo.
+  'is', 'are', 'sao', 'estao', 'hereby',
+  // O resto da lista do controlador. Fora (fix round 5): verbos de ação (R9, só nas frases de ato), have/has/been/ter
+  // (afirmariam um fato), provided/prestadas (só na veracidade), information/data/personal (sozinhos dizem "e os
+  // dados"), accordance/according/conforme (só antes de um objeto).
+  'please', 'understand', 'application', 'candidatura', 'form', 'formulario', 'recruitment', 'recrutamento', 'selection', 'selecao',
+  'seletivo', 'hiring', 'process', 'processo', 'candidate', 'candidato', 'candidata', 'applicant', 'required', 'obrigatorio',
+  'obrigatoria',
 ]);
 /** Sem expressão de concordância, só o nome do objeto: "Privacy Policy", "Termos de uso e política de privacidade". */
 const BARE_FILLER = new Set(['the', 'a', 'o', 'os', 'as', 'of', 'de', 'da', 'do', 'das', 'dos', 'and', 'e', 'or', 'ou', 's',
@@ -185,8 +191,24 @@ const PURPOSE_OR_ACT = new RegExp([
   `\\bpara (os )?fins (de|do|da) (candidatura|recrutamento|selecao|processo seletivo)\\b`,
   `\\bpor meio (deste|desta)\\b`,
 ].join('|'), 'g');
-/** R4: "that"/"que" abrem oração só com uma palavra depois que não seja conjunção nem fronteira. */
-const CLAUSE_OPENER = new Set(['that', 'que']);
+/**
+ * R9: os verbos de ação só valem dentro destas frases de ato, inteiras e sem fronteira. "please read"/"leia" só logo
+ * antes de um objeto (com seu artigo). Também "in accordance with"/"conforme" só logo antes de um objeto.
+ */
+const ACT_PHRASES: readonly RegExp[] = [
+  /\bby submitting( this| my| the)? (job application|application|form)\b/g,
+  /\bao enviar( esta| minha| a)? (candidatura|inscricao)\b/g,
+  /\bao enviar( este| meu| o)? formulario\b/g,
+  /\bao me candidatar\b/g,
+  /\b(please (read|review)|(por favor )?leia)( the| our| a| o| os| as| nossa| nosso| nossos| nossas)? (?=#( |$))/g,
+  // ... ou logo antes de "and"/"e" mais uma expressão de concordância: "please review and acknowledge …", "leia e aceite …".
+  new RegExp(`\\b(please (read|review)|(por favor )?leia) (and|e) (?=(?:${AGREEMENT_SOURCE}))`, 'g'),
+  /\b(in accordance with|according to|conforme)( the| our| a| o| os| as)? (?=#( |$))/g,
+];
+/** R10: "that"/"que" abrem oração só antes destas palavras ou do começo de uma expressão de concordância. */
+const CLAUSE_START = new Set(['the', 'a', 'an', 'my', 'i', 'all', 'any', 'this', 'these', 'o', 'os', 'as', 'meu', 'minha', 'meus',
+  'minhas', 'eu', 'todas', 'todos', 'este', 'esta', 'estes', 'estas', 'li', 'estou']);
+const AGREEMENT_AT_START = new RegExp(`^(?:${AGREEMENT_SOURCE})`);
 const NOT_A_CLAUSE = new Set(['and', 'or', 'e', 'ou']);
 /** R6: formas societárias que podem vir no fim do nome da empresa, no rótulo ou no cadastro da vaga. */
 const LEGAL_SUFFIX = ['inc', 'llc', 'ltd', 'ltda', 's a', 'sa', 'gmbh', 'corp', 'corporation', 'co', 'plc', 'eireli', 'me'];
@@ -208,7 +230,7 @@ const COMPANY_PREPOSITION = ['of', 'by', 'from', 'with', 'at', 'de', 'da', 'do',
 /**
  * R1: a normalização do teste de consentimento. Como `normalizeQuestionText`, mas a pontuação e a quebra de linha entre
  * palavras viram a fronteira `|`. Hífen e apóstrofo dentro da palavra ("on-site", "Acme's", "I've") viram espaço; "&" e
- * "*" (de "Terms & Conditions" e do asterisco de obrigatório) também. Qualquer outro sinal é fronteira.
+ * "+" viram "and" (R8). Qualquer outro sinal, "*" incluído, é fronteira.
  */
 function consentTokens(text: string): string {
   return text
@@ -216,7 +238,7 @@ function consentTokens(text: string): string {
     .replace(/\p{M}+/gu, '')
     .toLowerCase()
     .replace(/(?<=[\p{L}\p{N}])['’‘-](?=[\p{L}\p{N}])/gu, ' ')
-    .replace(/[&*]/g, ' ')
+    .replace(/[&+]/g, ' and ')
     .replace(/[^\p{L}\p{N} \t]+/gu, ` ${BOUNDARY} `)
     .replace(/\s+/g, ' ')
     .trim();
@@ -241,7 +263,7 @@ function markTruth(text: string): string {
   return text.split(BOUNDARY).map((segment) => {
     if (TRUTH.test(segment)) {
       open = true;
-      return segment.replace(ALL_INFO, ` ${OBJ} `).replace(TRUTH_WORDS, ` ${OBJ} `);
+      return segment.replace(ALL_INFO, ` ${OBJ} `).replace(TRUTH_PROVIDED, ` ${OBJ} `).replace(TRUTH_WORDS, ` ${OBJ} `);
     }
     const words = segment.split(' ').filter((w) => w !== '');
     if (open && words.length > 0 && words.every((w) => TRUTH_ADJ_ONLY.test(w) || NOT_A_CLAUSE.has(w)))
@@ -259,7 +281,15 @@ function markTruth(text: string): string {
  */
 function remainder(text: string, company: string, filler: ReadonlySet<string>): { object: boolean; left: string[] } {
   const pattern = companyPattern(company);
+  const withAgreement = filler !== BARE_FILLER;
   let rest = consentTokens(text);
+  // R10: decidido no texto ainda sem marcas; um "that"/"que" que não abre oração fica e sobra no fim.
+  if (withAgreement) {
+    rest = rest.replace(/\b(that|que)(?= )/g, (match: string, _w: string, offset: number, all: string) => {
+      const after = all.slice(offset + match.length + 1);
+      return CLAUSE_START.has(after.split(' ')[0]!) || AGREEMENT_AT_START.test(after) ? USED : match;
+    });
+  }
   if (pattern) rest = rest.replace(pattern, ` ${COMPANY} `);
   rest = rest.replace(PURPOSE_OR_ACT, ` ${USED} `);
   for (const object of CONSENT_OBJECTS) rest = rest.replace(object, ` ${OBJ} `);
@@ -268,19 +298,15 @@ function remainder(text: string, company: string, filler: ReadonlySet<string>): 
   // R6b: a empresa sai só logo antes de um objeto ou logo depois de uma preposição; em outro lugar, `%` sobra.
   rest = rest.replace(new RegExp(`${COMPANY} (?=${OBJ}( |$))`, 'g'), `${USED} `);
   rest = rest.replace(new RegExp(`\\b(${COMPANY_PREPOSITION.join('|')})( the)? ${COMPANY}(?= |$)`, 'g'), `$1$2 ${USED}`);
+  for (const act of ACT_PHRASES) rest = rest.replace(act, ` ${USED} `);
   rest = rest.replace(APPLICATION_PHRASE, ` ${APP} `).replace(/\s+/g, ' ');
   rest = rest.replace(new RegExp(`\\b${DEMONSTRATIVE} (?=[${OBJ}${APP}]( |$))`, 'g'), `${USED} `);
   rest = rest.replace(new RegExp(AGREEMENT_SOURCE, 'g'), ` ${USED} `);
   const words = rest.split(/\s+/).filter((w) => w !== '');
-  const withAgreement = filler !== BARE_FILLER;
-  const left = words.filter((w, i) => {
+  const left = words.filter((w) => {
     if (w === OBJ || w === USED || w === BOUNDARY) return false;
     // Sem concordância, "Privacy Policy - Application form" não é só o nome do objeto.
     if (w === APP) return !withAgreement;
-    if (CLAUSE_OPENER.has(w) && withAgreement) {
-      const next = words[i + 1];
-      return next === undefined || next === BOUNDARY || NOT_A_CLAUSE.has(next);
-    }
     if (POINTING.has(w)) return true;
     return !filler.has(w);
   });

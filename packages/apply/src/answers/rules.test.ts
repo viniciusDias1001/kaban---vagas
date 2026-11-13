@@ -595,6 +595,7 @@ describe('fix round 4: a closed rule set for pointing words, boundaries, the com
     personal('I agree to the privacy policy and remote work', '', 'Acme Remote Work');
     consent('I agree to the privacy policy of Acme Remote Work', '', 'Acme Remote Work');
     consent("Please review and acknowledge Acme's Candidate Privacy Policy", '', 'Acme');
+    consent("I acknowledge Acme's Candidate Privacy Policy", '', 'Acme');
     consent("I agree to Acme Inc's privacy policy", '', 'Acme Inc.');
     consent('Concordo com a política de privacidade da Acme', '', 'Acme S.A.');
     consent('Concordo com a política de privacidade da Acme Ltda', '', 'Acme');
@@ -650,6 +651,95 @@ describe('fix round 4: a closed rule set for pointing words, boundaries, the com
     personal('I agree to the privacy policy', 'Including all of the above');
     personal('I agree to the privacy policy', 'This');
     personal('Privacy Policy', 'Privacy Policy, Terms of Use, and the above');
+  });
+});
+
+describe('fix round 5: symbols, action verbs, clause openers, "all" in the truth phrase, the rest of the filler', () => {
+  const box = (label: string, help = '') => q(label, { kind: 'boolean', help });
+  const verdict = (label: string, help = '') => [classifyByRule(box(label, help), 'Acme'), answerByRule(box(label, help), 'consent', ctx)];
+  const consent = (label: string, help = '') => expect(verdict(label, help), `${label} | ${help}`).toEqual(['consent', true]);
+  const personal = (label: string, help = '') => expect(verdict(label, help), `${label} | ${help}`).toEqual(['personal', undefined]);
+
+  it('the inputs of the review are refused', () => {
+    for (const label of ['I accept this & privacy policy', 'I accept these & terms of use', 'Concordo com esta & política de privacidade',
+      'I agree to that & the privacy policy', 'I agree to that & privacy policy', 'I accept that & the terms of use',
+      'I agree to this* privacy policy', 'I consent to data processing for all data and the information is true',
+      'Li e concordo com a política de privacidade e com o que você enviar',
+      'Concordo com a política de privacidade e autorizo você a enviar meus dados',
+      'I agree to the privacy policy and to you submitting my personal data', 'I agree to that in the privacy policy',
+      'I accept the privacy policy and that form'])
+      personal(label);
+  });
+
+  it('R8: "&" and "+" read as "and"; "*" is a boundary', () => {
+    for (const label of ['I accept this and privacy policy', 'I accept these and terms of use', 'Concordo com esta e política de privacidade',
+      'I agree to that and the privacy policy', 'I accept this + privacy policy', 'I agree to the privacy policy + the above'])
+      personal(label);
+    consent('I agree to the Terms & Conditions');
+    consent('I agree to the privacy policy & the terms of use');
+    consent('I agree to the privacy policy + the terms of use');
+    consent('Privacy Policy *');
+  });
+
+  it('R9: action verbs only inside the fixed act phrases', () => {
+    for (const label of ['By submitting this application, I agree to the privacy policy',
+      'By submitting my job application, I agree to the terms of use', 'By submitting the form, I agree to the privacy policy',
+      'Ao enviar esta candidatura, declaro que li e aceito a política de privacidade', 'Ao enviar minha inscrição, concordo com os termos de uso',
+      'Ao enviar este formulário, concordo com a política de privacidade', 'Ao me candidatar, concordo com a política de privacidade'])
+      consent(label);
+    consent('I agree to the privacy policy', 'Please read the privacy policy');
+    consent('Privacy Policy', 'Please review our privacy policy');
+    consent('Aceito os termos de uso', 'Leia os termos de uso');
+    consent('Aceito os termos de uso', 'Por favor leia a política de privacidade');
+    for (const label of ['Please review and acknowledge the privacy policy', 'Please read and accept the terms of use',
+      'Leia e aceite a política de privacidade', 'Por favor leia e aceite os termos de uso'])
+      consent(label);
+    // "sign"/"assine" não é concordância: sem ela, nem consentimento nem `personal`; fica com o modelo, nunca respondido.
+    for (const label of ['Please review and sign the privacy policy', 'Leia e assine a política de privacidade']) {
+      expect(classifyByRule(box(label), 'Acme'), label).toBeNull();
+      expect(answerByRule(box(label), 'consent', ctx), label).toBeUndefined();
+    }
+    // As frases simples continuam passando sem "have"/"provided"/"data"/"personal" na lista de ligação.
+    for (const label of ['I consent to the processing of my personal data for the purposes of this application',
+      'Autorizo o tratamento dos meus dados pessoais para fins de recrutamento',
+      'I certify that the information provided is true and complete'])
+      consent(label);
+    for (const label of ['By submitting, I agree to the privacy policy', 'I agree to the privacy policy and to submit my application',
+      'Please review the attached and accept the privacy policy', 'Please review and acknowledge the above privacy policy',
+      'Click to view and accept the privacy policy', 'I agree to share the privacy policy',
+      'Concordo em enviar a política de privacidade', 'I agree to read the terms of use', 'I agree to check the privacy policy'])
+      personal(label);
+    personal('I agree to the privacy policy', 'Click here to view it');
+    personal('I agree to the privacy policy', 'Please read and send the form');
+  });
+
+  it('R10: "that" and "que" only before a clause opener', () => {
+    consent('I certify that the information provided in this application is true and complete');
+    consent('Declaro que as informações prestadas são verdadeiras');
+    consent('I confirm that I have read the privacy policy');
+    consent('Declaro que li a política de privacidade');
+    personal('I agree to that in the privacy policy');
+    personal('I accept the privacy policy and that form');
+    personal('I agree to that privacy policy');
+  });
+
+  it('R7 tightened: "all" only before the noun of the matched truth phrase', () => {
+    personal('I consent to data processing for all data and the information is true');
+    consent('I certify that all information provided is true');
+    consent('Declaro que todas as informações prestadas são verdadeiras');
+  });
+
+  it('own probes: the rest of the filler cannot state a commitment', () => {
+    for (const label of ['I agree to the privacy policy; I have been in your process', 'I agree to the privacy policy and that the data is your data',
+      'I agree to the privacy policy and the information provided', 'Aceito a política de privacidade e as informações fornecidas',
+      'I consent to the processing of my personal data according to the form', 'Autorizo o tratamento dos meus dados conforme o formulário',
+      'Declaro ter os dados pessoais e aceito a política de privacidade', 'I agree to the privacy policy and I have your personal data',
+      'I agree to the privacy policy and my personal data', 'Concordo com a política de privacidade e com meus dados pessoais',
+      'I agree to the privacy policy and the data you have', 'I agree to the privacy policy and you have been provided my data',
+      'I agree to the privacy policy as provided'])
+      personal(label);
+    personal('Privacy Policy', 'Your data is our data');
+    personal('I agree to the privacy policy', 'Provided information');
   });
 });
 
