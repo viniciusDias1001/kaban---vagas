@@ -32,7 +32,7 @@ export const SENSITIVE_PATTERNS: readonly { category: 'personal' | 'demographic'
   { category: 'demographic', pattern: /\bgenero\b|\bgender\b|\bsexo\b|\bpronouns?\b|\bpronomes?\b/ },
   { category: 'demographic', pattern: /\bracas?\b|\betnia|\betnic|\brace\b|\bethnic|\bhispanic|\blatin[oa]\b|\bautodeclar|\bnegr[oa]s?\b|\bpard[oa]s?\b|\bindigena|\bcor\b/ },
   { category: 'demographic', pattern: /\bdeficien|\bpcds?\b|\bdisabilit/ },
-  { category: 'demographic', pattern: /\bveteran|\bforcas armadas\b|\barmed forces\b|\bservico militar\b|\bmilitary service\b/ },
+  { category: 'demographic', pattern: /\bveteran|\bforcas armadas\b|\barmed forces\b|\bmilitar(es)?\b|\bmilitary\b|\bserved in the (army|navy|air force)\b|\breservista/ },
   { category: 'demographic', pattern: /\borientacao sexual\b|\bsexual orientation\b/ },
   { category: 'demographic', pattern: /\bidade\b|\bdata de nascimento\b|\bano de nascimento\b|\bdate of birth\b|\bbirth ?(date|year)\b|\byear of birth\b|\byears old\b|\bhow old\b|\bmaior de (18|21|idade)\b|\bmenor de idade\b|\b(over|at least) (18|21)\b|\b(18|21) years of age\b|\bage\b|\bquantos anos (voce )?tem\b(?! (de|em|com) )|\b(mais|menos) de (18|21) anos\b|\b(18|21) (or|ou) (older|over|more|mais)\b|\b(18|21) anos ou mais\b/ },
 ];
@@ -133,14 +133,14 @@ const CONSENT_FILLER = new Set([
   // Artigos, preposições, conjunções.
   'the', 'a', 'an', 'o', 'os', 'as', 'um', 'uma', 'of', 'to', 'in', 'on', 'at', 'with', 'by', 'for', 'from', 'de', 'da', 'do',
   'das', 'dos', 'em', 'na', 'nos', 'nas', 'ao', 'aos', 'com', 'por', 'pelo', 'pela', 'para', 'and', 'e', 'or', 'ou',
-  // Pronomes e "que", "this", "s" do possessivo ("Acme's" vira "acme s").
-  'i', 'me', 'my', 'you', 'your', 'we', 'our', 'it', 'its', 'meu', 'meus', 'minha', 'minhas', 'voce', 'seu', 'sua',
-  'seus', 'suas', 'nosso', 'nossa', 'that', 'que', 'this', 'these', 'este', 'esta', 'estes', 'estas', 'esse', 'essa', 's',
-  // Auxiliares sem conteúdo.
+  // Pronomes, "s" do possessivo ("Acme's" vira "acme s"). "that"/"que" são tratados à parte (só abrindo oração).
+  'i', 'me', 'my', 'you', 'your', 'we', 'our', 'its', 'meu', 'meus', 'minha', 'minhas', 'voce', 'seu', 'sua',
+  'seus', 'suas', 'nosso', 'nossa', 's',
+  // Auxiliares sem conteúdo; "hereby" aponta para o próprio ato, não para um conteúdo.
   'is', 'are', 'sao', 'estao', 'have', 'has', 'been', 'hereby',
-  // O resto da lista do controlador e formas próximas.
-  'above', 'acima', 'linked', 'here', 'aqui', 'please', 'review', 'read', 'understand', 'submitting', 'submit', 'enviar',
-  'application', 'candidatura', 'purposes', 'fins', 'devidos', 'recruitment', 'recrutamento', 'selection', 'selecao', 'seletivo',
+  // O resto da lista do controlador e formas próximas (sem as palavras que apontam para outro lugar nem "purposes"/"fins").
+  'please', 'review', 'read', 'understand', 'submitting', 'submit', 'enviar', 'leia', 'consulte', 'veja', 'acesse', 'clique',
+  'application', 'candidatura', 'form', 'formulario', 'recruitment', 'recrutamento', 'selection', 'selecao', 'seletivo', 'hiring',
   'process', 'processo', 'provided', 'fornecidas', 'fornecidos', 'prestadas', 'prestados', 'information', 'informacoes', 'all',
   'todas', 'todos', 'data', 'dados', 'personal', 'pessoais', 'candidate', 'candidato', 'candidata', 'applicant', 'click', 'view',
   'ter', 'required', 'obrigatorio', 'obrigatoria', 'accordance', 'according', 'conforme',
@@ -149,31 +149,75 @@ const CONSENT_FILLER = new Set([
 const BARE_FILLER = new Set(['the', 'a', 'o', 'os', 'as', 'of', 'de', 'da', 'do', 'das', 'dos', 'and', 'e', 'or', 'ou', 's',
   'required', 'obrigatorio', 'obrigatoria']);
 
+/** Marca deixada no lugar de um objeto permitido; não é letra nem dígito, então nunca vem do texto normalizado. */
+const OBJ = '#';
 /**
- * `consent`: tirados concordância, objetos, nome da empresa e palavras de ligação, nada sobra (ou é só o nome do objeto).
- * `agreement`: tem expressão de concordância mas diz algo mais; é compromisso do dono (`personal`).
- * `none`: nem uma coisa nem outra; as outras regras ou o modelo decidem.
- * Recebe o rótulo normalizado. É o único teste de consentimento: `classifyByRule` e `answerByRule` usam este.
+ * Palavras que apontam para um conteúdo que o rótulo não diz ("the above", "this", "esta", "aqui"...). Nunca são
+ * palavra de ligação sozinhas: só valem como determinante logo antes de um objeto ou de um substantivo da candidatura, ou
+ * como um único locativo logo depois de um objeto.
  */
-function consentVerdict(label: string, company: string): 'consent' | 'agreement' | 'none' {
-  const agreement = AGREEMENT.test(label);
-  let rest = label;
+const POINTER = '(the above|the following|a seguir|o mesmo|above|acima|below|abaixo|following|seguintes?|this|these|those|it|same|'
+  + 'mesmo|este|esta|estes|estas|esse|essa|esses|essas|isto|isso|aquilo|here|aqui|herein|linked|'
+  + '(d|n)(este|esta|estes|estas|esse|essa|esses|essas|isto|isso)|daquilo|naquilo)';
+/** Os substantivos da candidatura que um "this"/"esta" pode determinar. */
+const APPLICATION_NOUN = '(application|form|formulario|candidatura|recruitment|recrutamento|selection|selecao|hiring|process|processo)';
+const POINTER_AS_DETERMINER = new RegExp(`\\b${POINTER} (?=${OBJ}|${APPLICATION_NOUN}\\b)`, 'g');
+const LOCATIVE_AFTER_OBJECT = new RegExp(
+  `${OBJ} ((linked|available|disponivel|disponiveis) )?(here|above|below|aqui|acima|abaixo|a seguir)\\b|${OBJ} (linked|available|disponivel|disponiveis)\\b`, 'g',
+);
+/** "purposes"/"fins" só dentro da frase da candidatura; "por meio desta" aponta para o ato. */
+const PURPOSE_OR_ACT = new RegExp([
+  `\\bfor (the )?purposes? of (this |the |my )?(application|recruitment|selection|hiring)( process)?\\b`,
+  `\\bfor (this |the |my )?(application|recruitment|selection|hiring)( process)? purposes?\\b`,
+  `\\bpara (os )?fins (de|do|da) (candidatura|recrutamento|selecao|processo seletivo)\\b`,
+  `\\bpor meio (deste|desta)\\b`,
+].join('|'), 'g');
+const CLAUSE_OPENER = new Set(['that', 'que']);
+const NOT_A_CLAUSE = new Set(['and', 'or', 'e', 'ou']);
+
+/** O que sobra do texto normalizado depois de tirar objetos, frases aceitas, concordância, empresa e ligação. */
+function remainder(text: string, company: string, filler: ReadonlySet<string>): { object: boolean; left: string[] } {
+  const squash = (s: string) => s.replace(/\s+/g, ' ').trim();
+  let rest = text;
   let object = false;
   for (const pattern of CONSENT_OBJECTS) {
-    const stripped = rest.replace(pattern, ' ');
-    if (stripped !== rest) object = true;
-    rest = stripped;
+    const marked = rest.replace(pattern, ` ${OBJ} `);
+    if (marked !== rest) object = true;
+    rest = marked;
   }
   if (TRUTH.test(rest)) {
     object = true;
-    rest = rest.replace(TRUTH_WORDS, ' ');
+    rest = rest.replace(TRUTH_WORDS, ` ${OBJ} `);
   }
-  rest = rest.replace(new RegExp(AGREEMENT_SOURCE, 'g'), ' ');
+  rest = squash(rest.replace(PURPOSE_OR_ACT, ' '));
+  rest = squash(rest.replace(LOCATIVE_AFTER_OBJECT, OBJ));
+  rest = squash(rest.replace(POINTER_AS_DETERMINER, ''));
+  const words = squash(rest.replace(new RegExp(AGREEMENT_SOURCE, 'g'), ' ')).split(' ').filter((w) => w !== '');
   const companyWords = new Set(normalizeQuestionText(company).split(' '));
-  const filler = agreement ? CONSENT_FILLER : BARE_FILLER;
-  const left = rest.split(' ').filter((w) => w !== '' && !filler.has(w) && !companyWords.has(w));
-  if (object && left.length === 0) return 'consent';
-  return agreement ? 'agreement' : 'none';
+  const left = words.filter((w, i) => {
+    if (w === OBJ || filler.has(w) || companyWords.has(w)) return false;
+    // "that"/"que" só abrindo oração: com algo depois que não seja "and"/"e"/"or"/"ou".
+    const next = words[i + 1];
+    return !(CLAUSE_OPENER.has(w) && filler !== BARE_FILLER && next !== undefined && !NOT_A_CLAUSE.has(next));
+  });
+  return { object, left };
+}
+
+/**
+ * `consent`: tirados concordância, objetos, nome da empresa e palavras de ligação, nada sobra (ou é só o nome do objeto),
+ * nem no rótulo nem no texto de ajuda (que não precisa de concordância nem de objeto próprios).
+ * `agreement`: tem expressão de concordância, ou passaria mas a ajuda diz algo mais; é compromisso do dono (`personal`).
+ * `none`: nem uma coisa nem outra; as outras regras ou o modelo decidem.
+ * É o único teste de consentimento: `classifyByRule` e `answerByRule` usam este.
+ */
+function consentVerdict(q: Question, company: string): 'consent' | 'agreement' | 'none' {
+  const label = normalizeQuestionText(q.label);
+  const agreement = AGREEMENT.test(label);
+  const { object, left } = remainder(label, company, agreement ? CONSENT_FILLER : BARE_FILLER);
+  if (!object || left.length > 0) return agreement ? 'agreement' : 'none';
+  const help = normalizeQuestionText(q.help);
+  if (help !== '' && remainder(help, company, CONSENT_FILLER).left.length > 0) return 'agreement';
+  return 'consent';
 }
 const RESUME_FILE = /\bresume\b|\bcurriculo\b|\bcurriculum\b|\bcv\b/;
 const NOT_RESUME_FILE = /\bcover letter\b|\bcarta\b/;
@@ -209,7 +253,7 @@ export function classifyByRule(q: Question, company = ''): QuestionCategory | nu
   for (const { category, pattern } of SENSITIVE_PATTERNS) if (texts.some((t) => pattern.test(t))) return category;
   if (q.kind === 'file') return 'file';
   const label = normalizeQuestionText(q.label);
-  const consent = consentVerdict(label, company);
+  const consent = consentVerdict(q, company);
   if (consent === 'consent') return 'consent';
   if (consent === 'agreement') return 'personal';
   if (ORIGIN.test(label)) return 'origin';
@@ -317,9 +361,12 @@ export function isWorkedHereQuestion(q: Question, ctx: RuleContext): boolean {
 }
 
 const AGREE = /^(i agree|agree|i accept|accept|i consent|yes|sim|concordo|aceito|li e concordo|li e aceito)$/;
-/** Só para o que `classifyByRule` chamaria de `consent`: o mesmo `consentVerdict`, com a mesma empresa. */
+/**
+ * Só para o que `classifyByRule` chama de `consent`, com a mesma empresa: o mesmo `consentVerdict`, e antes dele os
+ * padrões sensíveis ("the privacy policy available here" é `personal` por "availab").
+ */
 function consentAnswer(q: Question, company: string): AnswerValue | undefined {
-  if (!q.required || consentVerdict(normalizeQuestionText(q.label), company) !== 'consent') return undefined;
+  if (!q.required || classifyByRule(q, company) !== 'consent') return undefined;
   if (q.kind === 'boolean') return true;
   if (q.kind !== 'select' || q.options.length === 0) return undefined;
   const hits = q.options.filter((o) => AGREE.test(normalizeQuestionText(o)));

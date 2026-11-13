@@ -337,7 +337,7 @@ describe('fix round 2: consent by remainder', () => {
       'I acknowledge that I have read the Acme Applicant Privacy Notice', 'Do you agree to the privacy policy?',
       'Você concorda com os termos de uso?', 'I hereby certify that all the information I have provided is true, accurate and complete',
       'GDPR consent', 'Consentimento LGPD', 'Li e aceito os Termos e Condições', 'I agree to the Privacy Policy (required)',
-      'Declaro, para os devidos fins, que as informações prestadas são verdadeiras', 'Estou de acordo com a política de privacidade',
+      'Estou de acordo com a política de privacidade',
       "I've read the privacy notice", 'Consinto com o tratamento de dados pessoais para fins de recrutamento',
       'Termos de uso e política de privacidade', 'Eu li e concordo com a política de privacidade',
       'I give my consent to the processing of my personal data for this application',
@@ -398,8 +398,114 @@ describe('fix round 2: sensitive wordings', () => {
     expect(classifyByRule(q('Quantos anos de experiência com React?'))).toBeNull();
     expect(classifyByRule(q('Quantos anos você tem de experiência com Java?'))).toBeNull();
     expect(classifyByRule(q('What is the average team size you managed?'))).toBeNull();
-    expect(classifyByRule(q('Do you have military experience?'))).toBeNull();
     expect(classifyByRule(q('I have read the Privacy Notice', { kind: 'boolean' }))).toBe('consent');
+  });
+});
+
+describe('fix round 3: words that point elsewhere, purposes, help text, military', () => {
+  const box = (label: string, help = '') => q(label, { kind: 'boolean', help });
+  const verdict = (label: string, help = '') => [classifyByRule(box(label, help), 'Acme'), answerByRule(box(label, help), 'consent', ctx)];
+  const consent = (label: string, help = '') => expect(verdict(label, help), `${label} | ${help}`).toEqual(['consent', true]);
+  const personal = (label: string, help = '') => expect(verdict(label, help), `${label} | ${help}`).toEqual(['personal', undefined]);
+
+  it('agreeing to "the above", "this", "these" or "it" next to an allowed object is not consent', () => {
+    for (const label of ['I agree to all of the above and to the privacy policy',
+      'I have read and agree to all of the above and the Privacy Policy', 'Li e concordo com o acima e com a política de privacidade',
+      'I accept these and the privacy policy', 'I accept this and the privacy policy', 'I accept it and the terms of use',
+      'Concordo com esta e com a política de privacidade', 'I agree to the privacy policy linked here and above'])
+      personal(label);
+  });
+
+  it('a pointing word is accepted as the determiner of an object or of the application', () => {
+    for (const label of ['I agree to this privacy policy', 'I have read the above privacy policy', 'I accept these terms of use',
+      'I accept the following terms of use', 'By submitting this form, I agree to the privacy policy',
+      'I consent to the processing of my personal data for this recruitment process',
+      'Concordo com esta política de privacidade', 'Aceito estes termos de uso', 'Ao enviar esta candidatura, concordo com a política de privacidade',
+      'Autorizo o tratamento dos meus dados pessoais neste processo seletivo', 'Declaro que as informações desta candidatura são verdadeiras'])
+      consent(label);
+  });
+
+  it('a pointing word is accepted as one locative right after an object', () => {
+    for (const label of ['I agree to the privacy policy above', 'I accept the terms of use below', 'I have read the privacy notice linked here',
+      'Concordo com a política de privacidade acima', 'Aceito os termos de uso disponíveis aqui', 'I agree to the privacy policy linked below',
+      'Li o aviso de privacidade abaixo', 'Li os termos de uso a seguir'])
+      consent(label);
+    // "available" cai antes no padrão sensível de disponibilidade (over-catch aceito); a resposta segue o classificador.
+    personal('I agree to the privacy policy available here');
+  });
+
+  it('the same pointing words anywhere else are a remainder', () => {
+    for (const label of ['I agree to this', 'I agree to the above', 'Concordo com o acima', 'Aceito isto e os termos de uso',
+      'I agree to the privacy policy and the following', 'I accept the same and the privacy policy', 'I agree to the privacy policy this',
+      'Concordo com a política de privacidade e com isso', 'I acknowledge the terms of use herein', 'Click here to accept the privacy policy'])
+      personal(label);
+  });
+
+  it('"that" and "que" are filler only when they open a clause', () => {
+    personal('I accept that and the privacy policy');
+    personal('I agree to that.');
+    consent('Declaro que li a política de privacidade');
+    consent('I confirm that I have read the privacy policy');
+  });
+
+  it('"hereby" and "por meio desta" point at the act and are fine', () => {
+    consent('I hereby accept the terms of use');
+    consent('Por meio desta, declaro que as informações prestadas são verdadeiras');
+  });
+
+  it('"purposes" and "fins" count only inside the application phrase', () => {
+    for (const label of ['I consent to the processing of my personal data for all purposes',
+      'I consent to the processing of my personal data for marketing purposes', 'Autorizo o tratamento dos meus dados para quaisquer fins',
+      'Declaro, para os devidos fins, que as informações prestadas são verdadeiras'])
+      personal(label);
+    for (const label of ['I consent to the processing of my personal data',
+      'I consent to the processing of my personal data for the purposes of this application',
+      'I consent to the processing of my personal data for recruitment purposes',
+      'Autorizo o tratamento dos meus dados pessoais para fins de processo seletivo',
+      'Autorizo o tratamento dos meus dados pessoais para os fins do recrutamento'])
+      consent(label);
+  });
+
+  it('a help text must pass the same test', () => {
+    personal('Privacy Policy', 'By checking this you also agree to work weekends');
+    personal('I agree to the privacy policy', 'Você também concorda em trabalhar aos sábados');
+    consent('Privacy Policy', 'Required to process your application');
+    consent('Política de privacidade', 'Leia a política de privacidade aqui');
+    consent('I agree to the privacy policy', 'Read our privacy policy here');
+  });
+
+  it('own probes: refused', () => {
+    for (const label of ['I agree to these privacy policies and the above', 'I accept this privacy policy and this',
+      'I agree to the terms of use above and below', 'I agree to everything above and the privacy policy',
+      'Concordo com o exposto acima e com os termos de uso', 'Li e concordo com os termos acima', 'I agree that', 'Declaro que',
+      'I agree to the privacy policy and that', 'Aceito a política de privacidade e isso', 'I agree to the privacy policy herein',
+      'I consent to the processing of my personal data for any purpose', 'Autorizo o tratamento dos meus dados para fins comerciais',
+      'Autorizo o tratamento dos meus dados pessoais para fins de marketing', 'Li e aceito a política de privacidade desta empresa'])
+      personal(label);
+    personal('Privacy Policy', 'You also agree to be contacted for other roles');
+    personal('Termos de uso', 'Ao marcar, você aceita a cláusula de exclusividade');
+    personal('Privacy Policy', 'See https://acme.com/privacy');
+    personal('I agree to the privacy policy', 'This includes on-call shifts');
+  });
+
+  it('own probes: accepted', () => {
+    for (const label of ['I agree to the privacy policy linked above', 'Concordo com estes termos de uso',
+      'Li e concordo com a política de privacidade deste processo seletivo', 'I confirm the information in this form is accurate',
+      'I consent to the processing of my personal data for the purpose of this recruitment process',
+      'Autorizo o tratamento dos meus dados para fins de seleção'])
+      consent(label);
+    consent('Privacy Policy', 'Please read our privacy policy linked here');
+    consent('Termos de uso', 'Consulte os termos de uso abaixo');
+    consent('I agree to the privacy policy', 'Required');
+    consent('Aceito a política de privacidade', 'Obrigatório');
+  });
+
+  it('any mention of the military is demographic', () => {
+    for (const label of ['Have you served in the military?', 'Do you have military experience?', 'Você é reservista?',
+      'Have you served in the army?', 'Já foi militar?', 'Have you served in the Navy?', 'Você prestou serviço militar?'])
+      expect(classifyByRule(q(label)), label).toBe('demographic');
+    expect(classifyByRule(select('Status', ['Militar', 'Civil']))).toBe('demographic');
+    expect(classifyByRule(q('Situação', { help: 'Informe se é militar da ativa' }))).toBe('demographic');
   });
 });
 
