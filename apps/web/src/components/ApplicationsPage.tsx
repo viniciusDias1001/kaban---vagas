@@ -1,10 +1,10 @@
-import { ArrowUpRight, BellRing, ChevronDown, CloudOff, LoaderCircle, RotateCw, Send } from 'lucide-react';
+import { ArrowUpRight, BellRing, ChevronDown, CloudOff, LoaderCircle, RotateCw, Send, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { APPLICATION_FILTERS, APPLY_SITE_LABELS, type ApplicationFilter, type ApplicationListItemDto } from '@kv/shared/client';
 import {
-  FILTER_LABELS, UNCONFIRMED_TEXT, findListItem, firstFilterWithItems, listCutText, reasonText, rowAnswersText, sendAllPlan,
-  sendAllResultText, unavailableNotice, waitingText,
+  FILTER_LABELS, UNCONFIRMED_TEXT, applicationReasonText, findListItem, firstFilterWithItems, listCutText, queueBlockedReason,
+  repeatsNotice, rowAnswersText, sendAllPlan, sendAllResultText, unavailableNotice, waitingText,
 } from '../lib/apply';
 import { spring } from '../lib/motion';
 import { cn } from '../lib/utils';
@@ -25,7 +25,7 @@ const EMPTY_TEXT: Record<ApplicationFilter, string> = {
   skipped: 'Nenhuma candidatura pulada, com falha ou cancelada.',
 };
 /** Colunas da lista (a mesma grade no cabeçalho e nas linhas); abaixo de `md` cada linha empilha. */
-const GRID = 'md:grid md:grid-cols-[minmax(0,1fr)_7.5rem_9.5rem_6.5rem_1.25rem] md:items-center md:gap-x-5';
+const GRID = 'md:grid md:grid-cols-[minmax(0,1fr)_7.5rem_11.5rem_6.5rem_1.25rem] md:items-center md:gap-x-5';
 
 type Permission = NotificationPermission | 'unsupported';
 const readPermission = (): Permission => (typeof Notification === 'undefined' ? 'unsupported' : Notification.permission);
@@ -109,7 +109,7 @@ function Row({ item, index, open, onToggle, onOpenJob }: {
   // Envio não confirmado não volta por "Tentar de novo": a frase da linha diz o que conferir.
   const reason = item.status === 'needs_human' && item.reason === 'confirm_submission'
     ? UNCONFIRMED_TEXT
-    : reasonText(item.reason, item.detail);
+    : applicationReasonText(item);
   const when = item.submittedAt ?? item.createdAt;
   const panelId = `application-panel-${item.id}`;
   return (
@@ -203,6 +203,9 @@ export function ApplicationsPage({ initialFilter, onOpenJob }: { initialFilter?:
   const activeList = useApplications('active', waiting !== null);
   const waitingItem = waiting ? findListItem([list.data, activeList.data], waiting.applicationId) : undefined;
   const unavailable = unavailableNotice(status);
+  // Sem poder rodar agora: "Enviar todos os ensaios" fica desligado, com o motivo do aviso acima como dica.
+  const blocked = queueBlockedReason(status);
+  const unavailableId = useId();
   const cut = shown && counts ? listCutText(shown.length, counts[filter]) : null;
 
   return (
@@ -221,7 +224,9 @@ export function ApplicationsPage({ initialFilter, onOpenJob }: { initialFilter?:
           </div>
           {rehearsalCount > 0 && (
             <Button
-              type="button" variant="primary" data-testid="applications-send-all" disabled={sendAll.isPending || plan.ids.length === 0}
+              type="button" variant="primary" data-testid="applications-send-all"
+              disabled={sendAll.isPending || plan.ids.length === 0 || blocked !== null}
+              title={blocked ?? undefined} aria-describedby={blocked && unavailable ? unavailableId : undefined}
               onClick={() => setConfirmSend(true)}
             >
               {sendAll.isPending ? <LoaderCircle aria-hidden className="animate-spin" /> : <Send aria-hidden />}
@@ -235,15 +240,36 @@ export function ApplicationsPage({ initialFilter, onOpenJob }: { initialFilter?:
         </AnimatePresence>
 
         {unavailable && (
-          <Notice tone="info" role="status" title={unavailable.title} data-testid="applications-unavailable">{unavailable.reason}</Notice>
+          <Notice tone="info" role="status" title={unavailable.title} data-testid="applications-unavailable">
+            <p id={unavailableId}>{unavailable.reason}</p>
+          </Notice>
         )}
         {status && status.available && !status.enabled && (
           <Notice tone="info" role="status" title="A candidatura automática está desligada">
             Ligue em Configurações para a IA se candidatar por você. As candidaturas que já existem continuam aqui.
           </Notice>
         )}
-        {sendError && <Notice tone="bad" role="alert">{sendError}</Notice>}
-        {sendResult && <Notice tone="info" role="status" data-testid="applications-send-all-result">{sendResult}</Notice>}
+        {/* Uma recusa que só repete o motivo do aviso acima não ganha uma segunda caixa. */}
+        {sendError && !(unavailable && repeatsNotice(sendError, unavailable.reason)) && <Notice tone="bad" role="alert">{sendError}</Notice>}
+        <AnimatePresence initial={false}>
+          {sendResult && (
+            <motion.div key="send-all-result" initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={spring}>
+              <Notice
+                tone="info" role="status" data-testid="applications-send-all-result"
+                action={(
+                  <Button
+                    type="button" variant="ghost" size="icon" aria-label="Fechar o aviso" data-testid="applications-send-all-result-close"
+                    className="-my-1.5 -mr-2" onClick={() => setSendResult(null)}
+                  >
+                    <X aria-hidden />
+                  </Button>
+                )}
+              >
+                {sendResult}
+              </Notice>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         <motion.div
           initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ ...spring, delay: 0.04 }}
@@ -257,7 +283,7 @@ export function ApplicationsPage({ initialFilter, onOpenJob }: { initialFilter?:
             return (
               <button
                 key={f} type="button" data-testid={`applications-filter-${f}`} aria-pressed={active}
-                onClick={() => { setChosen(f); setOpenId(null); }}
+                onClick={() => { setChosen(f); setOpenId(null); setSendResult(null); }}
                 className={cn(
                   'relative flex h-9 cursor-pointer items-center gap-2 rounded-xl px-3.5 text-[13px] font-medium transition-colors duration-150 active:scale-[0.97]',
                   'focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-accent/45',
