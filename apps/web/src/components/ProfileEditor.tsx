@@ -265,7 +265,11 @@ export function ProfileEditor({ profile, active, footer }: Props) {
                   <Field label="Início" value={exp.start} placeholder="2021-03" onChange={(start) => patch('experiences', i, { start })} />
                   <Field label="Fim" value={exp.end} hint="vazio = atual" onChange={(end) => patch('experiences', i, { end })} />
                   <Field label="Local" value={exp.location} onChange={(location) => patch('experiences', i, { location })} className="@md:max-@4xl:col-span-2" />
-<SectionField value={exp.section} onChange={(section) => patch('experiences', i, { section })} />                  <Field                    label="Nota" value={exp.note} hint="Cargos anteriores na mesma empresa."                    onChange={(note) => patch('experiences', i, { note })} className="col-span-full"                  />
+                  <SectionField value={exp.section} onChange={(section) => patch('experiences', i, { section })} />
+                  <Field
+                    label="Nota" value={exp.note} hint="Cargos anteriores na mesma empresa."
+                    onChange={(note) => patch('experiences', i, { note })} className="col-span-full"
+                  />
                 </div>
                 <RemoveButton label={named('experiência', exp.company, i)} onClick={() => drop('experiences', i)} className="mt-5" />
               </div>
