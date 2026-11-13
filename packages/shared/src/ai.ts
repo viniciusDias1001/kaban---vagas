@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import {
-  EXPERIENCE_SECTIONS, RESUME_LANGS, itemIdPattern, randomItemId, type ItemKind,
+  EXPERIENCE_SECTIONS, RESUME_LANGS, itemIdPattern, randomItemId, type ExperienceSection, type ItemKind, type WithLayout,
 } from './ai-constants';
 import { LIMITS, hasNul } from './constants';
 
@@ -69,15 +69,16 @@ const strings = z.array(z.string());
 /** Mesmo desenho do perfil, sem restrições. Na extração o modelo devolve `id: ""`; na tradução, repete os ids. */
 export const ProfileWireSchema = z.object({
   contact: z.object({ name: s, email: s, phone: s, location: s }),
+  headline: s,
   summary: s,
   experiences: z.array(
     z.object({
-      id: s, company: s, title: s, start: s, end: s, location: s,
+      id: s, company: s, title: s, start: s, end: s, location: s, section: s, note: s,
       achievements: z.array(z.object({ id: s, text: s })),
     }),
   ),
   education: z.array(z.object({ id: s, institution: s, degree: s, start: s, end: s })),
-  skills: z.array(z.object({ id: s, name: s })),
+  skills: z.array(z.object({ id: s, name: s, group: s })),
   languages: z.array(z.object({ id: s, name: s, level: s })),
   certifications: z.array(z.object({ id: s, name: s, issuer: s, date: s })),
   links: z.array(z.object({ id: s, label: s, url: s })),
@@ -95,7 +96,7 @@ export interface NormalizeOptions {
  * cria um novo para os demais (ids estáveis entre edições), completa `https://` em links sem esquema e
  * descarta links que nem assim viram URL http(s). Quem chama valida o resultado com CandidateProfileSchema.
  */
-export function normalizeProfile(wire: ProfileWire, opts: NormalizeOptions): CandidateProfile {
+export function normalizeProfile(wire: ProfileWire, opts: NormalizeOptions): WithLayout<CandidateProfile> {
   const newId = opts.newId ?? randomItemId;
   const seen = new Set<string>();
   const keepId = (kind: ItemKind, candidate: string): string => {
@@ -108,6 +109,10 @@ export function normalizeProfile(wire: ProfileWire, opts: NormalizeOptions): Can
   const sh = (text: string) => cut(text, LIMITS.profileShort);
   const lg = (text: string) => cut(text, LIMITS.profileLong);
   const cap = <T>(items: T[], max: number = LIMITS.profileItems) => (opts.clamp ? items.slice(0, max) : items);
+  const section = (raw: string): ExperienceSection => {
+    const v = raw.trim().toLowerCase();
+    return EXPERIENCE_SECTIONS.find((x) => x === v) ?? 'principal';
+  };
   const url = (raw: string) => (/^https?:\/\//i.test(raw.trim()) ? raw.trim() : `https://${raw.trim()}`);
   const isUrl = (u: string) => {
     try {
@@ -122,16 +127,18 @@ export function normalizeProfile(wire: ProfileWire, opts: NormalizeOptions): Can
       name: sh(wire.contact.name), email: sh(wire.contact.email), phone: sh(wire.contact.phone),
       location: sh(wire.contact.location),
     },
+    headline: sh(wire.headline),
     summary: lg(wire.summary),
     experiences: cap(wire.experiences).map((e) => ({
       id: keepId('experience', e.id),
       company: sh(e.company), title: sh(e.title), start: sh(e.start), end: sh(e.end), location: sh(e.location),
+      section: section(e.section), note: sh(e.note),
       achievements: cap(e.achievements, LIMITS.achievements).map((a) => ({ id: keepId('achievement', a.id), text: lg(a.text) })),
     })),
     education: cap(wire.education).map((e) => ({
       id: keepId('education', e.id), institution: sh(e.institution), degree: sh(e.degree), start: sh(e.start), end: sh(e.end),
     })),
-    skills: cap(wire.skills).map((k) => ({ id: keepId('skill', k.id), name: sh(k.name) })),
+    skills: cap(wire.skills).map((k) => ({ id: keepId('skill', k.id), name: sh(k.name), group: sh(k.group) })),
     languages: cap(wire.languages).map((l) => ({ id: keepId('language', l.id), name: sh(l.name), level: sh(l.level) })),
     certifications: cap(wire.certifications).map((c) => ({
       id: keepId('certification', c.id), name: sh(c.name), issuer: sh(c.issuer), date: sh(c.date),

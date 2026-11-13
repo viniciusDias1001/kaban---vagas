@@ -1,6 +1,6 @@
 import {
-  LIMITS, type AiStatusDto, type AiTaskDto, type JobAiListItemDto, type LayerState, type PdfWarningsDto, type ProfileWire, type Violation,
-  type ViolationCode,
+  LIMITS, withProfileDefaults, type AiStatusDto, type AiTaskDto, type JobAiListItemDto, type LayerState, type PdfWarningsDto, type ProfileWire, type Violation,
+  type CandidateProfile, type ViolationCode,
 } from '@kv/shared/client';
 import { NETWORK_ERROR, errorMessage } from '../apiError';
 
@@ -308,11 +308,21 @@ export function rebaseDraft(draft: { dirty: boolean; version: number }, serverVe
 
 /** Itens novos do editor de perfil: `id` vazio, que a API troca por um id estável ao salvar. */
 export const blankItem = {
-  experience: (): ProfileWire['experiences'][number] => ({ id: '', company: '', title: '', start: '', end: '', location: '', achievements: [] }),
+  experience: (): ProfileWire['experiences'][number] => ({ id: '', company: '', title: '', start: '', end: '', location: '', section: 'principal', note: '', achievements: [] }),
   achievement: (): ProfileWire['experiences'][number]['achievements'][number] => ({ id: '', text: '' }),
   education: (): ProfileWire['education'][number] => ({ id: '', institution: '', degree: '', start: '', end: '' }),
-  skill: (): ProfileWire['skills'][number] => ({ id: '', name: '' }),
+  skill: (): ProfileWire['skills'][number] => ({ id: '', name: '', group: '' }),
   language: (): ProfileWire['languages'][number] => ({ id: '', name: '', level: '' }),
   certification: (): ProfileWire['certifications'][number] => ({ id: '', name: '', issuer: '', date: '' }),
   link: (): ProfileWire['links'][number] => ({ id: '', label: '', url: '' }),
 };
+
+/** O perfil do servidor como o editor o edita: cópia profunda de `withProfileDefaults(data)`. */
+export function editableProfile(data: CandidateProfile): ProfileWire {
+  return structuredClone(withProfileDefaults(data)) as ProfileWire;
+}
+
+/** Há alteração não salva? Compara o rascunho com `editableProfile(server)`, nunca com o dado cru do servidor. */
+export function profileDirty(draft: ProfileWire, server: CandidateProfile): boolean {
+  return JSON.stringify(draft) !== JSON.stringify(editableProfile(server));
+}

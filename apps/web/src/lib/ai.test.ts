@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { ProfileWireSchema, VIOLATION_CODES, type AiTaskDto, type JobAiSummaryDto, type Violation, type ViolationCode } from '@kv/shared';
+import { ProfileWireSchema, VIOLATION_CODES, withProfileDefaults, type CandidateProfile, type AiTaskDto, type JobAiSummaryDto, type Violation, type ViolationCode } from '@kv/shared';
 import {
-  VIOLATION_LABELS, blankItem, cardTitle, drawerTitle, formatUsd, isPending, languageBadge, layerMessage, parsePdfFailure, pdfBlockers,
-  pollMs, rebaseDraft, resumeFileProblem, retryNote, scoreTone, scoringPauseText, sortByScore, taskErrorText, toScoreMap, violationPlace, violationView,
+  VIOLATION_LABELS, blankItem, cardTitle, drawerTitle, editableProfile, formatUsd, isPending, languageBadge, layerMessage, parsePdfFailure, pdfBlockers,
+  pollMs, profileDirty, rebaseDraft, resumeFileProblem, retryNote, scoreTone, scoringPauseText, sortByScore, taskErrorText, toScoreMap, violationPlace, violationView,
 } from './ai';
 
 const summary = (jobId: number, score: number | null, titlePt: string | null = null): JobAiSummaryDto => ({
@@ -217,10 +217,27 @@ describe('resumeFileProblem', () => {
   });
 });
 
+describe('editableProfile and profileDirty', () => {
+  /** Como um perfil gravado antes do modelo de currículo. */
+  const old: CandidateProfile = {
+    contact: { name: 'Maria Exemplo da Silva', email: 'maria@exemplo.test', phone: '', location: 'São Paulo, SP' }, summary: 'Pessoa fictícia.',
+    experiences: [{ id: 'exp_aaaaaaa1', company: 'Empresa Fictícia Ltda', title: 'Desenvolvedora', start: '2021-03', end: '', location: '', achievements: [] }],
+    education: [], skills: [{ id: 'skill_aaaaaaa1', name: 'React' }], languages: [], certifications: [], links: [],
+  };
+  it('opens a profile stored before the change without marking it as edited', () => {
+    const draft = editableProfile(old);
+    expect(ProfileWireSchema.safeParse(draft).success).toBe(true);
+    expect(old).not.toHaveProperty('headline'); // a entrada não foi tocada
+    expect(profileDirty(draft, old)).toBe(false);
+    expect(profileDirty(draft, withProfileDefaults(old))).toBe(false); // a versão completa do mesmo perfil não conta como edição
+    expect(profileDirty({ ...draft, headline: 'Tech Lead' }, old)).toBe(true);
+  });
+});
+
 describe('blankItem', () => {
   it('creates items the API accepts as new (empty id, every field present)', () => {
     const wire = {
-      contact: { name: '', email: '', phone: '', location: '' }, summary: '',
+      contact: { name: '', email: '', phone: '', location: '' }, headline: '', summary: '',
       experiences: [{ ...blankItem.experience(), achievements: [blankItem.achievement()] }],
       education: [blankItem.education()], skills: [blankItem.skill()], languages: [blankItem.language()],
       certifications: [blankItem.certification()], links: [blankItem.link()],

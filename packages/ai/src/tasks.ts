@@ -1,6 +1,6 @@
 import {
   AI_TIER2_DESCRIPTION_CHARS, CandidateProfileSchema, LIMITS, ProfileWireSchema, TailoredDraftSchema, Tier1BatchSchema, Tier2OutputSchema,
-  normalizeProfile, type AiTaskType, type CandidateProfile, type ItemKind, type JobAnalysis, type ResumeLang,
+  normalizeProfile, withProfileDefaults, type AiTaskType, type CandidateProfile, type ItemKind, type JobAnalysis, type ResumeLang,
   type TailoredDraft, type Tier1Result, type Tier2Output,
 } from '@kv/shared';
 import { z } from 'zod';
@@ -162,10 +162,11 @@ export async function extractProfile(
  */
 export async function translateProfile(
   provider: AiProvider,
-  source: CandidateProfile,
+  stored: CandidateProfile,
   target: ResumeLang,
   opts: { signal?: AbortSignal } = {},
 ): Promise<TaskResult<CandidateProfile>> {
+  const source = withProfileDefaults(stored);
   const size = JSON.stringify(source).length;
   if (size > PROFILE_JSON_MAX_CHARS) throw new InputTooLargeError('profile', size, PROFILE_JSON_MAX_CHARS);
   const res = await provider.generate({

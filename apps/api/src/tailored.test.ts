@@ -100,7 +100,7 @@ describe('PUT /jobs/:id/tailored (review and edit)', () => {
     expect(warnings).toEqual([]);
     expect(tailored.editedAt).toEqual(expect.any(Number));
     expect(tailored.content.summary).toBe('Resumo escrito por mim.');
-    expect(tailored.content.skills).toEqual([{ id: 'skill_aaaaaaa2', name: 'TypeScript' }]);
+    expect(tailored.content.skills).toEqual([{ id: 'skill_aaaaaaa2', name: 'TypeScript', group: '' }]);
     expect(tailored.content.experiences[0]).toMatchObject({ company: 'Empresa Fictícia Ltda', start: '2021-03' });
     expect(tailored.content.experiences[0].achievements).toHaveLength(1);
   });

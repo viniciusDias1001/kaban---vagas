@@ -4,7 +4,7 @@ import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } fr
 import { createPortal } from 'react-dom';
 import { LIMITS, type CandidateProfileDto, type ProfileOrigin, type ProfileWire, type ResumeLang } from '@kv/shared/client';
 import { ApiError } from '../apiError';
-import { blankItem, rebaseDraft } from '../lib/ai';
+import { blankItem, editableProfile, profileDirty, rebaseDraft } from '../lib/ai';
 import { cn } from '../lib/utils';
 import { showToast } from '../toast';
 import { AI_KEYS, useSaveProfile } from '../useAi';
@@ -33,10 +33,6 @@ const kept: Partial<Record<ResumeLang, { version: number; data: ProfileWire }>> 
 export function forgetProfileDraft(lang?: ResumeLang): void {
   for (const key of Object.keys(kept) as ResumeLang[]) if (!lang || key === lang) delete kept[key];
 }
-
-/** Cópia editável: mesmos campos e mesmos ids. Ids nunca são criados nem alterados aqui. */
-const copyOf = (data: ProfileWire): ProfileWire => JSON.parse(JSON.stringify(data)) as ProfileWire;
-const same = (a: ProfileWire, b: ProfileWire) => JSON.stringify(a) === JSON.stringify(b);
 
 function Field({ label, value, onChange, hint, className, type, placeholder }: {
   label: string; value: string; onChange: (v: string) => void; hint?: string; className?: string; type?: string; placeholder?: string;
@@ -99,19 +95,19 @@ interface Props {
 export function ProfileEditor({ profile, active, footer }: Props) {
   const lang = profile.lang;
   const qc = useQueryClient();
-  const [data, setData] = useState<ProfileWire>(() => kept[lang]?.data ?? copyOf(profile.data));
+  const [data, setData] = useState<ProfileWire>(() => kept[lang]?.data ?? editableProfile(profile.data));
   /** Versão do perfil em que o rascunho se baseia: é ela que vai no PUT, e a API recusa (409) se já houver outra. */
   const [draftVersion, setDraftVersion] = useState(() => kept[lang]?.version ?? profile.version);
   /** O servidor tem uma versão mais nova que a do rascunho, e há alterações não salvas: o usuário decide. */
   const [conflict, setConflict] = useState(false);
-  const dirty = !same(data, profile.data);
+  const dirty = profileDirty(data, profile.data);
   // Versão nova no servidor (currículo reenviado, tradução refeita, outra aba): sem edição pendente o editor
   // acompanha; com edição pendente o rascunho fica e a tela pergunta o que fazer.
   const [base, setBase] = useState<CandidateProfileDto | null>(null);
   if (profile !== base) {
-    const action = rebaseDraft({ dirty: base ? !same(data, base.data) : dirty, version: draftVersion }, profile.version);
+    const action = rebaseDraft({ dirty: base ? profileDirty(data, base.data) : dirty, version: draftVersion }, profile.version);
     if (action === 'adopt') {
-      setData(copyOf(profile.data));
+      setData(editableProfile(profile.data));
       setDraftVersion(profile.version);
       setConflict(false);
     } else if (action === 'conflict') {
@@ -151,7 +147,7 @@ export function ProfileEditor({ profile, active, footer }: Props) {
       onSuccess: (saved) => {
         // A resposta traz os ids que a API criou para os itens novos.
         setBase(saved);
-        setData(copyOf(saved.data));
+        setData(editableProfile(saved.data));
         setDraftVersion(saved.version);
         setConflict(false);
         showToast('Perfil salvo. Notas e análises antigas ficam marcadas como desatualizadas.', 'info');
@@ -169,7 +165,7 @@ export function ProfileEditor({ profile, active, footer }: Props) {
 
   /** "Recarregar": descarta o rascunho e mostra a versão do servidor. */
   function reload() {
-    setData(copyOf(profile.data));
+    setData(editableProfile(profile.data));
     setDraftVersion(profile.version);
     setConflict(false);
   }

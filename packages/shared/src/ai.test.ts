@@ -15,16 +15,17 @@ export function counterIds() {
 
 const wire: ProfileWire = {
   contact: { name: 'Maria Exemplo da Silva', email: 'maria@exemplo.test', phone: '', location: 'São Paulo, SP' },
+  headline: '',
   summary: 'Desenvolvedora front-end (pessoa fictícia).',
   experiences: [
     {
       id: '', company: 'Empresa Fictícia Ltda', title: 'Desenvolvedora Front-end', start: '2021-03', end: '2024-06',
-      location: 'Remoto',
+      location: 'Remoto', section: 'principal', note: '',
       achievements: [{ id: '', text: 'Reduzi o tempo de build em 40%' }, { id: '', text: 'Liderei 3 pessoas' }],
     },
   ],
   education: [{ id: '', institution: 'Universidade Exemplo', degree: 'Ciência da Computação', start: '2015', end: '2019' }],
-  skills: [{ id: '', name: 'React' }, { id: '', name: 'TypeScript' }],
+  skills: [{ id: '', name: 'React', group: '' }, { id: '', name: 'TypeScript', group: '' }],
   languages: [{ id: '', name: 'Inglês', level: 'avançado' }],
   certifications: [],
   links: [{ id: '', label: 'Portfólio', url: 'exemplo.test/maria' }, { id: '', label: 'lixo', url: 'não é url' }],
@@ -48,11 +49,23 @@ describe('normalizeProfile', () => {
     expect(profile.links).toEqual([{ id: expect.stringMatching(/^link_/), label: 'Portfólio', url: 'https://exemplo.test/maria' }]);
   });
 
+  it('always emits the four layout fields and coerces the section', () => {
+    const profile = normalizeProfile({
+      ...wire, headline: '  Tech Lead  ', skills: [{ id: '', name: 'React', group: 'Front-end' }],
+      experiences: [{ ...wire.experiences[0], section: 'Complementar ', note: 'Antes: Estagiária' }, { ...wire.experiences[0], section: 'qualquer', note: '' }],
+    }, { clamp: true, newId: counterIds() });
+    expect(profile.headline).toBe('Tech Lead');
+    expect(profile.experiences.map((e) => [e.section, e.note])).toEqual([['complementar', 'Antes: Estagiária'], ['principal', '']]);
+    expect(profile.skills[0].group).toBe('Front-end');
+    const { headline: _headline, ...old } = wire;
+    expect(ProfileWireSchema.safeParse(old).success).toBe(false); // o fio não aceita mais o perfil sem os campos
+  });
+
   it('keeps valid ids (stable across edits) and replaces duplicated or malformed ones', () => {
     const first = normalizeProfile(wire, { clamp: true, newId: counterIds() });
     const edited: ProfileWire = {
       ...first,
-      skills: [...first.skills, { id: first.skills[0].id, name: 'Duplicada' }, { id: 'skill_x', name: 'Nova' }],
+      skills: [...first.skills, { id: first.skills[0].id, name: 'Duplicada', group: '' }, { id: 'skill_x', name: 'Nova', group: '' }],
     };
     const second = normalizeProfile(edited, { clamp: false });
     expect(second.experiences[0].id).toBe(first.experiences[0].id);

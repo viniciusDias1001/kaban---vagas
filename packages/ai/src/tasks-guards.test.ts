@@ -199,7 +199,7 @@ describe('A1: inputs are bounded before the call and failures after it carry the
     const padded = SAMPLE_RESUME_TEXT.split('\n').join(`${' '.repeat(400)}\n\n\n\n`) + ' '.repeat(30_000);
     expect(padded.length).toBeGreaterThan(RESUME_TEXT_MAX_CHARS);
     const { provider, requests } = scripted(() => ({
-      contact: { name: 'Maria', email: '', phone: '', location: '' }, summary: '', experiences: [], education: [], skills: [],
+      contact: { name: 'Maria', email: '', phone: '', location: '' }, headline: '', summary: '', experiences: [], education: [], skills: [],
       languages: [], certifications: [], links: [],
     }));
     await extractProfile(provider, padded);
@@ -218,7 +218,7 @@ describe('A1: inputs are bounded before the call and failures after it carry the
 
   it('carries the usage when the extracted profile is empty or invalid', async () => {
     const { provider } = scripted(() => ({
-      contact: { name: '', email: '', phone: '', location: '' }, summary: 'x', experiences: [], education: [], skills: [],
+      contact: { name: '', email: '', phone: '', location: '' }, headline: '', summary: 'x', experiences: [], education: [], skills: [],
       languages: [], certifications: [], links: [],
     }));
     await expect(extractProfile(provider, 'texto')).rejects.toMatchObject({ kind: 'invalid_output', usage: USAGE, model: 'scripted' });
