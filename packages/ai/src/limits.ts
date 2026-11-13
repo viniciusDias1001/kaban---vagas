@@ -10,7 +10,7 @@ import type { AiRequest, AiTier, AiUsage } from './types';
  * | camada 1 (10 vagas)   | 1 800   | 2 000      | 3 800  |
  * | camada 2              | 8 000   | 8 000      | 16 000 |
  * | camada 3              | 6 000   | 8 000      | 14 000 |
- * | perfil (ler/traduzir) | 8 000   | 8 000      | 16 000 |
+ * | perfil (ler/traduzir) | 9 000   | 8 000      | 17 000 |
  */
 export const REASONING_HEADROOM: Record<AiTier, number> = { fast: 2_000, strong: 8_000 };
 
@@ -19,7 +19,7 @@ export const outputAllowance = (tier: AiTier, visibleTokens: number): number => 
 
 /**
  * Tempo limite HTTP de uma chamada, por nível. A conta parte do teto de saída e de uma vazão pessimista de
- * 40 tokens/s: o nível forte gera até 16 000 tokens (400 s) e ganha folga até 480 s; o rápido gera até 3 800
+ * 40 tokens/s: o nível forte gera até 17 000 tokens (425 s) e ganha folga até 480 s; o rápido gera até 3 800
  * (95 s) e fica em 120 s. Uma chamada típica termina bem antes (3 000 a 6 000 tokens no nível forte).
  * Os tempos da fila de IA (apps/worker) são sempre maiores que estes: quem corta primeiro é o SDK, com um erro
  * limpo; a fila é a rede de segurança (e a única trava das chamadas em streaming, cujo corpo não tem tempo limite).

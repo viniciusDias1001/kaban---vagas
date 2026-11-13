@@ -2,9 +2,9 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Plus, RotateCw, Trash2, X } from 'lucide-react';
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { LIMITS, type CandidateProfileDto, type ProfileOrigin, type ProfileWire, type ResumeLang } from '@kv/shared/client';
+import { LIMITS, type CandidateProfileDto, type ProfileOrigin, type ExperienceSection, type ProfileWire, type ResumeLang } from '@kv/shared/client';
 import { ApiError } from '../apiError';
-import { blankItem, rebaseDraft } from '../lib/ai';
+import { SECTION_OPTIONS, blankItem, editableProfile, profileDirty, rebaseDraft, skillGroupOptions } from '../lib/ai';
 import { cn } from '../lib/utils';
 import { showToast } from '../toast';
 import { AI_KEYS, useSaveProfile } from '../useAi';
@@ -12,6 +12,7 @@ import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Input, Textarea } from './ui/input';
 import { Notice } from './ui/notice';
+import { Segmented } from './ui/segmented';
 
 const LABEL = 'block text-xs font-medium text-muted';
 const EYEBROW = 'text-[11px] font-semibold uppercase tracking-[0.08em] text-faint';
@@ -34,10 +35,6 @@ export function forgetProfileDraft(lang?: ResumeLang): void {
   for (const key of Object.keys(kept) as ResumeLang[]) if (!lang || key === lang) delete kept[key];
 }
 
-/** Cópia editável: mesmos campos e mesmos ids. Ids nunca são criados nem alterados aqui. */
-const copyOf = (data: ProfileWire): ProfileWire => JSON.parse(JSON.stringify(data)) as ProfileWire;
-const same = (a: ProfileWire, b: ProfileWire) => JSON.stringify(a) === JSON.stringify(b);
-
 function Field({ label, value, onChange, hint, className, type, placeholder }: {
   label: string; value: string; onChange: (v: string) => void; hint?: string; className?: string; type?: string; placeholder?: string;
 }) {
@@ -51,6 +48,20 @@ function Field({ label, value, onChange, hint, className, type, placeholder }: {
         placeholder={placeholder} aria-describedby={hint ? hintId : undefined} className="h-9"
       />
       {hint && <p id={hintId} className="text-[11px] text-faint">{hint}</p>}
+    </div>
+  );
+}
+
+/** Seção da experiência no currículo: qualquer valor que não seja `complementar` conta como `principal`. */
+function SectionField({ value, onChange }: { value: string; onChange: (v: ExperienceSection) => void }) {
+  const id = useId();
+  return (
+    <div className="col-span-full min-w-0 space-y-1">
+      <span id={id} className={LABEL}>Seção</span>
+      <Segmented
+        aria-labelledby={id} value={value === 'complementar' ? 'complementar' : 'principal'} onValueChange={onChange}
+        options={SECTION_OPTIONS} className="w-full @md:max-w-xs"
+      />
     </div>
   );
 }
@@ -99,19 +110,19 @@ interface Props {
 export function ProfileEditor({ profile, active, footer }: Props) {
   const lang = profile.lang;
   const qc = useQueryClient();
-  const [data, setData] = useState<ProfileWire>(() => kept[lang]?.data ?? copyOf(profile.data));
+  const [data, setData] = useState<ProfileWire>(() => kept[lang]?.data ?? editableProfile(profile.data));
   /** Versão do perfil em que o rascunho se baseia: é ela que vai no PUT, e a API recusa (409) se já houver outra. */
   const [draftVersion, setDraftVersion] = useState(() => kept[lang]?.version ?? profile.version);
   /** O servidor tem uma versão mais nova que a do rascunho, e há alterações não salvas: o usuário decide. */
   const [conflict, setConflict] = useState(false);
-  const dirty = !same(data, profile.data);
+  const dirty = profileDirty(data, profile.data);
   // Versão nova no servidor (currículo reenviado, tradução refeita, outra aba): sem edição pendente o editor
   // acompanha; com edição pendente o rascunho fica e a tela pergunta o que fazer.
   const [base, setBase] = useState<CandidateProfileDto | null>(null);
   if (profile !== base) {
-    const action = rebaseDraft({ dirty: base ? !same(data, base.data) : dirty, version: draftVersion }, profile.version);
+    const action = rebaseDraft({ dirty: base ? profileDirty(data, base.data) : dirty, version: draftVersion }, profile.version);
     if (action === 'adopt') {
-      setData(copyOf(profile.data));
+      setData(editableProfile(profile.data));
       setDraftVersion(profile.version);
       setConflict(false);
     } else if (action === 'conflict') {
@@ -122,6 +133,7 @@ export function ProfileEditor({ profile, active, footer }: Props) {
   const save = useSaveProfile();
   const formId = useId();
   const summaryId = useId();
+  const groupsId = useId();
   const origin = ORIGIN[profile.origin];
   const blocked = conflict && dirty;
 
@@ -151,7 +163,7 @@ export function ProfileEditor({ profile, active, footer }: Props) {
       onSuccess: (saved) => {
         // A resposta traz os ids que a API criou para os itens novos.
         setBase(saved);
-        setData(copyOf(saved.data));
+        setData(editableProfile(saved.data));
         setDraftVersion(saved.version);
         setConflict(false);
         showToast('Perfil salvo. Notas e análises antigas ficam marcadas como desatualizadas.', 'info');
@@ -169,7 +181,7 @@ export function ProfileEditor({ profile, active, footer }: Props) {
 
   /** "Recarregar": descarta o rascunho e mostra a versão do servidor. */
   function reload() {
-    setData(copyOf(profile.data));
+    setData(editableProfile(profile.data));
     setDraftVersion(profile.version);
     setConflict(false);
   }
@@ -221,6 +233,11 @@ export function ProfileEditor({ profile, active, footer }: Props) {
         <Field label="Local" value={data.contact.location} onChange={(location) => set('contact', { ...data.contact, location })} />
       </div>
 
+      <Field
+        label="Título profissional" value={data.headline} hint="Aparece abaixo do nome no PDF."
+        onChange={(headline) => set('headline', headline)}
+      />
+
       <div className="space-y-1">
         <div className="flex items-baseline justify-between gap-2">
           <label htmlFor={summaryId} className={LABEL}>Resumo</label>
@@ -248,6 +265,11 @@ export function ProfileEditor({ profile, active, footer }: Props) {
                   <Field label="Início" value={exp.start} placeholder="2021-03" onChange={(start) => patch('experiences', i, { start })} />
                   <Field label="Fim" value={exp.end} hint="vazio = atual" onChange={(end) => patch('experiences', i, { end })} />
                   <Field label="Local" value={exp.location} onChange={(location) => patch('experiences', i, { location })} className="@md:max-@4xl:col-span-2" />
+                  <SectionField value={exp.section} onChange={(section) => patch('experiences', i, { section })} />
+                  <Field
+                    label="Nota" value={exp.note} hint="Cargos anteriores na mesma empresa."
+                    onChange={(note) => patch('experiences', i, { note })} className="col-span-full"
+                  />
                 </div>
                 <RemoveButton label={named('experiência', exp.company, i)} onClick={() => drop('experiences', i)} className="mt-5" />
               </div>
@@ -303,21 +325,30 @@ export function ProfileEditor({ profile, active, footer }: Props) {
         title="Habilidades" count={data.skills.length}
         action={<AddButton disabled={full(data.skills)} onClick={() => set('skills', [...data.skills, blankItem.skill()])}>Adicionar habilidade</AddButton>}
       >
-        <div className="grid gap-2 @md:grid-cols-2 @2xl:grid-cols-3 @4xl:grid-cols-4">
+        <div className="grid gap-2 @md:grid-cols-2 @3xl:grid-cols-3">
           {data.skills.map((skill, i) => (
-            <div key={i} className="relative">
+            <div key={i} className="space-y-1.5">
+              <div className="relative">
+                <Input
+                  value={skill.name} aria-label={`Habilidade ${i + 1}`} maxLength={LIMITS.profileShort}
+                  onChange={(e) => patch('skills', i, { name: e.target.value })} className="h-9 pr-9"
+                />
+                <button
+                  type="button" aria-label={named('habilidade', skill.name, i)} onClick={() => drop('skills', i)}
+                  className="absolute right-1 top-1/2 grid size-7 -translate-y-1/2 cursor-pointer place-items-center rounded-lg text-faint transition-colors hover:bg-bad/12 hover:text-bad"
+                >
+                  <X aria-hidden className="size-3.5" />
+                </button>
+              </div>
               <Input
-                value={skill.name} aria-label={`Habilidade ${i + 1}`} maxLength={LIMITS.profileShort}
-                onChange={(e) => patch('skills', i, { name: e.target.value })} className="h-9 pr-9"
+                value={skill.group} aria-label={`Grupo da habilidade ${i + 1}`} placeholder="Grupo" maxLength={LIMITS.profileShort}
+                list={groupsId} onChange={(e) => patch('skills', i, { group: e.target.value })} className="h-9"
               />
-              <button
-                type="button" aria-label={named('habilidade', skill.name, i)} onClick={() => drop('skills', i)}
-                className="absolute right-1 top-1/2 grid size-7 -translate-y-1/2 cursor-pointer place-items-center rounded-lg text-faint transition-colors hover:bg-bad/12 hover:text-bad"
-              >
-                <X aria-hidden className="size-3.5" />
-              </button>
             </div>
           ))}
+          <datalist id={groupsId}>
+            {skillGroupOptions(data.skills).map((g) => <option key={g} value={g} />)}
+          </datalist>
         </div>
       </Group>
 

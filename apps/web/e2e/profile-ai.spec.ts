@@ -156,6 +156,12 @@ test('settings from the screen, write-only key, resume upload, score, analysis, 
   await expect(editor.getByLabel('Nome')).toHaveValue('Maria Exemplo da Silva');
   await expect(page.getByTestId('profile-summary-pt-BR')).toHaveValue(/Pessoa fictícia para testes/);
   await expect(page.getByTestId('profile-origin-pt-BR')).toContainText('extraído');
+  await editor.getByLabel('Título profissional').fill('Desenvolvedora Front-end');
+  await editor.getByLabel('Grupo da habilidade 1').fill('Front-end');
+  await page.getByTestId('profile-save-pt-BR').click();
+  await expect(page.getByTestId('profile-origin-pt-BR')).toContainText('editado');
+  await expect(editor.getByLabel('Título profissional')).toHaveValue('Desenvolvedora Front-end');
+  await expect(page.getByTestId('profile-save-pt-BR')).toBeDisabled(); // salvo: nada pendente
   await snapshot(page, 'ai-profile.png');
 
   // --- Quadro: nota e idioma no card, sem nenhuma ação ---------------------------------------------
@@ -211,7 +217,11 @@ test('settings from the screen, write-only key, resume upload, score, analysis, 
   const extracted = await extractResumeText(pdf, 'pdf');
   expect(extracted.ok, 'o PDF baixado tem texto extraível').toBe(true);
   const text = (extracted.ok ? extracted.text : '').replace(/\s+/g, ' ');
-  expect(text).toContain('Maria Exemplo da Silva');
+  expect(text).toContain('MARIA EXEMPLO DA SILVA'); // cabeçalho
+  expect(text).toContain('DESENVOLVEDORA FRONT-END'); // título profissional, copiado do perfil
+  expect(text).toContain('Front-end: React'); // competência no grupo
+  expect(text).toContain('Maria Exemplo da Silva • 1'); // rodapé
+  expect(text).toContain('EXPERIÊNCIA PROFISSIONAL');
   expect(text).toContain(REVISED_SUMMARY);
   expect(text).toContain('Empresa Fictícia Ltda');
   expect(text).toContain('Reduzi o tempo de build em 40% com a migração para Vite');

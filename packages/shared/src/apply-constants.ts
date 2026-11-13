@@ -22,7 +22,14 @@ export type ApplicationReason = NeedsHumanReason | SkipReason;
 export type ApplyMode = 'dry_run' | 'real';
 export type ApplyTrigger = 'auto' | 'manual';
 export type ApplyResumeMode = 'tailored' | 'base';
-export type ShotKind = 'filled' | 'confirmation' | 'blocked';
+/**
+ * Respostas propostas pelo modelo (fatos do perfil e textos escritos): `off` nunca pede ao modelo; `review` (padrão)
+ * pede e manda cada proposta ao dono antes de valer; `auto` usa a proposta já verificada sem perguntar.
+ */
+export const APPLY_AI_ANSWER_MODES = ['off', 'review', 'auto'] as const;
+export type ApplyAiAnswers = (typeof APPLY_AI_ANSWER_MODES)[number];
+export const SHOT_KINDS = ['filled', 'confirmation', 'blocked'] as const;
+export type ShotKind = (typeof SHOT_KINDS)[number];
 export type SiteSession = 'unknown' | 'logged_in' | 'logged_out';
 export type SitePauseReason = 'brake' | 'restricted' | 'owner_away';
 
@@ -45,12 +52,27 @@ export interface ResolvedAnswer {
   bankAnswerId: number | null;
 }
 /** O que fica gravado na candidatura: a resposta com a pergunta como apareceu. */
-export interface AnswerRecord extends ResolvedAnswer { label: string; kind: QuestionKind; options: string[]; required: boolean }
+export interface AnswerRecord extends ResolvedAnswer { label: string; help: string; kind: QuestionKind; options: string[]; required: boolean }
 export interface PendingQuestion {
   question: Question; category: QuestionCategory;
-  /** `unanswered`: falta resposta. `confirm_match`: o modelo propôs uma resposta salva e o dono precisa confirmar. */
-  kind: 'unanswered' | 'confirm_match';
-  proposal: { bankAnswerId: number; bankQuestion: string; value: string } | null;
+  /**
+   * `unanswered`: nada a propor. `confirm_match`: o modelo diz que uma resposta salva serve para esta pergunta.
+   * `confirm_proposal`: o modelo propõe uma resposta tirada do perfil ou escrita por ele.
+   */
+  kind: 'unanswered' | 'confirm_match' | 'confirm_proposal';
+  proposal: {
+    /** A resposta salva proposta (`confirm_match`); null em `confirm_proposal`. */
+    bankAnswerId: number | null;
+    bankQuestion: string | null;
+    /** O texto da resposta salva, como o dono a gravou (`confirm_match`); null em `confirm_proposal`. */
+    bankAnswer: string | null;
+    /** O valor proposto para ESTA pergunta (ex.: salvo "Não", proposto "No"). */
+    value: AnswerValue;
+    /** De onde vem o valor proposto. */
+    source: 'bank' | 'profile' | 'written';
+    /** Ids de itens do perfil em que a proposta se apoia (`profile`); vazio nos demais. */
+    basis: string[];
+  } | null;
 }
 
 export const APPLY_DEFAULTS = {
@@ -114,6 +136,8 @@ export interface ApplySiteStateDto {
 export interface ApplyStatusDto {
   available: boolean; unavailableReason: string | null; enabled: boolean; withinWindow: boolean;
   sites: ApplySiteStateDto[]; totalToday: number; totalCap: number; queued: number; needsHuman: number;
+  /** Candidaturas em `preparing`, `filling`, `waiting_human` ou `submitting`. */
+  running: number;
   /** Há uma espera ao vivo agora (captcha, código, login): a tela avisa o dono. */
   waiting: { applicationId: number; jobId: number; gate: string } | null;
 }
@@ -121,6 +145,30 @@ export interface ApplyAnswerDto {
   id: number; question: string; key: string | null; answer: string; kind: 'text' | 'number' | 'boolean' | 'choice';
   scope: AnswerScope; scopeValue: string | null; country: string | null;
   aliases: { normalized: string; options: string[]; value: string }[]; usedCount: number; updatedAt: number;
+}
+
+/** O texto com que um valor de formulário é guardado no banco de respostas: boolean vira 'Sim' ou 'Não'; lista vira uma opção por linha; texto fica aparado; null vira ''. */
+export function bankText(value: AnswerValue): string {
+  if (value === null) return '';
+  if (typeof value === 'boolean') return value ? 'Sim' : 'Não';
+  if (Array.isArray(value)) return value.map((v) => v.trim()).filter(Boolean).join('\n');
+  return value.trim();
+}
+
+const BANK_YES = ['sim', 'yes', 'true', 'verdadeiro', 's', 'y', '1'];
+const BANK_NO = ['nao', 'no', 'false', 'falso', 'n', '0'];
+
+/** Lê uma resposta salva como sim ou não: sim, yes, true, verdadeiro, s, y, 1 / não, nao, no, false, falso, n, 0 (sem diferenciar maiúsculas e acentos). Qualquer outra coisa: null. */
+export function bankBoolean(text: string): boolean | null {
+  const key = optionKey(text);
+  if (BANK_YES.includes(key)) return true;
+  if (BANK_NO.includes(key)) return false;
+  return null;
+}
+
+/** As linhas não vazias de uma resposta salva de múltipla escolha, aparadas. */
+export function bankList(text: string): string[] {
+  return text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
 }
 
 /** Chave estrita de uma opção de lista: sem espaços sobrando, minúscula, sem acentos; dígitos, pontuação e símbolos ficam. */

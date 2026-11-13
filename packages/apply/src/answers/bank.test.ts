@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { normalizeQuestionText, type Question } from '@kv/shared';
-import type { ApplyAnswerRow } from '@kv/db';
+import { closeDb, confirmAlias, listApplyAnswers, saveApplyAnswer, type ApplyAnswerRow, type Db } from '@kv/db';
+import { createTestDb } from '@kv/db/testing';
 import { bankCandidates, exactBankMatch, optionFor } from './bank';
 
 const ctx = { company: 'Acme', jobId: 1, country: 'BR' };
@@ -56,9 +57,15 @@ describe('answer bank matching', () => {
     const saved = a('Salary?', 'R$ 25.000', { aliases: [{ normalized: 'expected pay', options: [], value: 'R$ 20.000' }] });
     expect(exactBankMatch(q('Expected pay?'), [saved], ctx)?.value).toBe('R$ 25.000');
   });
-  it('a stale list alias value that is no longer an option is not used', () => {
+  it('a confirmed list variation answers with the value the owner confirmed for it', () => {
     const saved = a('Precisa de visto?', 'Sim', { aliases: [{ normalized: 'do you need a visa', options: ['Yes', 'No'], value: 'No' }] });
     expect(exactBankMatch(q('Do you need a visa?', ['Yes', 'No']), [saved], ctx)?.value).toBe('No');
+  });
+  it('a confirmed list variation whose stored value is not among the options is not used', () => {
+    const saved = a('Precisa de visto?', 'Não', { aliases: [{ normalized: 'do you need a visa', options: ['Yes', 'No'], value: 'Nope' }] });
+    expect(exactBankMatch(q('Do you need a visa?', ['Yes', 'No']), [saved], ctx)).toBeNull();
+    const ambiguous = a('Precisa de visto?', 'Não', { aliases: [{ normalized: 'do you need a visa', options: ['No', 'no '], value: 'no' }] });
+    expect(exactBankMatch(q('Do you need a visa?', ['No', 'no ']), [ambiguous], ctx)).toBeNull();
   });
   it('optionFor keeps symbols and digits and refuses ties', () => {
     expect(optionFor('>5 years', ['<5 years', '>5 years'])).toBe('>5 years');
@@ -81,5 +88,57 @@ describe('answer bank matching', () => {
     const row = a('Por quê?', 'x', { scope: 'company', scopeValue: '' });
     expect(exactBankMatch(q('Por quê?'), [row], { ...ctx, company: '' })).toBeNull();
     expect(exactBankMatch(q('Por quê?'), [row], ctx)).toBeNull();
+  });
+});
+
+describe('answer bank matching against the stored answers', () => {
+  let db: Db;
+  beforeAll(async () => {
+    db = await createTestDb();
+  });
+  afterAll(() => closeDb(db));
+
+  it('an edited answer drops the variation the owner confirmed for the old one', async () => {
+    const fields = { question: 'Precisa de patrocínio de visto?', kind: 'boolean' as const, scope: 'always' as const, scopeValue: null, country: null };
+    const saved = await saveApplyAnswer(db, { ...fields, answer: 'Não' });
+    await confirmAlias(db, saved.id, { normalized: normalizeQuestionText('Do you need visa sponsorship?'), options: ['Yes', 'No'], value: 'No' });
+    const visa = q('Do you need visa sponsorship?', ['Yes', 'No']);
+    expect(exactBankMatch(visa, await listApplyAnswers(db), ctx)?.value).toBe('No');
+
+    await saveApplyAnswer(db, { ...fields, id: saved.id, answer: 'Sim' });
+    expect(exactBankMatch(visa, await listApplyAnswers(db), ctx)).toBeNull();
+    expect(exactBankMatch(q('Precisa de patrocínio de visto?', ['Sim', 'Não']), await listApplyAnswers(db), ctx)?.value).toBe('Sim');
+  });
+});
+
+describe('answer bank value by question type', () => {
+  const typed = (label: string, kind: Question['kind'], options: string[] = []): Question => ({ ...q(label, options), kind });
+  it('multiselect: one option per line, in the form spelling, no duplicates', () => {
+    const question = typed('Modelos?', 'multiselect', ['Remoto', 'Híbrido', 'Presencial']);
+    expect(exactBankMatch(question, [a('Modelos?', 'presencial\nremoto\nREMOTO')], ctx)?.value).toEqual(['Presencial', 'Remoto']);
+    expect(exactBankMatch(question, [a('Modelos?', 'Remoto\nTalvez')], ctx)).toBeNull();
+    expect(exactBankMatch(question, [a('Modelos?', 'Remoto, Híbrido')], ctx)).toBeNull();
+    expect(exactBankMatch(question, [a('Modelos?', ' \n ')], ctx)).toBeNull();
+  });
+  it('multiselect through a confirmed variation', () => {
+    const saved = a('Modelos de trabalho?', 'x', {
+      aliases: [{ normalized: 'work models', options: ['Remote', 'Hybrid'], value: 'Hybrid\nRemote' }],
+    });
+    expect(exactBankMatch(typed('Work models', 'multiselect', ['Remote', 'Hybrid']), [saved], ctx)?.value).toEqual(['Hybrid', 'Remote']);
+  });
+  it('boolean without options is a real boolean; anything unreadable is no match', () => {
+    const question = typed('Autorizado?', 'boolean');
+    expect(exactBankMatch(question, [a('Autorizado?', 'Sim')], ctx)?.value).toBe(true);
+    expect(exactBankMatch(question, [a('Autorizado?', 'Não')], ctx)?.value).toBe(false);
+    expect(exactBankMatch(question, [a('Autorizado?', 'false')], ctx)?.value).toBe(false);
+    expect(exactBankMatch(question, [a('Autorizado?', 'talvez')], ctx)).toBeNull();
+    const alias = a('Tem autorização?', 'Sim', { aliases: [{ normalized: 'authorized', options: [], value: 'No' }] });
+    expect(exactBankMatch(typed('Authorized', 'boolean'), [alias], ctx)?.value).toBe(false);
+  });
+  it('a boolean rendered as a list, a select and plain text keep returning a string', () => {
+    expect(exactBankMatch(typed('Autorizado?', 'boolean', ['Sim', 'Não']), [a('Autorizado?', 'sim')], ctx)?.value).toBe('Sim');
+    expect(exactBankMatch(typed('Nível?', 'select', ['Jr', 'Sr']), [a('Nível?', 'sr')], ctx)?.value).toBe('Sr');
+    expect(exactBankMatch(typed('Anos?', 'number'), [a('Anos?', '1.5')], ctx)?.value).toBe('1.5');
+    expect(exactBankMatch(typed('Sobre?', 'longtext'), [a('Sobre?', 'um texto')], ctx)?.value).toBe('um texto');
   });
 });

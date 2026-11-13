@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { APPLY_SITE_IDS } from './apply-constants';
+import { APPLY_AI_ANSWER_MODES, APPLY_SITE_IDS } from './apply-constants';
 import { hasNul } from './constants';
 import {
   AI_PROVIDER_IDS, APPLY_SETTINGS_LIMITS, API_KEY_PATTERN, COMPANY_SLUG_PATTERN, MODEL_ID_PATTERN, SETTINGS_LIMITS, type SettingKey,
@@ -65,7 +65,7 @@ export const SETTING_SCHEMAS = {
     .strictObject({ start: clock, end: clock })
     .refine((w) => w.start < w.end, 'o início precisa ser antes do fim'),
   applyResumeMode: z.enum(['tailored', 'base']),
-  applyOpenAnswers: z.boolean(),
+  applyAiAnswers: z.enum(APPLY_AI_ANSWER_MODES),
   applyBlockedCompanies: blockList,
   applyBlockedTerms: blockList,
 } satisfies Record<SettingKey, z.ZodType>;
@@ -88,7 +88,7 @@ export const SettingsPatchSchema: z.ZodType<SettingsPatch> = z
     applyCompanyCap: SETTING_SCHEMAS.applyCompanyCap.nullable(),
     applyWindow: SETTING_SCHEMAS.applyWindow.nullable(),
     applyResumeMode: SETTING_SCHEMAS.applyResumeMode.nullable(),
-    applyOpenAnswers: SETTING_SCHEMAS.applyOpenAnswers.nullable(),
+    applyAiAnswers: SETTING_SCHEMAS.applyAiAnswers.nullable(),
     applyBlockedCompanies: SETTING_SCHEMAS.applyBlockedCompanies.nullable(),
     applyBlockedTerms: SETTING_SCHEMAS.applyBlockedTerms.nullable(),
   })

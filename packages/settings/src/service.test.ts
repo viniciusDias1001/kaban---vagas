@@ -248,7 +248,7 @@ describe('dto', () => {
 describe('automatic application settings', () => {
   it('starts with automatic applications off and every site in rehearsal', async () => {
     expect(await service().applyConfig()).toMatchObject({
-      enabled: false, minScore: 70, resumeMode: 'tailored', openAnswers: true, companyCap: 2,
+      enabled: false, minScore: 70, resumeMode: 'tailored', aiAnswers: 'review', companyCap: 2,
       siteModes: { linkedin: 'dry_run', greenhouse: 'dry_run', lever: 'dry_run', fake: 'dry_run' },
       dailyCaps: { linkedin: 10, greenhouse: 15, lever: 15, total: 30, linkedinViews: 30 },
       window: { start: '08:00', end: '21:00' }, blockedCompanies: [], blockedTerms: [],
@@ -272,6 +272,26 @@ describe('automatic application settings', () => {
     await svc.update({ applyMinScore: null });
     expect((await svc.applyConfig()).minScore).toBe(70);
     expect((await svc.applyConfig()).blockedTerms).toEqual(['estágio']);
+  });
+
+  it('asks for the owner approval of model answers by default, and keeps the mode the owner saves', async () => {
+    const svc = service();
+    expect((await svc.applyConfig()).aiAnswers).toBe('review');
+    expect((await svc.dto(0)).apply.aiAnswers).toEqual({ value: 'review', source: 'default' });
+    await svc.update({ applyAiAnswers: 'off' });
+    expect((await svc.applyConfig()).aiAnswers).toBe('off');
+    expect((await svc.dto(0)).apply.aiAnswers).toEqual({ value: 'off', source: 'ui' });
+    await svc.update({ applyAiAnswers: 'auto' });
+    expect((await svc.applyConfig()).aiAnswers).toBe('auto');
+    await svc.update({ applyAiAnswers: null });
+    expect((await svc.applyConfig()).aiAnswers).toBe('review');
+  });
+
+  it('ignores a row left by the old boolean switch', async () => {
+    await db.insert(settings).values({ key: 'applyOpenAnswers', value: true, updatedAt: 0 });
+    const config = await service().applyConfig();
+    expect(config.aiAnswers).toBe('review');
+    expect(config).not.toHaveProperty('openAnswers');
   });
 
   it('uses the budget time zone and reports the apply values in the DTO', async () => {

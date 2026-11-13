@@ -3,7 +3,7 @@
  * `@kv/shared/client`). A validação fica em `settings.ts`.
  */
 
-import type { ApplyMode, ApplyResumeMode, ApplySiteId } from './apply-constants';
+import type { ApplyAiAnswers, ApplyMode, ApplyResumeMode, ApplySiteId } from './apply-constants';
 
 export const AI_PROVIDER_IDS = ['anthropic', 'openai', 'gemini'] as const;
 export type AiProviderId = (typeof AI_PROVIDER_IDS)[number];
@@ -53,7 +53,7 @@ export const APP_SECRET_COMMAND = `node -e "console.log(require('node:crypto').r
 export const SETTING_KEYS = [
   'provider', 'modelFast', 'modelStrong', 'dailyBudgetUsd', 'tier1Enabled', 'tier2Auto', 'greenhouseBoards', 'leverCompanies',
   'applyEnabled', 'applyMinScore', 'applySiteModes', 'applyDailyCaps', 'applyCompanyCap', 'applyWindow', 'applyResumeMode',
-  'applyOpenAnswers', 'applyBlockedCompanies', 'applyBlockedTerms',
+  'applyAiAnswers', 'applyBlockedCompanies', 'applyBlockedTerms',
 ] as const;
 export type SettingKey = (typeof SETTING_KEYS)[number];
 
@@ -72,7 +72,7 @@ export interface ApplyWindow { start: string; end: string } // 'HH:MM'
 /** As configurações de candidatura em vigor, como API e worker as leem. */
 export interface ApplyConfig {
   enabled: boolean; minScore: number; siteModes: Record<ApplySiteId, ApplyMode>; dailyCaps: ApplyDailyCaps;
-  companyCap: number; window: ApplyWindow; resumeMode: ApplyResumeMode; openAnswers: boolean;
+  companyCap: number; window: ApplyWindow; resumeMode: ApplyResumeMode; aiAnswers: ApplyAiAnswers;
   blockedCompanies: string[]; blockedTerms: string[];
   /** O fuso do "dia" e do horário: o mesmo de AI_BUDGET_TZ. */
   timeZone: string;
@@ -128,7 +128,7 @@ export interface SettingsDto {
     companyCap: SettingValue<number>;
     window: SettingValue<ApplyWindow>;
     resumeMode: SettingValue<ApplyResumeMode>;
-    openAnswers: SettingValue<boolean>;
+    aiAnswers: SettingValue<ApplyAiAnswers>;
     blockedCompanies: SettingValue<string[]>;
     blockedTerms: SettingValue<string[]>;
   };
@@ -157,7 +157,7 @@ export interface SettingsPatch {
   applyCompanyCap?: number | null;
   applyWindow?: ApplyWindow | null;
   applyResumeMode?: ApplyResumeMode | null;
-  applyOpenAnswers?: boolean | null;
+  applyAiAnswers?: ApplyAiAnswers | null;
   applyBlockedCompanies?: string[] | null;
   applyBlockedTerms?: string[] | null;
 }

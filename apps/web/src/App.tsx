@@ -1,14 +1,16 @@
 import { useQuery } from '@tanstack/react-query';
-import { Activity, CircleAlert, CircleCheck, Columns3, Settings, SlidersHorizontal, TriangleAlert, UserRound } from 'lucide-react';
+import { Activity, CircleAlert, CircleCheck, Columns3, Send, Settings, SlidersHorizontal, TriangleAlert, UserRound } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Suspense, lazy, useCallback, useEffect, useState } from 'react';
 import { api } from './api';
 import { Board } from './components/Board';
 import { Tooltip } from './components/ui/tooltip';
+import type { ApplicationFilter } from './lib/apply';
 import { useMediaQuery } from './lib/hooks';
 import { spring, springSnap } from './lib/motion';
 import { cn } from './lib/utils';
 import { useBottomBarHeight, useToast } from './toast';
+import { useApplyStatus, useLiveWaitNotification } from './useApply';
 import { useRunCatchUp } from './useRunCatchUp';
 import { isWorkerStale } from './workerStale';
 
@@ -19,20 +21,23 @@ const ProfilesPage = lazy(() => import('./components/ProfilesPage').then((m) => 
 const HealthPanel = lazy(() => import('./components/HealthPanel').then((m) => ({ default: m.HealthPanel })));
 const MyProfilePage = lazy(() => import('./components/MyProfilePage').then((m) => ({ default: m.MyProfilePage })));
 const SettingsPage = lazy(() => import('./components/SettingsPage').then((m) => ({ default: m.SettingsPage })));
+const ApplicationsPage = lazy(() => import('./components/ApplicationsPage').then((m) => ({ default: m.ApplicationsPage })));
 
-type View = 'quadro' | 'perfis' | 'fontes' | 'perfil' | 'config';
+type View = 'quadro' | 'candidaturas' | 'perfis' | 'fontes' | 'perfil' | 'config';
 const VIEWS: { id: View; label: string; icon: typeof Columns3 }[] = [
   { id: 'quadro', label: 'Quadro', icon: Columns3 },
+  { id: 'candidaturas', label: 'Candidaturas', icon: Send },
   { id: 'perfis', label: 'Perfis de busca', icon: SlidersHorizontal },
   { id: 'fontes', label: 'Saúde das fontes', icon: Activity },
   { id: 'perfil', label: 'Meu perfil', icon: UserRound },
   { id: 'config', label: 'Configurações', icon: Settings },
 ];
 /**
- * Abaixo desta largura as cinco seções não cabem com o rótulo inteiro: as não ativas mostram só o ícone. O
+ * Abaixo desta largura as seis seções não cabem com o rótulo inteiro: as não ativas mostram só o ícone. O
  * rótulo continua no botão (escondido só da vista), então o nome acessível não muda, e aparece na dica.
+ * O mesmo limite está nas classes `max-[1151px]:` dos botões abaixo.
  */
-const COMPACT_NAV = '(max-width: 1023px)';
+const COMPACT_NAV = '(max-width: 1151px)';
 /** De quanto em quanto tempo o aviso do worker é recalculado numa aba parada. */
 const STALE_CHECK_MS = 60_000;
 
@@ -43,6 +48,15 @@ export function App() {
   const bottomBar = useBottomBarHeight();
   const compactNav = useMediaQuery(COMPACT_NAV);
   const openSettings = useCallback(() => setView('config'), []);
+  // A aba Candidaturas abre no filtro pedido (o contador do quadro pede "Precisam de você"); pela navegação, no padrão dela.
+  const [applicationsFilter, setApplicationsFilter] = useState<ApplicationFilter | undefined>(undefined);
+  const showNeedsHuman = useCallback(() => {
+    setApplicationsFilter('needs_human');
+    setView('candidaturas');
+  }, []);
+  // Espera ao vivo (captcha, código, login): um ponto na aba e, com a permissão dada, uma notificação do navegador.
+  const applyWaiting = useApplyStatus().data?.waiting ?? null;
+  useLiveWaitNotification(applyWaiting);
   const catchUp = useRunCatchUp();
   const { data: health, dataUpdatedAt: healthUpdatedAt } = useQuery({
     queryKey: ['health'], queryFn: api.health, refetchInterval: 30_000,
@@ -80,11 +94,14 @@ export function App() {
               const button = (
                 <button
                   key={v.id}
-                  onClick={() => setView(v.id)}
+                  onClick={() => {
+                    setApplicationsFilter(undefined);
+                    setView(v.id);
+                  }}
                   aria-current={active ? 'page' : undefined}
                   className={cn(
                     'relative flex h-8 cursor-pointer items-center gap-1.5 rounded-full px-3.5 text-[13px] font-medium transition-colors duration-150 active:scale-[0.97]',
-                    active ? 'text-ink' : 'text-muted hover:text-ink max-lg:px-2.5',
+                    active ? 'text-ink' : 'text-muted hover:text-ink max-[1151px]:px-2.5',
                   )}
                 >
                   {active && (
@@ -94,8 +111,15 @@ export function App() {
                       className="absolute inset-0 rounded-full bg-accent/18 shadow-[inset_0_1px_0_rgb(255_255_255/0.08)] ring-1 ring-inset ring-accent/35"
                     />
                   )}
-                  <v.icon aria-hidden className={cn('relative transition-colors', active ? 'size-3.5 text-accent' : 'size-3.5 text-faint max-lg:size-4')} />
-                  <span className={cn('relative whitespace-nowrap', !active && 'max-lg:sr-only')}>{v.label}</span>
+                  <v.icon aria-hidden className={cn('relative transition-colors', active ? 'size-3.5 text-accent' : 'size-3.5 text-faint max-[1151px]:size-4')} />
+                  <span className={cn('relative whitespace-nowrap', !active && 'max-[1151px]:sr-only')}>{v.label}</span>
+                  {v.id === 'candidaturas' && applyWaiting && (
+                    <span data-testid="nav-applications-waiting" className="absolute right-1 top-1 flex size-2">
+                      <span aria-hidden className="absolute inset-0 animate-pulse-dot rounded-full bg-warn" />
+                      <span aria-hidden className="relative size-2 rounded-full bg-warn ring-2 ring-surface" />
+                      <span className="sr-only"> (uma candidatura espera você agora)</span>
+                    </span>
+                  )}
                 </button>
               );
               return compactNav && !active ? <Tooltip key={v.id} label={v.label}>{button}</Tooltip> : button;
@@ -131,8 +155,9 @@ export function App() {
           key={view} className="h-full"
           initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.22, ease: 'easeOut' }}
         >
-          {view === 'quadro' && <Board onOpen={setOpenJob} />}
+          {view === 'quadro' && <Board onOpen={setOpenJob} onShowNeedsHuman={showNeedsHuman} />}
           <Suspense fallback={null}>
+            {view === 'candidaturas' && <ApplicationsPage initialFilter={applicationsFilter} onOpenJob={setOpenJob} />}
             {view === 'perfis' && <ProfilesPage onRunQueued={catchUp} />}
             {view === 'fontes' && <HealthPanel />}
             {view === 'perfil' && <MyProfilePage onOpenSettings={openSettings} />}

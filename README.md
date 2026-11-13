@@ -93,7 +93,7 @@ Preços por milhão de tokens, entrada / saída. **A saída cobrada inclui os to
 | Camada 1, lote de 10 vagas | 1 800 | 2 000 | 3 800 |
 | Camada 2 | 8 000 | 8 000 | 16 000 |
 | Camada 3 (cada chamada) | 6 000 | 8 000 | 14 000 |
-| Perfil (ler um currículo ou traduzir um perfil) | 8 000 | 8 000 | 16 000 |
+| Perfil (ler um currículo ou traduzir um perfil) | 9 000 | 8 000 | 17 000 |
 
 Com os modelos padrão, o custo **típico** e o **pior caso** de cada chamada:
 
@@ -103,17 +103,17 @@ Com os modelos padrão, o custo **típico** e o **pior caso** de cada chamada:
 | Camada 1, por vaga: pior caso | US$ 0,0003 | US$ 0,0003 | US$ 0,0012 |
 | Camada 2, vaga em inglês (com a tradução): típico | US$ 0,09 | US$ 0,045 | US$ 0,09 |
 | Camada 2, vaga em português: típico | US$ 0,065 | US$ 0,032 | US$ 0,065 |
-| Camada 2: pior caso | US$ 0,37 | US$ 0,19 | US$ 0,37 |
+| Camada 2: pior caso | US$ 0,38 | US$ 0,19 | US$ 0,38 |
 | Camada 3, por chamada: típico | US$ 0,07 | US$ 0,035 | US$ 0,07 |
-| Camada 3, por chamada: pior caso | US$ 0,34 | US$ 0,17 | US$ 0,34 |
+| Camada 3, por chamada: pior caso | US$ 0,35 | US$ 0,17 | US$ 0,35 |
 | Perfil, por currículo enviado ou tradução: típico | US$ 0,07 | US$ 0,035 | US$ 0,07 |
-| Perfil: pior caso | US$ 0,36 | US$ 0,18 | US$ 0,36 |
+| Perfil: pior caso | US$ 0,38 | US$ 0,19 | US$ 0,38 |
 
 Como a conta foi feita (os tetos vêm de `packages/ai/src/limits.ts` e `tasks.ts`; os preços, de `config.ts`):
 
 - **Típico:** perfil de uma página (cerca de 4 000 caracteres de JSON), descrição de vaga de 4 000 caracteres, 3,5 caracteres por token e **cerca de 2 000 tokens de raciocínio** por chamada do nível forte (500 por lote no nível rápido). O raciocínio é uma suposição, não uma medida: ele varia com a vaga e com o modelo, e é a maior parte do custo. Exemplo, camada 2 de uma vaga em inglês no Claude: 2 700 tokens de entrada × US$ 4 + (2 000 visíveis + 2 000 de raciocínio) × US$ 20, por milhão = US$ 0,011 + US$ 0,08.
-- **Pior caso:** a maior entrada que a chamada pode enviar (descrição no teto de 12 000 caracteres na camada 2 e 20 000 na camada 3, perfil de 24 000 caracteres, 3 caracteres por token) e a saída **no teto** da tabela acima. Exemplo, camada 2 no Claude: 13 300 × US$ 4 + 16 000 × US$ 20, por milhão = US$ 0,053 + US$ 0,32 = US$ 0,37.
-- A camada 3 pode fazer **duas** chamadas (veja "Não inventa"): o pior caso de um currículo adaptado é o dobro da linha da tabela (US$ 0,69 no Claude).
+- **Pior caso:** a maior entrada que a chamada pode enviar (descrição no teto de 12 000 caracteres na camada 2 e 20 000 na camada 3, perfil de 27 000 caracteres, 3 caracteres por token) e a saída **no teto** da tabela acima. Exemplo, camada 2 no Claude: 14 300 × US$ 4 + 16 000 × US$ 20, por milhão = US$ 0,057 + US$ 0,32 = US$ 0,38.
+- A camada 3 pode fazer **duas** chamadas (veja "Não inventa"): o pior caso de um currículo adaptado é o dobro da linha da tabela (US$ 0,70 no Claude).
 - O Gemini custa a metade do que está na tabela até 2026-11-30.
 - **Cache de prompt.** A estimativa cobra toda a entrada pelo preço cheio. Na Anthropic, gravar o prefixo em cache custa 1,25× o preço de entrada e ler custa 0,1×: a primeira chamada de uma sequência sai até uns 25% mais cara **na parte da entrada** do que o estimado (menos de um centavo por chamada do nível forte), e as seguintes, mais baratas. A estimativa **não** tende a errar para mais: o que domina é a saída, e ela é contada como o provedor a informa.
 - **Chamadas sem resposta.** Uma chamada abortada por tempo, ou interrompida porque o worker foi encerrado no meio dela, pode ter sido cobrada pelo provedor sem que ele informe o uso. Nesses casos o app grava uma linha **estimada pelo pior caso** (o modelo aparece com o sufixo "(estimativa)" em `ai_usage`), para o limite diário errar para o lado seguro.
@@ -162,14 +162,14 @@ Tudo fica no **seu** banco de dados (o do `DATABASE_URL`); o app não tem servid
 
 **Currículo enviado: limites.** PDF ou DOCX, até 5 MB; o tipo é conferido pelo conteúdo do arquivo, não pela extensão. O PDF precisa ter texto selecionável: um currículo escaneado (só imagem) é recusado na hora, com a sugestão de exportar de novo ou enviar um DOCX. Também são recusados: PDF com mais de 30 páginas, arquivo protegido por senha, arquivo que leva mais de 15 s para ser lido e texto com mais de cerca de 6 páginas (o que o modelo lê de uma vez com folga para devolver o perfil). A recusa aparece no próprio cartão do idioma e o currículo anterior continua valendo.
 
-**PDF gerado.** Uma coluna, texto selecionável, sem tabelas nem imagens, na fonte Noto Sans embutida. Ela desenha o alfabeto latino com todos os acentos (português, espanhol, francês, alemão, polonês, tcheco, turco...), vietnamita, cirílico e grego. Não desenha chinês, japonês, coreano, árabe, hebraico, devanágari, emoji nem símbolos como "✓": se o currículo tiver um desses caracteres, o editor avisa quais são e o download só é liberado depois de trocá-los, em vez de gerar um PDF com buracos no texto.
+**PDF gerado.** Segue o modelo de currículo do dono: A4 de uma coluna, texto selecionável, sem tabelas nem imagens, na fonte Noto Serif (Regular e Bold) embutida. O cabeçalho traz o nome em caixa alta, o título profissional, a linha de contato (e-mail, telefone, local e os endereços dos links) e um fio; depois vêm, nesta ordem e só as que tiverem conteúdo, Resumo profissional, Competências técnicas (em grupos, "Grupo: item, item"), Experiência profissional, Experiências complementares, Formação acadêmica, Idiomas e Certificações. Cada experiência mostra "Cargo - Empresa", período, local e nota, e as realizações com marcador e recuo. Toda página leva no rodapé o nome e o número da página. Um perfil gravado antes desse modelo continua gerando PDF, sem título, grupos nem nota; ele os ganha ao reenviar o currículo ou ao editar o perfil em "Meu perfil". Ela desenha o alfabeto latino com todos os acentos (português, espanhol, francês, alemão, polonês, tcheco, turco...), vietnamita, cirílico e grego. Não desenha chinês, japonês, coreano, árabe, hebraico, devanágari, emoji nem símbolos como "✓": se o currículo tiver um desses caracteres, o editor avisa quais são e o download só é liberado depois de trocá-los, em vez de gerar um PDF com buracos no texto.
 
 **Fila.** A IA roda no worker, em uma fila separada da busca de vagas: até 2 chamadas ao mesmo tempo, 3 tentativas com espera de 30 s e 120 s (o dobro em limite de taxa). Erro que repetir não resolve (resposta cortada, recusa do modelo, rascunho barrado pelo verificador, dado que falta) não é repetido. Lentidão ou falha do provedor não atrasa a busca. Nenhuma chamada de IA acontece dentro de uma requisição da API, exceto o "Testar conexão".
 
 - **Provedor indisponível não queima as vagas.** Se a triagem (camada 1) bate em chave recusada, conta sem crédito, modelo inexistente ou limite de taxa que não passa, nenhuma vaga é marcada com erro: as tarefas esperam (30 min; 15 min no limite de taxa) e são tentadas de novo sozinhas, e o quadro e a aba Configurações mostram o aviso "As notas automáticas estão em pausa" com o motivo. Gravar uma chave, trocar o provedor ou o modelo, ou um "Testar conexão" que funcione retoma na hora.
 - **Uma vaga problemática não derruba as vizinhas.** Quando um lote de 10 vagas falha inteiro por causa do conteúdo (o modelo recusou, cortou ou devolveu algo inválido), as vagas são refeitas uma a uma, respeitando o limite diário, e só a que falha sozinha fica com erro.
 - **Erro na nota não é para sempre.** Uma vaga cuja nota falhou volta para a fila sozinha depois de 6 horas, no máximo 3 vezes (4 falhas em 30 dias); pelo painel da vaga, "Tentar de novo" vale na hora.
-- **Tempo limite.** O SDK corta uma chamada do nível rápido em 120 s e uma do forte em 480 s (o teto de 16 000 tokens a 40 tokens por segundo, com folga); a fila corta um pouco depois (150 s na camada 1, 540 s na camada 2, 510 s no perfil, 1 020 s na camada 3, que pode fazer duas chamadas). No Claude, as chamadas do nível forte usam *streaming*, para uma geração longa não ficar em uma conexão sem tráfego; no OpenAI e no Gemini a resposta vem de uma vez. Uma chamada do nível forte que estoura o tempo ganha **uma** nova tentativa, não duas.
+- **Tempo limite.** O SDK corta uma chamada do nível rápido em 120 s e uma do forte em 480 s (o teto de 17 000 tokens a 40 tokens por segundo, com folga); a fila corta um pouco depois (150 s na camada 1, 540 s na camada 2, 510 s no perfil, 1 020 s na camada 3, que pode fazer duas chamadas). No Claude, as chamadas do nível forte usam *streaming*, para uma geração longa não ficar em uma conexão sem tráfego; no OpenAI e no Gemini a resposta vem de uma vez. Uma chamada do nível forte que estoura o tempo ganha **uma** nova tentativa, não duas.
 - **Reinício do worker.** Uma tarefa que estava em execução quando o worker foi encerrado conta a tentativa interrompida (uma tarefa que derruba o processo toda vez para na terceira) e grava o uso estimado da chamada perdida.
 - **Limpeza.** Tarefas terminadas há mais de 30 dias são apagadas da fila.
 
@@ -289,6 +289,7 @@ pnpm db:generate    # gera uma migration a partir de packages/db/src/schema.ts
 pnpm db:migrate     # aplica as migrations pendentes no DATABASE_URL
 pnpm start:prod     # migra e sobe api + worker como em produção (veja "Deploy")
 pnpm ai:smoke -- --yes [provedor]   # ATENÇÃO: chamadas reais aos provedores de IA, gasta dinheiro
+pnpm resume:preview   # gera o PDF do seu perfil em uma pasta fora do repositório
 ```
 
 - Os testes unitários não usam rede nem Docker: o banco é um Postgres em memória (PGlite) e as fontes são testadas contra fixtures gravadas.
@@ -309,7 +310,7 @@ packages/shared       tipos e schemas Zod
 packages/ai           provedores de IA (Claude, OpenAI, Gemini e o falso), prompts, verificador de não invenção
 packages/resume       extração de texto de PDF/DOCX e geração do PDF do currículo adaptado
 packages/settings     configurações gravadas pela tela e cifra das chaves de API
-scripts/              start de produção, instalação do worker, gravação de fixtures, ai:smoke
+scripts/              start de produção, instalação do worker, gravação de fixtures, ai:smoke, prévia do currículo (resume:preview)
 .railway/             configuração do Railway (nunca aplicada, veja "Deploy")
 docs/superpowers/     spec e plano de implementação
 ```
@@ -342,7 +343,7 @@ O alvo é **um serviço** construído pelo `Dockerfile`. Um container roda a API
 - **Uma réplica só.** O worker e as migrations do start não foram feitos para rodar em paralelo; com mais de uma réplica as buscas e as chamadas de IA rodariam em dobro, duas réplicas poderiam migrar ao mesmo tempo, e o limite de frequência do "Testar conexão" (que é por processo) deixaria de valer.
 - Se a API ou o worker cair, o container sai com erro e o Railway o reinicia.
 - **Indeed não funciona no container:** a imagem não tem Chromium. A fonte falha com erro claro na tela de saúde das fontes, e a análise das vagas do Indeed usa só título, empresa e local.
-- **Imagem:** as fontes do PDF (Noto Sans, do pacote `@fontsource/noto-sans`) e os leitores de PDF e DOCX vão dentro dela como dependências de produção; nada é baixado em runtime.
+- **Imagem:** as fontes do PDF (Noto Serif, do pacote `@fontsource/noto-serif`) e os leitores de PDF e DOCX vão dentro dela como dependências de produção; nada é baixado em runtime.
 
 O arquivo `.railway/railway.ts` descreve esse serviço como infraestrutura como código. **Ele nunca foi aplicado nem validado contra o Railway.** O primeiro passo, que só lê e não altera nada, é `railway config plan`; ele exige o pacote `railway` instalado no repo como dependência de desenvolvimento (`pnpm add -D -w railway`). Revise o plano antes de qualquer `railway config apply`.
 
@@ -366,4 +367,4 @@ Sem Docker, `pnpm --filter @kv/web build && pnpm start:prod` faz o mesmo no host
 
 Apache License 2.0. Veja o arquivo [`LICENSE`](LICENSE).
 
-Dependências acrescentadas pela IA de perfil e suas licenças: `@anthropic-ai/sdk`, `openai` e `@google/genai` (Apache-2.0); `@fastify/multipart`, `unpdf`, `fflate`, `pdfkit` e `fontkit` (MIT); `mammoth` (BSD-2-Clause); fonte Noto Sans, de `@fontsource/noto-sans` (OFL-1.1), embutida nos PDFs gerados. A cifra das chaves usa só o `node:crypto`.
+Dependências acrescentadas pela IA de perfil e suas licenças: `@anthropic-ai/sdk`, `openai` e `@google/genai` (Apache-2.0); `@fastify/multipart`, `unpdf`, `fflate`, `pdfkit` e `fontkit` (MIT); `mammoth` (BSD-2-Clause); fonte Noto Serif, de `@fontsource/noto-serif` (OFL-1.1), embutida nos PDFs gerados. A cifra das chaves usa só o `node:crypto`.

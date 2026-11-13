@@ -458,3 +458,8 @@ export function findPhrase(words: string[], phrase: string[]): number[] {
   }
   return hits;
 }
+
+/** O termo (já dobrado) está nas listas internas de nomes conhecidos e de palavras de cargo/formação? */
+export function isListedName(folded: string): boolean {
+  return NAMED.has(folded) || NAMED.has(squash(folded)) || CLAIMS.has(folded) || CLAIMS.has(stem(folded));
+}

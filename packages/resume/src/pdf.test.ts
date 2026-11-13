@@ -8,20 +8,21 @@ import { sniffResume } from './sniff';
 const resume: TailoredResume = {
   lang: 'pt-BR',
   contact: { name: 'João Conceição Exemplo', email: 'joao@exemplo.test', phone: '+55 11 90000-0000', location: 'São Paulo, SP' },
+  headline: 'Engenheiro de Software',
   summary: 'Pessoa fictícia. Atuação em avaliação, gestão e migração de aplicações: ã õ á é í ó ú â ê ô à ç ü Ã Õ Ç É.',
   experiences: [
     {
       id: 'exp_aaaaaaa1', company: 'Empresa Fictícia Ltda', title: 'Desenvolvedora Sênior', start: '2021-03', end: '',
-      location: 'Remoto',
+      location: 'Remoto', section: 'principal', note: 'Antes: Estagiário',
       achievements: [
         { sourceId: 'ach_aaaaaaa1', text: 'Reduzi o tempo de build em 40% com a migração para Vite' },
         { sourceId: 'ach_aaaaaaa2', text: 'Economia de R$ 1.000,00 por mês: "infra" mais simples' },
       ],
     },
-    { id: 'exp_aaaaaaa2', company: 'Outra Fictícia S.A.', title: 'Estagiário', start: '2019', end: '2020', location: '', achievements: [] },
+    { id: 'exp_aaaaaaa2', company: 'Outra Fictícia S.A.', title: 'Estagiário', start: '2019', end: '2020', location: '', section: 'complementar', note: '', achievements: [] },
   ],
   education: [{ id: 'edu_aaaaaaa1', institution: 'Universidade Exemplo', degree: 'Ciência da Computação', start: '2015', end: '2019' }],
-  skills: [{ id: 'skill_aaaaaaa1', name: 'React' }, { id: 'skill_aaaaaaa2', name: 'TypeScript' }],
+  skills: [{ id: 'skill_aaaaaaa1', name: 'React', group: 'Front-end' }, { id: 'skill_aaaaaaa2', name: 'TypeScript', group: 'Front-end' }],
   languages: [{ id: 'lang_aaaaaaa1', name: 'Inglês', level: 'avançado' }],
   certifications: [{ id: 'cert_aaaaaaa1', name: 'Certificação Fictícia', issuer: 'Instituto Exemplo', date: '2022' }],
   links: [{ id: 'link_aaaaaaa1', label: 'Portfólio', url: 'https://exemplo.test/joao' }],
@@ -42,40 +43,33 @@ describe('renderResumePdf', SLOW, () => {
   it('produces real, selectable text: everything can be extracted back, accents included', async () => {
     const text = await textOf(resume);
     for (const expected of [
-      'João Conceição Exemplo',
-      'joao@exemplo.test | +55 11 90000-0000 | São Paulo, SP',
-      'ã õ á é í ó ú â ê ô à ç ü Ã Õ Ç É',
-      'Desenvolvedora Sênior - Empresa Fictícia Ltda',
-      '2021-03 - atual | Remoto',
-      '• Reduzi o tempo de build em 40% com a migração para Vite',
-      '• Economia de R$ 1.000,00 por mês: "infra" mais simples',
-      'Ciência da Computação - Universidade Exemplo | 2015 - 2019',
-      'React, TypeScript',
-      'Inglês (avançado)',
-      'Certificação Fictícia | Instituto Exemplo | 2022',
-      'Portfólio: https://exemplo.test/joao',
+      'JOÃO CONCEIÇÃO EXEMPLO', 'ENGENHEIRO DE SOFTWARE', 'São Paulo, SP • +55 11 90000-0000 • joao@exemplo.test • exemplo.test/joao',
+      'ã õ á é í ó ú â ê ô à ç ü Ã Õ Ç É', 'Front-end: React, TypeScript', 'Desenvolvedora Sênior - Empresa Fictícia Ltda',
+      'Mar 2021 - Atual | Remoto · Antes: Estagiário', 'Reduzi o tempo de build em 40% com a migração para Vite',
+      'Economia de R$ 1.000,00 por mês: "infra" mais simples', 'Estagiário - Outra Fictícia S.A.', '2019 - 2020',
+      'Ciência da Computação - Universidade Exemplo | 2015 - 2019', 'Inglês: avançado', 'Certificação Fictícia - Instituto Exemplo | 2022',
+      'João Conceição Exemplo • 1',
     ]) {
       expect(text, expected).toContain(expected);
     }
+    expect(text).toMatch(/•\s?Reduzi o tempo de build/);
+    for (const absent of ['Portfólio', 'https://']) expect(text).not.toContain(absent); // rótulo de link e esquema não são impressos
   });
 
   it('is a single column: the extracted text follows the reading order of the content', async () => {
     const text = await textOf(resume);
     const order = [
-      'João Conceição Exemplo', 'RESUMO', 'EXPERIÊNCIA', 'Desenvolvedora Sênior', 'Reduzi o tempo', 'Estagiário',
-      'FORMAÇÃO', 'HABILIDADES', 'IDIOMAS', 'CERTIFICAÇÕES', 'LINKS',
+      'JOÃO CONCEIÇÃO EXEMPLO', 'RESUMO PROFISSIONAL', 'COMPETÊNCIAS TÉCNICAS', 'EXPERIÊNCIA PROFISSIONAL', 'Desenvolvedora Sênior -', 'Reduzi o tempo',
+      'EXPERIÊNCIAS COMPLEMENTARES', 'Estagiário -', 'FORMAÇÃO ACADÊMICA', 'IDIOMAS', 'CERTIFICAÇÕES', 'João Conceição Exemplo • 1',
     ].map((marker) => text.indexOf(marker));
     expect(order.every((position) => position >= 0)).toBe(true);
     expect(order).toEqual([...order].sort((a, b) => a - b));
   });
 
   it('uses english headings for an english resume and skips empty sections', async () => {
-    const text = await textOf({ ...resume, lang: 'en', certifications: [], links: [], summary: '' });
-    expect(text).toContain('EXPERIENCE');
-    expect(text).toContain('2021-03 - present');
-    expect(text).not.toContain('CERTIFICATIONS');
-    expect(text).not.toContain('SUMMARY');
-    expect(text).not.toContain('EXPERIÊNCIA');
+    const text = await textOf({ ...resume, lang: 'en', certifications: [], summary: '' });
+    for (const expected of ['TECHNICAL SKILLS', 'PROFESSIONAL EXPERIENCE', 'ADDITIONAL EXPERIENCE', 'Mar 2021 - Present']) expect(text).toContain(expected);
+    for (const absent of ['CERTIFICATIONS', 'PROFESSIONAL SUMMARY', 'EXPERIÊNCIA']) expect(text).not.toContain(absent);
   });
 
   it('embeds the font and carries no image', async () => {
@@ -88,6 +82,9 @@ describe('renderResumePdf', SLOW, () => {
     const many = { ...resume.experiences[0], achievements: Array.from({ length: 20 }, (_, i) => ({ sourceId: 'ach_aaaaaaa1', text: `Realização número ${i + 1} com um texto longo o bastante para ocupar a linha inteira do documento.` })) };
     const text = await textOf({ ...resume, experiences: [many, many, many, many] });
     expect(text.match(/Realização número 20 /g)).toHaveLength(4);
+    const footers = text.match(/João Conceição Exemplo • \d+/g) ?? [];
+    expect(footers.length).toBeGreaterThan(1);
+    expect(footers).toEqual(footers.map((_, i) => `João Conceição Exemplo • ${i + 1}`));
   });
 
   it('keeps polish, czech, turkish, vietnamese, cyrillic and greek text, in bold and in regular', async () => {
@@ -99,7 +96,7 @@ describe('renderResumePdf', SLOW, () => {
       experiences: [{ ...resume.experiences[0], title: 'Inżynier', company: 'Přední Şirket Việt' }],
     });
     for (const expected of [
-      names, 'Kraków, Gdańsk', `${names}. Привет мир: Київ. Αθήνα, Ελλάδα. İstanbul ğ ı ő ű ß œ € “aspas” ‘simples’ – — …`, 'Inżynier - Přední Şirket Việt',
+      names, names.toUpperCase(), 'Kraków, Gdańsk', `${names}. Привет мир: Київ. Αθήνα, Ελλάδα. İstanbul ğ ı ő ű ß œ € “aspas” ‘simples’ – — …`, 'Inżynier - Přední Şirket Việt',
     ]) {
       // Algumas letras vietnamitas ("ị") vão para o PDF como letra + acento combinante; e o resumo ocupa duas linhas.
       expect(text.normalize('NFC').replaceAll('\n', ' '), expected).toContain(expected);
@@ -124,6 +121,26 @@ describe('renderResumePdf', SLOW, () => {
     // Em qualquer campo, inclusive nos que saem em negrito.
     expect(unsupportedPdfCharacters({ ...resume, contact: { ...resume.contact, name: '山田 Exemplo' } })).toEqual(['山', '田']);
     expect(unsupportedPdfCharacters({ ...resume, skills: [{ id: 'skill_aaaaaaa1', name: 'عربي' }] })).toHaveLength(4);
+    // Os campos do modelo também (Review Focus 5).
+    expect(unsupportedPdfCharacters({ ...resume, headline: '日本' })).toEqual(['日', '本']);
+    expect(unsupportedPdfCharacters({ ...resume, experiences: [{ ...resume.experiences[0], note: 'ok ✓' }] })).toEqual(['✓']);
+    expect(unsupportedPdfCharacters({ ...resume, skills: [{ id: 'skill_aaaaaaa1', name: 'React', group: '語' }] })).toEqual(['語']);
+  });
+
+  it('prints a name stored in capitals in title case in the footer, and upper-cases before checking glyphs', async () => { // Review Focus 2 e 5
+    expect(await textOf({ ...resume, contact: { ...resume.contact, name: 'JOÃO CONCEIÇÃO EXEMPLO' } })).toContain('João Conceição Exemplo • 1');
+    const german = { ...resume, contact: { ...resume.contact, name: 'Jörg Straße' } };
+    expect(unsupportedPdfCharacters(german)).toEqual([]);
+    const text = await textOf(german);
+    for (const expected of ['JÖRG STRASSE', 'Jörg Straße • 1']) expect(text).toContain(expected);
+  });
+
+  it('renders a résumé stored before the layout fields', async () => { // Review Focus 1
+    const { headline: _headline, ...rest } = resume;
+    const old = { ...rest, skills: rest.skills.map(({ group: _g, ...k }) => k), experiences: rest.experiences.map(({ section: _s, note: _n, ...e }) => e) };
+    const text = await textOf(old);
+    for (const expected of ['React, TypeScript', 'Estagiário - Outra Fictícia S.A.']) expect(text).toContain(expected);
+    for (const absent of ['undefined', 'Front-end:', 'EXPERIÊNCIAS COMPLEMENTARES']) expect(text).not.toContain(absent);
   });
 
   it('writes an ascii equivalent for typographic symbols the fonts lack, and plain spaces for exotic ones', async () => {
@@ -156,7 +173,7 @@ describe('renderResumePdf', SLOW, () => {
     expect(Date.now() - started).toBeLessThan(10_000);
     expect(text.match(/Q/g)).toHaveLength(40_000);
     // Uma URL comum, que cabe na linha, segue inteira.
-    expect(text).toContain(`https://exemplo.test/${'a'.repeat(50)}`);
+    expect(text).toContain(`exemplo.test/${'a'.repeat(50)}`);
   });
 
   it('refuses a resume with more text than the cap, fast', async () => {

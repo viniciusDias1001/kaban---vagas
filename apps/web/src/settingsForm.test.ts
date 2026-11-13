@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { SettingsPatchSchema, type AiKeyMetaDto, type SettingsDto } from '@kv/shared';
 import {
-  OUTCOME_TONE, apiKeyProblem, changeProvider, collectCompanies, formFromSettings, isDirty, keyView, maskedKey, parseBudget,
-  toSettingsPatch, validateSettings,
+  OUTCOME_TONE, apiKeyProblem, badDailyCap, changeProvider, collectBlockItems, collectCompanies, formFromSettings, isDirty, keyView, maskedKey, parseBudget,
+  toSettingsPatch, validateSettings, type SettingsForm,
 } from './settingsForm';
 
 const key = (over: Partial<AiKeyMetaDto> = {}): AiKeyMetaDto => ({
@@ -36,7 +36,7 @@ const dto: SettingsDto = {
     siteModes: { value: { linkedin: 'dry_run', greenhouse: 'dry_run', lever: 'dry_run', fake: 'dry_run' }, source: 'default' },
     dailyCaps: { value: { linkedin: 10, greenhouse: 15, lever: 15, fake: 15, total: 30, linkedinViews: 30 }, source: 'default' },
     companyCap: { value: 2, source: 'default' }, window: { value: { start: '08:00', end: '21:00' }, source: 'default' }, resumeMode: { value: 'tailored', source: 'default' },
-    openAnswers: { value: true, source: 'default' }, blockedCompanies: { value: [], source: 'default' }, blockedTerms: { value: [], source: 'default' },
+    aiAnswers: { value: 'review', source: 'default' }, blockedCompanies: { value: [], source: 'default' }, blockedTerms: { value: [], source: 'default' },
   },
   general: { nextRunAt: 0 },
 };
@@ -124,5 +124,80 @@ describe('api key block', () => {
     expect(OUTCOME_TONE).toEqual({
       ok: 'ok', rate_limited: 'warn', network: 'warn', invalid_key: 'bad', model_not_found: 'bad', no_credit: 'bad', refused: 'bad', other: 'bad',
     });
+  });
+});
+
+describe('apply settings', () => {
+  it('sends only the apply settings that changed', () => {
+    const form = formFromSettings(dto);
+    expect(form).toMatchObject({ applyEnabled: false, applyMinScore: '70', applyWindowStart: '08:00', applyAiAnswers: 'review', applyDailyCaps: { total: '30' } });
+    expect(toSettingsPatch(form, dto)).toEqual({});
+    expect(toSettingsPatch({ ...form, applyMinScore: '75' }, dto)).toEqual({ applyMinScore: 75 });
+    expect(toSettingsPatch({ ...form, applyEnabled: true, applyAiAnswers: 'auto', applyResumeMode: 'base', applyCompanyCap: '3' }, dto))
+      .toEqual({ applyEnabled: true, applyAiAnswers: 'auto', applyResumeMode: 'base', applyCompanyCap: 3 });
+  });
+
+  it('sends only the sites and the caps that changed, and the window as a whole', () => {
+    const form = formFromSettings(dto);
+    const patch = toSettingsPatch({
+      ...form, applySiteModes: { ...form.applySiteModes, greenhouse: 'real' },
+      applyDailyCaps: { ...form.applyDailyCaps, linkedin: '5', total: '40' }, applyWindowEnd: '20:00',
+    }, dto);
+    expect(patch).toEqual({ applySiteModes: { greenhouse: 'real' }, applyDailyCaps: { linkedin: 5, total: 40 }, applyWindow: { start: '08:00', end: '20:00' } });
+    expect(SettingsPatchSchema.safeParse(patch).success).toBe(true);
+  });
+
+  it('collects block lists, keeping spaces inside a term and counting the draft', () => {
+    const form = { ...formFromSettings(dto), applyBlockedCompanies: ['Acme'], applyBlockedCompaniesDraft: 'acme, Globex\nInitech ', applyBlockedTermsDraft: 'vaga presencial' };
+    expect(collectBlockItems(form.applyBlockedCompanies, form.applyBlockedCompaniesDraft)).toEqual(['Acme', 'Globex', 'Initech']);
+    const patch = toSettingsPatch(form, dto);
+    expect(patch).toEqual({ applyBlockedCompanies: ['Acme', 'Globex', 'Initech'], applyBlockedTerms: ['vaga presencial'] });
+    expect(SettingsPatchSchema.safeParse(patch).success).toBe(true);
+  });
+
+  it('refuses a minimum score above 100 and a window that ends before it starts', () => {
+    const form = formFromSettings(dto);
+    expect(validateSettings(form)).toEqual({});
+    const errors = validateSettings({ ...form, applyMinScore: '101', applyWindowStart: '21:00', applyWindowEnd: '08:00' });
+    expect(Object.keys(errors).sort()).toEqual(['applyMinScore', 'applyWindow']);
+    expect(validateSettings({ ...form, applyMinScore: 'abc' }).applyMinScore).toBeDefined();
+    expect(validateSettings({ ...form, applyWindowEnd: '8h' }).applyWindow).toBeDefined();
+  });
+
+  it('refuses caps outside the limits, with a smaller maximum for the per-company cap', () => {
+    const form = formFromSettings(dto);
+    expect(validateSettings({ ...form, applyDailyCaps: { ...form.applyDailyCaps, lever: '201' } }).applyDailyCaps).toBeDefined();
+    expect(validateSettings({ ...form, applyDailyCaps: { ...form.applyDailyCaps, lever: '0' } })).toEqual({});
+    expect(validateSettings({ ...form, applyCompanyCap: '21' }).applyCompanyCap).toBeDefined();
+    expect(validateSettings({ ...form, applyCompanyCap: '0' }).applyCompanyCap).toBeDefined();
+    expect(validateSettings({ ...form, applyBlockedTermsDraft: 'x'.repeat(81) }).applyBlockedTerms).toBeDefined();
+  });
+
+  it('names the first invalid daily cap, the same one validateSettings rejects', () => {
+    const form = formFromSettings(dto);
+    const caps = (over: Partial<SettingsForm['applyDailyCaps']>) => ({ ...form, applyDailyCaps: { ...form.applyDailyCaps, ...over } });
+    // Todos válidos: nenhum campo e nenhum erro.
+    expect(badDailyCap(form)).toBeUndefined();
+    expect(validateSettings(form).applyDailyCaps).toBeUndefined();
+    // Vazio.
+    expect(badDailyCap(caps({ fake: '' }))).toBe('fake');
+    // Acima do máximo.
+    expect(badDailyCap(caps({ linkedinViews: '201' }))).toBe('linkedinViews');
+    expect(badDailyCap(caps({ total: '200' }))).toBeUndefined();
+    // Vários inválidos: o primeiro na ordem da tela (sites, depois total e vagas abertas).
+    expect(badDailyCap(caps({ lever: '201', total: '', linkedin: '1,5' }))).toBe('linkedin');
+    // O erro existe exatamente quando há um campo para receber o foco.
+    for (const over of [{ fake: '' }, { linkedinViews: '201' }, { total: '200' }, { lever: 'x' }, {}]) {
+      const f = caps(over);
+      expect(validateSettings(f).applyDailyCaps !== undefined).toBe(badDailyCap(f) !== undefined);
+    }
+  });
+
+  it('keeps the one-time "Enviar" confirmation in the form only: never sent, reset with the form', () => {
+    const form = formFromSettings(dto);
+    expect(form.applyRealConfirmed).toEqual([]);
+    const confirmed = { ...form, applyRealConfirmed: ['fake' as const] };
+    expect(toSettingsPatch(confirmed, dto)).toEqual({});
+    expect(isDirty(confirmed, dto)).toBe(false);
   });
 });
