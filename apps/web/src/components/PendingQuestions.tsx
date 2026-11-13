@@ -100,7 +100,7 @@ function ScopeChoice({ questionId, value, onChange }: { questionId: string; valu
       <Segmented
         aria-labelledby={labelId} value={value} onValueChange={onChange}
         options={SCOPES.map((s) => ({ value: s, label: SCOPE_LABELS[s] }))}
-        className="p-0.5 [&>button]:h-8[&>button]:px-2.5 [&>button]:text-xs"
+        className="p-0.5 [&>button]:h-8 [&>button]:px-2.5 [&>button]:text-xs"
       />
     </div>
   );
