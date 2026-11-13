@@ -3,6 +3,7 @@ import {
   AI_LAYERS, otherLang, type AiLayer, type AiTaskDto, type AiTaskType, type CandidateProfile, type ProfileOrigin,
   type ResumeLang, type UsageByLayer,
 } from '@kv/shared';
+import { deleteApplyData } from './apply';
 import type { Db } from './client';
 import { aiTasks, aiUsage, candidateProfiles, jobAi, resumes, tailoredResumes } from './schema';
 
@@ -240,6 +241,7 @@ export async function deleteAllAiData(db: Db): Promise<void> {
     await tx.delete(jobAi);
     await tx.delete(candidateProfiles);
     await tx.delete(resumes);
+    await deleteApplyData(tx);
   });
 }
 
