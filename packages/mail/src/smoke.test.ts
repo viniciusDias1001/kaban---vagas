@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createFakeMailbox, deliverFakeMail } from './fake';
 import {
-  SMOKE_MAX_CLASSIFY, checkSmokeFolders, formatSmokeSummary, parseMailSmokeArgs, readRecentInbox, summarizeSmoke,
+  SMOKE_MAX_CLASSIFY, checkSmokeFolders, formatSmokeSummary, parseMailSmokeArgs, readRecentInbox, summarizeSmoke, terminalText,
 } from './smoke';
 import { FOLDERS_HIDDEN_TEXT } from './gmail';
 import { rawMail } from './testing';
@@ -84,6 +84,7 @@ describe('readRecentInbox', () => {
       },
     });
     await readRecentInbox(spy, NOW);
+    expect(calls).toContain('fetchInbox');
     expect(calls.every((c) => c === 'fetchInbox')).toBe(true);
   });
 });
@@ -157,6 +158,16 @@ describe('summarizeSmoke and formatSmokeSummary', () => {
     expect(all).not.toContain('Sua fatura');
     expect(all).not.toContain('Promoção');
     expect(all).not.toContain('Olá');
+  });
+
+  it('never prints control or invisible characters from a mail', () => {
+    const hostile = rawMail({
+      uid: 9, messageId: 'h@x', threadKey: 'h@x', from: { address: 'joana@acme.com', name: 'Joana\u001b[31m Lima' },
+      subject: 'Sua candidatura\u001b]0;título\u0007 na Acme‮​', text: 'Olá',
+    });
+    const line = formatSmokeSummary(summarizeSmoke([hostile], ctx)).at(-1)!;
+    expect(line).toBe('- Joana[31m Lima <joana@acme.com> | Sua candidatura]0;título na Acme | regra: empresa do quadro com sinal de vaga');
+    expect(terminalText('\u0000\u001b\u0007  \t ')).toBe('');
   });
 
   it('says when the reading stopped at the cap, and prints no list when nothing passes', () => {

@@ -111,8 +111,20 @@ export async function checkSmokeFolders(mailbox: Pick<Mailbox, 'fetchThread' | '
   ];
 }
 
-const sender = (m: RawMail) => (m.from.name.trim() ? `${m.from.name.trim()} <${m.from.address}>` : m.from.address);
-const oneLine = (s: string) => s.replace(/\s+/g, ' ').trim() || '(sem assunto)';
+/**
+ * Texto de um e-mail pronto para o terminal: numa linha só e sem caracteres de controle ou invisíveis (`\p{C}`), para um
+ * assunto hostil não mandar sequências de escape ao terminal do dono.
+ */
+export function terminalText(s: string): string {
+  return s.replace(/\s+/g, ' ').replace(/\p{C}/gu, '').trim();
+}
+
+const sender = (m: RawMail) => {
+  const name = terminalText(m.from.name);
+  const address = terminalText(m.from.address);
+  return name ? `${name} <${address}>` : address;
+};
+const oneLine = (s: string) => terminalText(s) || '(sem assunto)';
 
 /** O que o comando imprime: só contagens e, por mensagem que passa, remetente, assunto e a regra. Nunca o texto. */
 export function formatSmokeSummary(s: SmokeSummary, days: number = SMOKE_DAYS): string[] {
