@@ -90,7 +90,7 @@ export function createRecordingSite(opts: { needsLogin?: boolean } = {}): FakeSi
   const site: FakeSite = {
     id: 'fake',
     needsLogin: opts.needsLogin ?? false,
-    ...(opts.needsLogin ? { loginUrl: 'https://login.fake.test/entrar' } : {}),
+    ...(opts.needsLogin ? { loginUrl: 'https://www.fake.test/entrar' } : {}),
     calls,
     variants: { ...DEFAULT_VARIANTS },
     sessions: 'logged_in',
