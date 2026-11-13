@@ -102,7 +102,7 @@ export async function promoteNext(deps: IngestDeps): Promise<boolean> {
 }
 
 /** Erro de login pausa a leitura, grava a causa e abre o alerta; erro passageiro só grava a causa. Relança os dois. */
-async function withMailboxErrors<T>(db: Db, now: () => number, work: () => Promise<T>): Promise<T> {
+export async function withMailboxErrors<T>(db: Db, now: () => number, work: () => Promise<T>): Promise<T> {
   try {
     return await work();
   } catch (e) {
