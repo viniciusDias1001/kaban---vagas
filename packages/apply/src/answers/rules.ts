@@ -152,31 +152,38 @@ function identityAnswer(field: IdentityField, q: Question, profile: CandidatePro
   }
 }
 
-const LEGAL_SUFFIX = /( (ltda|s a|sa|inc|llc|ltd|limited|corp|corporation|gmbh|me|eireli|co))+$/;
-const companyKey = (name: string) => normalizeQuestionText(name).replace(LEGAL_SUFFIX, '').trim();
-/** Mesma empresa: um nome contém o outro, palavra por palavra ("Acme" e "Acme Brasil Ltda"). */
-function sameCompany(a: string, b: string): boolean {
-  const x = companyKey(a);
-  const y = companyKey(b);
-  if (x === '' || y === '') return false;
-  return ` ${x} `.includes(` ${y} `) || ` ${y} `.includes(` ${x} `);
+/** Palavras que não distinguem uma empresa de outra: forma societária, conectivos e termos genéricos. */
+const NOT_SIGNIFICANT = new Set([
+  'ltda', 's', 'a', 'sa', 'inc', 'incorporated', 'llc', 'llp', 'ltd', 'limited', 'corp', 'corporation', 'co', 'company', 'companhia',
+  'cia', 'me', 'eireli', 'epp', 'gmbh', 'plc', 'ag', 'bv', 'nv', 'srl', 'spa', 'sas', 'pty', 'group', 'grupo', 'holding',
+  'tecnologia', 'tecnologias', 'technology', 'technologies', 'tech', 'brasil', 'brazil', 'do', 'da', 'de', 'dos', 'das', 'e',
+  'and', 'the', 'of',
+]);
+/** Palavras que identificam a empresa: "Acme Tecnologia Ltda" → ["acme"]; "Minsait (Indra)" → ["minsait", "indra"]. */
+function significantTokens(name: string): string[] {
+  return normalizeQuestionText(name).split(' ').filter((w) => w !== '' && !NOT_SIGNIFICANT.has(w));
 }
 
-const YES = ['yes', 'sim'];
-const NO = ['no', 'nao'];
-function yesNo(answer: boolean, q: Question): AnswerValue | undefined {
-  if (q.kind === 'boolean') return answer;
+/** "Não", na forma da pergunta: booleano ou a única opção "No"/"Não"; senão a regra não sabe. */
+function plainNo(q: Question): AnswerValue | undefined {
+  if (q.kind === 'boolean') return false;
   if (q.options.length === 0) return undefined;
-  const words = answer ? YES : NO;
-  const hits = q.options.filter((o) => words.includes(normalizeQuestionText(o)));
+  const hits = q.options.filter((o) => ['no', 'nao'].includes(normalizeQuestionText(o)));
   return hits.length === 1 ? hits[0] : undefined;
 }
 
+/**
+ * "Já trabalhou nesta empresa?". Responde só "não", e só quando a empresa da vaga não divide nenhuma palavra
+ * significativa com nenhuma empresa do perfil: uma diferença de nome nunca nega um ex-empregador. Qualquer
+ * palavra em comum vai ao dono; "sim" nunca é automático (costuma abrir outras perguntas).
+ */
 function workedHereAnswer(q: Question, ctx: RuleContext): AnswerValue | undefined {
-  const company = companyKey(ctx.job.company);
-  const pattern = workedHerePattern([...GENERIC_EMPLOYER, company]);
-  if (company === '' || !pattern.test(normalizeQuestionText(q.label))) return undefined;
-  return yesNo(ctx.profile.experiences.some((e) => sameCompany(e.company, ctx.job.company)), q);
+  const jobTokens = significantTokens(ctx.job.company);
+  if (jobTokens.length === 0) return undefined;
+  const pattern = workedHerePattern([...GENERIC_EMPLOYER, normalizeQuestionText(ctx.job.company)]);
+  if (!pattern.test(normalizeQuestionText(q.label))) return undefined;
+  const shared = ctx.profile.experiences.some((e) => significantTokens(e.company).some((t) => jobTokens.includes(t)));
+  return shared ? undefined : plainNo(q);
 }
 
 const AGREE = /^(i agree|agree|i accept|accept|i consent|yes|sim|concordo|aceito|li e concordo|li e aceito)$/;

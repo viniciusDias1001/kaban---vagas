@@ -126,7 +126,10 @@ export async function resolveAnswers(input: ResolveInput, deps: ResolveDeps): Pr
         break;
       }
       case 'open':
-        if (!bankHit(q, cat) && askModel) opens.push(q);
+        // Texto escrito pelo modelo só em campo obrigatório; o opcional sem resposta salva fica em branco.
+        if (bankHit(q, cat)) break;
+        if (!q.required) answers.set(q.id, answer(q, cat, null, 'blank'));
+        else if (askModel) opens.push(q);
         break;
     }
   }

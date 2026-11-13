@@ -131,12 +131,29 @@ describe('answerByRule', () => {
     expect(answerByRule(q('I agree to receive news', { kind: 'boolean', required: false }), 'consent', ctx)).toBeUndefined();
   });
 
-  it('compares the job company with the companies in the profile', () => {
-    const before: RuleContext = { ...ctx, job: { ...ctx.job, company: 'Empresa Fictícia' } };
-    expect(answerByRule(select('Have you previously worked at Empresa Fictícia?', ['Yes', 'No']), 'profile_fact', before)).toBe('Yes');
-    expect(answerByRule(select('Você já trabalhou nesta empresa?', ['Sim', 'Não']), 'profile_fact', before)).toBe('Sim');
+  it('answers "no" only when the job company shares no significant word with any company in the profile', () => {
+    expect(answerByRule(select('Você já trabalhou nesta empresa?', ['Sim', 'Não']), 'profile_fact', ctx)).toBe('Não');
     expect(answerByRule(q('Have you ever worked for us?', { kind: 'boolean' }), 'profile_fact', ctx)).toBe(false);
     expect(answerByRule(q('Have you ever worked for us?'), 'profile_fact', ctx)).toBeUndefined();
+  });
+
+  it('never answers "yes", and leaves to the owner any job company that shares a word with a former employer', () => {
+    const at = (company: string, experiences: string[]): RuleContext => ({
+      ...ctx, job: { ...ctx.job, company },
+      profile: { ...profile, experiences: experiences.map((c, i) => ({ ...profile.experiences[0]!, id: `exp_ccccccc${i}`, company: c })) },
+    });
+    const worked = select('Have you ever worked for this company?', ['Yes', 'No']);
+    expect(answerByRule(worked, 'profile_fact', at('Indra', ['Minsait (Indra)']))).toBeUndefined();
+    expect(answerByRule(worked, 'profile_fact', at('ACME', ['Acme Tecnologia Ltda']))).toBeUndefined();
+    expect(answerByRule(worked, 'profile_fact', at('Empresa Fictícia', ['Empresa Fictícia Ltda']))).toBeUndefined();
+    expect(answerByRule(worked, 'profile_fact', at('Grupo Boticário Brasil', ['Boticário']))).toBeUndefined();
+    expect(answerByRule(worked, 'profile_fact', at('Beta Technologies Inc', ['Acme Technologies Ltda', 'Gama Group']))).toBe('No');
+    // Nada sobra do nome da empresa da vaga: a regra não sabe.
+    expect(answerByRule(worked, 'profile_fact', at('Tecnologia Brasil Ltda', ['Acme']))).toBeUndefined();
+  });
+
+  it('answers "no" only with a plain negative option', () => {
+    expect(answerByRule(select('Have you ever worked for this company?', ['Yes, I have', 'No, never']), 'profile_fact', ctx)).toBeUndefined();
   });
 });
 

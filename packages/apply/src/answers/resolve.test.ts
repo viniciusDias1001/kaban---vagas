@@ -136,10 +136,26 @@ describe('answers proposed by the model', () => {
     ]);
   });
 
-  it('in review mode, an optional question with a proposal also waits for the owner', async () => {
-    const res = await resolveAnswers(input([{ ...open, required: false }]), deps);
-    expect(res.answers).toEqual([]);
-    expect(res.pending).toEqual([expect.objectContaining({ kind: 'confirm_proposal' })]);
+  it('writes an open answer only for a required question; an optional one is left blank, in review and in auto', async () => {
+    for (const aiAnswers of ['review', 'auto'] as const) {
+      const optional = { ...open, required: false };
+      const bank = [a({ question: 'Fale sobre um projeto', answer: 'Texto salvo.' })];
+      deps.proposeMatches.mockResolvedValue(new Map([['q2', { bankAnswerId: bank[0]!.id, option: null }]]));
+      const res = await resolveAnswers(input([optional], bank, { aiAnswers }), deps);
+      expect(deps.writeOpen).not.toHaveBeenCalled();
+      expect(deps.proposeMatches).not.toHaveBeenCalled();
+      expect(res.pending).toEqual([]);
+      expect(res.answers).toEqual([{ questionId: 'q2', value: null, source: 'blank', category: 'open', basis: [], bankAnswerId: null }]);
+    }
+  });
+
+  it('a required open question gets a proposal in review and a written answer in auto', async () => {
+    const review = await resolveAnswers(input([open], [], { aiAnswers: 'review' }), deps);
+    expect(review.pending).toEqual([expect.objectContaining({ kind: 'confirm_proposal', proposal: expect.objectContaining({ source: 'written' }) })]);
+    expect(review.answers).toEqual([]);
+    const auto = await resolveAnswers(input([open], [], { aiAnswers: 'auto' }), deps);
+    expect(auto.answers).toEqual([expect.objectContaining({ questionId: 'q2', source: 'written', value: 'Porque gosto do produto.' })]);
+    expect(deps.writeOpen).toHaveBeenCalledTimes(2);
   });
 
   it('in auto mode, uses the verified proposals as answers', async () => {
@@ -208,6 +224,15 @@ describe('resolution order', () => {
     const res = await resolveAnswers(input([select('q1', 'Have you previously worked at Acme?', ['Yes', 'No'])], [], { aiAnswers: 'off' }), deps);
     expect(res.answers).toEqual([{ questionId: 'q1', value: 'No', source: 'rule', category: 'profile_fact', basis: [], bankAnswerId: null }]);
     expect(deps.profileFacts).not.toHaveBeenCalled();
+  });
+
+  it('sends the worked-here question to the owner when the job company shares a word with a former employer', async () => {
+    modelSays({ q1: 'profile_fact' });
+    const exp = { id: 'exp_aaaaaaa1', company: 'Minsait (Indra)', title: 'Dev', start: '2020-01', end: '2022-01', location: '', achievements: [] };
+    const indra = { ...ctx, company: 'Indra', job: { ...ctx.job, company: 'Indra' }, profile: { ...profile, experiences: [exp] } };
+    const res = await resolveAnswers(input([select('q1', 'Have you previously worked at Indra?', ['Yes', 'No'])], [], { ctx: indra, aiAnswers: 'off' }), deps);
+    expect(res.answers).toEqual([]);
+    expect(res.pending).toEqual([expect.objectContaining({ category: 'profile_fact', kind: 'unanswered' })]);
   });
 
   it('leaves optional questions blank and makes required ones pending', async () => {
