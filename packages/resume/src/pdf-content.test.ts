@@ -45,4 +45,23 @@ describe('pdf content', () => {
     expect(named('MARIA EXEMPLO DA SILVA')).toMatchObject({ name: 'MARIA EXEMPLO DA SILVA', footerName: 'Maria Exemplo da Silva' });
     expect(named('Jörg Straße')).toMatchObject({ name: 'JÖRG STRASSE', footerName: 'Jörg Straße' });
   });
+  it('leaves out a language without a name', () => {
+    const c = resumeContent({ ...SAMPLE_TAILORED, languages: [{ id: 'lang_ccccccc1', name: '  ', level: 'avançado' }, { id: 'lang_ccccccc2', name: ' Espanhol ', level: ' básico ' }] });
+    expect(c.sections.find((s) => s.key === 'languages')).toMatchObject({ line: 'Espanhol: básico' });
+    const none = resumeContent({ ...SAMPLE_TAILORED, languages: [{ id: 'lang_ccccccc1', name: '', level: 'avançado' }] });
+    expect(none.sections.map((s) => s.key)).not.toContain('languages');
+  });
+  it('puts the header name and the headline on one trimmed line', () => {
+    const c = resumeContent({ ...SAMPLE_TAILORED, headline: '  Desenvolvedora\nFront-end\r\nSênior  ', contact: { ...SAMPLE_TAILORED.contact, name: ' Maria\nExemplo da Silva ' } });
+    expect(c).toMatchObject({ name: 'MARIA EXEMPLO DA SILVA', headline: 'DESENVOLVEDORA FRONT-END SÊNIOR', footerName: 'Maria Exemplo da Silva' });
+    expect(resumeContent({ ...SAMPLE_TAILORED, headline: ' \n ' }).headline).toBe('');
+  });
+  it('trims skill names and leaves out the empty ones', () => {
+    const c = resumeContent({ ...SAMPLE_TAILORED, skills: [
+      { id: 'skill_ccccccc1', name: ' React ', group: 'Front-end' }, { id: 'skill_ccccccc2', name: '  ', group: 'Front-end' },
+      { id: 'skill_ccccccc3', name: '', group: 'Vazio' }, { id: 'skill_ccccccc4', name: ' Git', group: '' }, { id: 'skill_ccccccc5', name: ' ', group: '' },
+    ] });
+    expect(c.sections.find((s) => s.key === 'skills')).toMatchObject({ groups: [{ label: 'Front-end:', items: 'React' }, { label: '', items: 'Git' }] });
+    expect(resumeContent({ ...SAMPLE_TAILORED, skills: [{ id: 'skill_ccccccc1', name: ' ', group: 'X' }] }).sections.map((s) => s.key)).not.toContain('skills');
+  });
 });

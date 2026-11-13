@@ -51,6 +51,8 @@ const LOWERCASE_WORDS = new Set(['da', 'de', 'do', 'das', 'dos', 'e']);
 
 const joinParts = (parts: string[], separator: string): string =>
   parts.map((p) => p.trim()).filter(Boolean).join(separator);
+/** Texto de uma linha só: quebras viram espaço, sem espaço nas pontas. */
+const oneLine = (text: string): string => text.replace(/[\r\n]+/g, ' ').trim();
 
 export function formatResumeDate(value: string, lang: ResumeLang): string {
   const text = value.trim();
@@ -67,7 +69,7 @@ export function formatPeriod(start: string, end: string, lang: ResumeLang): stri
 }
 
 export function footerName(name: string): string {
-  const line = name.replace(/[\r\n]+/g, ' ').trim();
+  const line = oneLine(name);
   if (!/\p{L}/u.test(line) || line !== line.toUpperCase()) return line;
   let index = 0;
   return line.replace(/[^ -]+/g, (word) => {
@@ -91,9 +93,11 @@ export function resumeContent(resume: TailoredResume): ResumeContent {
   const skillGroups = new Map<string, string[]>();
   const ungrouped: string[] = [];
   for (const skill of r.skills) {
+    const name = skill.name.trim();
+    if (!name) continue;
     const label = skill.group.trim();
-    if (!label) { ungrouped.push(skill.name); continue; }
-    skillGroups.set(label, [...(skillGroups.get(label) ?? []), skill.name]);
+    if (!label) { ungrouped.push(name); continue; }
+    skillGroups.set(label, [...(skillGroups.get(label) ?? []), name]);
   }
   const groups = [
     ...[...skillGroups].map(([label, names]) => ({ label: `${label}:`, items: names.join(', ') })),
@@ -114,7 +118,7 @@ export function resumeContent(resume: TailoredResume): ResumeContent {
   const education = r.education.map((e) =>
     joinParts([joinParts([e.degree, e.institution], ' - '), formatPeriod(e.start, e.end, lang)], ' | '));
   const languages = joinParts(
-    r.languages.map((l) => (l.level.trim() ? `${l.name.trim()}: ${l.level.trim()}` : l.name.trim())),
+    r.languages.filter((l) => l.name.trim()).map((l) => (l.level.trim() ? `${l.name.trim()}: ${l.level.trim()}` : l.name.trim())),
     ' | ',
   );
   const certifications = r.certifications.map((c) =>
@@ -132,8 +136,8 @@ export function resumeContent(resume: TailoredResume): ResumeContent {
   const sections = SECTION_ORDER.flatMap((key) => candidates.filter((s): s is ContentSection => s !== null && s.key === key));
 
   return {
-    name: r.contact.name.toUpperCase(),
-    headline: r.headline.toUpperCase(),
+    name: oneLine(r.contact.name).toUpperCase(),
+    headline: oneLine(r.headline).toUpperCase(),
     contact: [r.contact.location, r.contact.phone, r.contact.email, ...r.links.map((l) => bareUrl(l.url))].map((p) => p.trim()).filter(Boolean),
     footerName: footerName(r.contact.name),
     sections,
