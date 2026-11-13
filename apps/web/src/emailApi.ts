@@ -12,7 +12,7 @@ export interface MailMessageFilter { kind?: EmailKind; unmatched?: boolean; sinc
 /** Códigos de erro cuja mensagem em pt-BR a API já escreve para o dono: ela é mostrada como veio. */
 const MESSAGE_CODES = new Set([
   'email_unavailable', 'no_app_secret', 'mail_auth', 'mail_unreachable', 'rate_limited', 'draft_has_gaps', 'not_a_draft',
-  'wrong_state', 'wrong_kind', 'alert_closed', 'cannot_undo',
+  'wrong_state', 'wrong_kind', 'alert_closed', 'cannot_undo', 'no_phone_token', 'no_phone_chat', 'no_chat', 'phone_failed',
 ]);
 
 /** O texto de um erro das rotas de e-mail: a mensagem da API nos códigos conhecidos (qualquer status), o padrão nos demais. */
@@ -59,6 +59,13 @@ export const connectMailbox = (input: MailAccountInput) => request<MailAccountDt
 /** Sempre manda `messages` de forma explícita: `keep` guarda os e-mails já lidos, `delete` os apaga. */
 export const disconnectMailbox = (messages: 'keep' | 'delete') =>
   request<void>(`/email/account?messages=${messages}`, { method: 'DELETE' });
+
+/** Grava o token do bot do Telegram (cifrado no servidor). Ele nunca volta: a resposta é a conta, com `phoneTokenSaved`. */
+export const savePhoneToken = (token: string) => request<MailAccountDto>('/email/phone-token', json('PUT', { token }));
+export const deletePhoneToken = () => request<void>('/email/phone-token', { method: 'DELETE' });
+/** "Achar meu chat": o servidor grava o chat achado em `telegramChatId`. */
+export const findPhoneChat = () => request<{ chatId: string }>('/email/phone-chat', post());
+export const sendPhoneTest = () => request<{ ok: true }>('/email/phone-test', post());
 
 export function listMailMessages(filter: MailMessageFilter = {}) {
   const query = new URLSearchParams();

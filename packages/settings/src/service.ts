@@ -4,7 +4,7 @@ import {
 } from '@kv/ai';
 import { aiKeys, deleteSecretRow, saveSecretRow, secretRow, settings as settingsTable, type Db } from '@kv/db';
 import {
-  EMAIL_DEFAULTS, type EmailConfig, type SecretName,
+  EMAIL_DEFAULTS, type EmailConfig, type PhoneAlertChannel, type PhoneAlertConfig, type SecretName,
   APPLY_DEFAULTS, APPLY_SITE_IDS, type ApplyAiAnswers, type ApplyConfig, type ApplyDailyCaps, type ApplyMode, type ApplyResumeMode,
   type ApplySiteId, type ApplyWindow,
   AI_KEY_ENV_VARS, AI_PROVIDER_IDS, AI_PROVIDER_LABELS, DEFAULT_GREENHOUSE_BOARDS, DEFAULT_LEVER_COMPANIES, SETTING_KEYS,
@@ -64,6 +64,8 @@ export interface ResolvedSettings {
     moveMode: SettingValue<EmailConfig['moveMode']>;
     factsMode: SettingValue<EmailConfig['factsMode']>;
     aiDrafts: SettingValue<boolean>;
+    phoneAlertChannel: SettingValue<PhoneAlertChannel>;
+    telegramChatId: SettingValue<string | null>;
   };
   budgetTimeZone: string;
 }
@@ -194,6 +196,9 @@ export function createSettingsService(db: Db, opts: SettingsServiceOptions = {})
         moveMode: pick(stored.emailMoveMode as EmailConfig['moveMode'] | undefined, undefined, EMAIL_DEFAULTS.moveMode),
         factsMode: pick(stored.emailFactsMode as EmailConfig['factsMode'] | undefined, undefined, EMAIL_DEFAULTS.factsMode),
         aiDrafts: pick(stored.emailAiDrafts as boolean | undefined, undefined, EMAIL_DEFAULTS.aiDrafts),
+        // Desligado por padrão: nada sai da máquina sem o dono criar o bot e ligar o canal.
+        phoneAlertChannel: pick<PhoneAlertChannel>(stored.phoneAlertChannel as PhoneAlertChannel | undefined, undefined, 'off'),
+        telegramChatId: pick<string | null>(stored.telegramChatId as string | undefined, undefined, null),
       },
       budgetTimeZone: tz && isTimeZone(tz) ? tz : DEFAULT_BUDGET_TIME_ZONE,
     };
@@ -304,6 +309,11 @@ export function createSettingsService(db: Db, opts: SettingsServiceOptions = {})
     async emailConfig(): Promise<EmailConfig> {
       const { email: e } = resolve((await load()).stored);
       return { enabled: e.enabled.value, moveMode: e.moveMode.value, factsMode: e.factsMode.value, aiDrafts: e.aiDrafts.value };
+    },
+    /** O aviso no celular em vigor (canal e chat), para o worker. O token do bot vem de `readSecret('telegram_bot_token')`. */
+    async phoneAlertConfig(): Promise<PhoneAlertConfig> {
+      const { email: e } = resolve((await load()).stored);
+      return { channel: e.phoneAlertChannel.value, chatId: e.telegramChatId.value };
     },
 
     /** Cifra e grava um segredo nomeado. Lança SecretMissingError sem APP_SECRET. O texto puro não é guardado. */
@@ -435,6 +445,8 @@ export function createSettingsService(db: Db, opts: SettingsServiceOptions = {})
           moveMode: src(resolved.email.moveMode),
           factsMode: src(resolved.email.factsMode),
           aiDrafts: src(resolved.email.aiDrafts),
+          phoneAlertChannel: src(resolved.email.phoneAlertChannel),
+          telegramChatId: src(resolved.email.telegramChatId),
         },
         sources: { greenhouseBoards: src(resolved.greenhouseBoards), leverCompanies: src(resolved.leverCompanies) },
         general: { nextRunAt },

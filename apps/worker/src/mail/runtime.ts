@@ -1,11 +1,12 @@
 import { AiError, createProvider } from '@kv/ai';
 import { applyDataDir } from '@kv/apply';
 import { MAIL_QUEUE_LOCK, getMailAccount, raiseAlert, updateMailAccount, type Db } from '@kv/db';
-import { mailboxFor, type Mailbox } from '@kv/mail';
+import { mailboxFor, phoneNotifierFor, type Mailbox, type PhoneNotifier } from '@kv/mail';
 import type { SettingsService } from '@kv/settings';
 import { emailAvailability } from '@kv/shared';
 import { sql } from 'drizzle-orm';
 import { createMailAi } from './ai-calls';
+import { notifyNext } from './phone';
 import { createMailQueue, type MailQueue } from './queue';
 import { resumeForReply } from './send';
 
@@ -103,8 +104,21 @@ export async function openOwnerMailbox(
 }
 
 /**
+ * O aviso no celular para as configurações e o cofre de agora, montado a cada uso: canal `off`, sem chat ou sem token legível,
+ * null (o alerta fica só no app). O token só existe dentro do notificador devolvido.
+ */
+export async function ownerPhoneNotifier(settings: SettingsService, env: NodeJS.ProcessEnv, dataDir: string): Promise<PhoneNotifier | null> {
+  const { channel, chatId } = await settings.phoneAlertConfig();
+  if (channel === 'off' || chatId === null) return null;
+  const token = await settings.readSecret('telegram_bot_token');
+  if (token.value === null) return null;
+  return phoneNotifierFor(env, dataDir, { token: token.value, chatId });
+}
+
+/**
  * Monta a fila do processo: caixa de `mailboxFor(env, applyDataDir(env), …)` com a senha do cofre, IA das configurações
- * (lida a cada pergunta); com `FAKE_MAIL=1`, leitura a cada 3 s. Só um worker por banco faz trabalho de e-mail: a cada
+ * (lida a cada pergunta); com `FAKE_MAIL=1`, leitura a cada 3 s. Depois de cada unidade de trabalho, o aviso no celular do
+ * alerta pendente mais antigo (`notifyNext`, com `ownerPhoneNotifier`). Só um worker por banco faz trabalho de e-mail: a cada
  * verificação a fila confere (ou pede) o lock de sessão `MAIL_QUEUE_LOCK`, e sem ele não faz nada. A primeira verificação
  * com o lock confere os envios interrompidos antes de qualquer outra coisa. `close` devolve o lock.
  */
@@ -131,6 +145,9 @@ export function createMailRuntime(
     openMailbox: () => openOwnerMailbox(db, settings, env, dataDir, now),
     availability: () => host,
     resume: resumeForReply(db),
+    afterWork: async () => {
+      await notifyNext({ db, notifier: await ownerPhoneNotifier(settings, env, dataDir), now, log });
+    },
     ...(env.FAKE_MAIL === '1' ? { pollMs: FAKE_POLL_MS } : {}),
   });
 

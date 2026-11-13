@@ -55,11 +55,24 @@ describe('GET /settings and PATCH /settings', () => {
     expect((await get()).email).toEqual({
       enabled: { value: true, source: 'default' }, moveMode: { value: 'auto', source: 'default' },
       factsMode: { value: 'auto', source: 'default' }, aiDrafts: { value: true, source: 'default' },
+      phoneAlertChannel: { value: 'off', source: 'default' }, telegramChatId: { value: null, source: 'default' },
     });
     const res = await patch({ emailMoveMode: 'confirm' });
     expect(res.statusCode).toBe(200);
     expect(res.json().email.moveMode).toEqual({ value: 'confirm', source: 'ui' });
     expect((await patch({ emailMoveMode: 'x' })).statusCode).toBe(400);
+  });
+
+  it('saves the phone alert channel and chat, and refuses anything else', async () => {
+    build({ APP_SECRET: TEST_SECRET });
+    const res = await patch({ phoneAlertChannel: 'telegram', telegramChatId: '42' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().email).toMatchObject({
+      phoneAlertChannel: { value: 'telegram', source: 'ui' }, telegramChatId: { value: '42', source: 'ui' },
+    });
+    expect((await patch({ phoneAlertChannel: 'sms' })).statusCode).toBe(400);
+    expect((await patch({ telegramChatId: '+55 11 99999-0000' })).statusCode).toBe(400);
+    expect((await patch({ telegramChatId: '1'.repeat(33) })).statusCode).toBe(400);
   });
 
   it('shows every setting with its origin, under / and /api', async () => {

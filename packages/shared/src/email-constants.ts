@@ -47,6 +47,17 @@ export const DRAFT_PLACEHOLDER = /\[\[[^\]]*\]\]/;
 
 export type SecretName = 'mail_password' | 'telegram_bot_token';
 
+/** Aviso no celular de convite de entrevista e oferta: desligado (padrão) ou por um bot do Telegram do próprio dono. */
+export const PHONE_ALERT_CHANNELS = ['off', 'telegram'] as const;
+export type PhoneAlertChannel = (typeof PHONE_ALERT_CHANNELS)[number];
+/** O aviso no celular em vigor, como o worker o lê. */
+export interface PhoneAlertConfig { channel: PhoneAlertChannel; chatId: string | null }
+export const PHONE_ALERT_LIMITS = { tokenMin: 8, tokenMax: 100, chatIdMax: 32 } as const;
+/** Id de chat do Telegram: só dígitos, com `-` na frente nos grupos. */
+export const TELEGRAM_CHAT_ID_PATTERN = /^-?\d+$/;
+/** Token de bot: ASCII visível, sem espaços. */
+export const TELEGRAM_TOKEN_PATTERN = /^[\x21-\x7e]+$/;
+
 /** A função só existe com HOST local; mesma regra de `applyAvailability`. */
 export function emailAvailability(env: { HOST?: string }): { available: boolean; reason: string | null } {
   const host = env.HOST?.trim();
@@ -64,6 +75,8 @@ export interface MailAccountDto {
   connected: boolean; address: string | null; connectedAt: number | null; lastReadAt: number | null;
   paused: boolean; error: string | null; available: boolean; unavailableReason: string | null;
   canStore: boolean; secretProblem: string | null; profileEmail: string | null; differsFromProfile: boolean;
+  /** Há um token de bot do Telegram gravado no cofre (o token em si nunca sai do servidor). */
+  phoneTokenSaved: boolean;
 }
 export interface MailMessageDto {
   /** `messageId` é o Message-ID do e-mail (RFC 5322), o mesmo que `MailReplyDto.outMessageId` da resposta que o app enviou. */
