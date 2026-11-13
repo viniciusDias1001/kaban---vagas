@@ -5,6 +5,7 @@ import {
 } from '@kv/shared';
 import { deleteApplyData } from './apply';
 import type { Db } from './client';
+import { deleteMailData } from './mail-board';
 import { aiTasks, aiUsage, candidateProfiles, jobAi, resumes, tailoredResumes } from './schema';
 
 export type AiTaskRow = typeof aiTasks.$inferSelect;
@@ -229,7 +230,8 @@ export async function deleteResumeData(db: Db, lang: ResumeLang): Promise<boolea
 
 /**
  * Apaga TUDO o que a IA de perfil guardou: currículos (arquivo e texto), perfis, currículos adaptados, notas e
- * análises das vagas e a fila de tarefas inteira. Ficam: `ai_usage` (contabilidade sem conteúdo pessoal: provedor,
+ * análises das vagas, a fila de tarefas inteira, os dados da candidatura automática e os do e-mail (mensagens, respostas,
+ * ignorados e alertas; a caixa conectada e a senha ficam). Ficam: `ai_usage` (contabilidade sem conteúdo pessoal: provedor,
  * modelo, tokens e custo; apagá-la zeraria o limite de gasto do dia), as configurações e as chaves de API (que têm
  * o próprio botão de remover na aba Configurações) e as vagas.
  */
@@ -242,6 +244,7 @@ export async function deleteAllAiData(db: Db): Promise<void> {
     await tx.delete(candidateProfiles);
     await tx.delete(resumes);
     await deleteApplyData(tx);
+    await deleteMailData(tx);
   });
 }
 
