@@ -1,7 +1,7 @@
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { jobs, type Db } from '@kv/db';
-import { createFakeMailbox, fakeMailDir } from '@kv/mail';
+import { FAKE_TELEGRAM_CHAT_ID, createFakeMailbox, createFakeNotifier, fakeMailDir } from '@kv/mail';
 import { extractResumeText } from '@kv/resume';
 import type { AiContextOptions } from './ai-context';
 
@@ -17,7 +17,7 @@ export const TEST_SECRET = 'segredo-de-teste-com-mais-de-32-caracteres-0001';
 /**
  * Contexto de teste: provedor falso (pelo ambiente), extração na própria thread, relógio fixo. Com o relógio
  * fixo o cache do serviço de configurações nunca vence sozinho: só as gravações feitas pelo serviço o renovam. A caixa de
- * e-mail é a falsa, num arquivo dentro da pasta de dados de teste: nenhum teste abre conexão de rede.
+ * e-mail e o aviso no celular são os falsos, em arquivos dentro da pasta de dados de teste: nenhum teste abre conexão de rede.
  */
 export const testAi = (over: AiContextOptions = {}): AiContextOptions => {
   // Nunca a pasta de dados de verdade do dono: "Apagar todos os dados de IA" remove pastas dentro dela.
@@ -28,6 +28,8 @@ export const testAi = (over: AiContextOptions = {}): AiContextOptions => {
     now: () => Date.UTC(2026, 10, 11, 15, 0, 0),
     dataDir,
     mailbox: (creds) => createFakeMailbox(fakeMailDir(dataDir), creds),
+    phoneNotifier: () => createFakeNotifier(fakeMailDir(dataDir)),
+    findPhoneChat: async () => FAKE_TELEGRAM_CHAT_ID,
     ...over,
   };
 };

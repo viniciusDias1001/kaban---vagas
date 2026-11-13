@@ -1,13 +1,19 @@
-import { CircleAlert, CircleCheck, CircleDashed, CircleOff, Inbox, LoaderCircle, Lock, LogOut, Mail, MailCheck, PlugZap, RotateCw } from 'lucide-react';
+import {
+  Check, CircleAlert, CircleCheck, CircleDashed, CircleOff, Inbox, KeyRound, LoaderCircle, Lock, LogOut, Mail, MailCheck, PlugZap, RotateCw, Search,
+  Send, ShieldCheck, Trash2,
+} from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import { APP_SECRET_COMMAND, type EmailFactsMode, type EmailMoveMode, type MailAccountDto, type MailIgnoredDto, type SettingsDto } from '@kv/shared/client';
+import {
+  APP_SECRET_COMMAND, type EmailFactsMode, type EmailMoveMode, type MailAccountDto, type MailIgnoredDto, type PhoneAlertChannel, type SettingsDto,
+} from '@kv/shared/client';
 import { ageLabel } from '../age';
 import { mailPasswordProblem } from '../lib/email';
+import { phoneTokenProblem } from '../lib/phone';
 import { spring } from '../lib/motion';
 import { cn } from '../lib/utils';
 import type { SettingsForm } from '../settingsForm';
-import { useConnectMailbox, useDisconnectMailbox, useIgnoredMail, useMailAccount, useMessageActions } from '../useEmail';
+import { useConnectMailbox, useDisconnectMailbox, useIgnoredMail, useMailAccount, useMessageActions, usePhoneActions } from '../useEmail';
 import { SecretCommand } from './ApiKeyField';
 import { MailPasswordField } from './MailPasswordField';
 import { CARD, ERROR, EYEBROW, HINT, LABEL, SectionHeader, SourceTag, ToggleRow } from './SettingsAiSection';
@@ -313,6 +319,191 @@ function IgnoredMail() {
   );
 }
 
+const PHONE_OPTIONS: { value: PhoneAlertChannel; label: string }[] = [
+  { value: 'off', label: 'Desligado' }, { value: 'telegram', label: 'Telegram' },
+];
+const PHONE_HINTS: Record<PhoneAlertChannel, string> = {
+  off: 'Convites e ofertas ficam só no sino do app.',
+  telegram: 'Convite de entrevista e oferta também chegam como mensagem do seu bot no Telegram, uma por e-mail.',
+};
+const PHONE_STEPS = [
+  'No Telegram, fale com o BotFather e crie um bot.',
+  'Cole o token aqui.',
+  'Mande qualquer mensagem para o seu bot.',
+  'Aperte Achar meu chat.',
+];
+
+/**
+ * O aviso no celular: canal (do formulário, salvo com o resto), token do bot (só de escrita, gravado na hora), "Achar meu
+ * chat" e "Enviar teste". Os erros aparecem uma vez, aqui, com o texto que a API escreveu.
+ */
+function PhoneAlertBlock({ dto, form, onChange, account }: Props & { account: MailAccountDto | undefined }) {
+  const { saveToken, deleteToken, findChat, sendTest } = usePhoneActions();
+  const channelLabel = useId();
+  const tokenId = useId();
+  const tokenHelp = useId();
+  const token = useRef<HTMLInputElement>(null);
+  const [tokenProblem, setTokenProblem] = useState<string | null>(null);
+  const [result, setResult] = useState<{ tone: 'ok' | 'bad'; text: string } | null>(null);
+  const email = dto.email;
+  const chatId = email.telegramChatId.value;
+  const saved = account?.phoneTokenSaved ?? false;
+  const locked = !account || !account.available || !account.canStore;
+  const busy = saveToken.isPending || deleteToken.isPending || findChat.isPending || sendTest.isPending;
+  const missing = !saved && chatId === null ? 'o token e o chat' : !saved ? 'o token' : 'o chat';
+
+  async function run(action: () => Promise<string>) {
+    setResult(null);
+    try {
+      setResult({ tone: 'ok', text: await action() });
+    } catch (e) {
+      setResult({ tone: 'bad', text: messageOf(e) });
+    }
+  }
+
+  async function save() {
+    const el = token.current;
+    if (!el || busy || locked) return;
+    const problem = phoneTokenProblem(el.value);
+    setTokenProblem(problem);
+    if (problem) return el.focus();
+    await run(async () => {
+      try {
+        await saveToken.mutateAsync(el.value.trim());
+      } finally {
+        // Deu certo ou não, o token sai da página assim que a chamada termina.
+        el.value = '';
+      }
+      return 'Token gravado. Agora mande uma mensagem para o seu bot e aperte Achar meu chat.';
+    });
+  }
+
+  return (
+    <Block title="Aviso no celular">
+      <div className="space-y-4">
+        <div className="min-w-0 @2xl:w-[calc(50%-0.5rem)]">
+          <div className="mb-2 flex items-baseline justify-between gap-2">
+            <span id={channelLabel} className={LABEL}>Avisar convites e ofertas</span>
+            <SourceTag source={email.phoneAlertChannel.source} changed={form.phoneAlertChannel !== email.phoneAlertChannel.value} />
+          </div>
+          <div data-testid="phone-channel">
+            <Segmented
+              aria-labelledby={channelLabel} value={form.phoneAlertChannel}
+              onValueChange={(phoneAlertChannel) => onChange({ phoneAlertChannel })} options={PHONE_OPTIONS}
+            />
+          </div>
+          <p className={cn(HINT, 'mt-1.5')}>{PHONE_HINTS[form.phoneAlertChannel]}</p>
+        </div>
+
+        <AnimatePresence initial={false}>
+          {form.phoneAlertChannel === 'telegram' && (!saved || chatId === null) && (
+            <motion.div key="incomplete" initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={spring} className="overflow-hidden">
+              <Notice tone="warn" role="status" data-testid="phone-incomplete">
+                Nenhuma mensagem sai enquanto faltar {missing}. Siga os passos abaixo.
+              </Notice>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <ol data-testid="phone-steps" className="grid gap-x-4 gap-y-1.5 rounded-2xl border border-line bg-surface-2/50 px-4 py-3 text-[13px] leading-relaxed text-ink-2 @2xl:grid-cols-2">
+          {PHONE_STEPS.map((step, i) => (
+            <li key={step} className="flex gap-2">
+              <span className="w-4 shrink-0 font-semibold tabular-nums text-ink">{i + 1}.</span>
+              <span className="min-w-0">{step}</span>
+            </li>
+          ))}
+        </ol>
+
+        <fieldset disabled={locked} className={cn('min-w-0', locked && 'opacity-60')}>
+          <legend className="sr-only">Bot do Telegram</legend>
+          <div className="grid gap-x-4 gap-y-4 @2xl:grid-cols-2">
+            <div className="min-w-0 space-y-1.5">
+              <div className="flex items-baseline justify-between gap-2">
+                <label htmlFor={tokenId} className={LABEL}>Token do bot</label>
+                {saved && <Badge tone="ok" data-testid="phone-token-saved"><Check aria-hidden className="size-3" /> gravado</Badge>}
+              </div>
+              <div className="flex flex-wrap items-start gap-2">
+                <Input
+                  ref={token} id={tokenId} type="password" autoComplete="off" data-1p-ignore="true" data-lpignore="true" data-bwignore="true"
+                  spellCheck={false} autoCapitalize="off" autoCorrect="off" data-testid="phone-token" maxLength={120}
+                  placeholder={saved ? 'Cole outro token para trocar' : '123456789:AA…'} disabled={locked || busy}
+                  onChange={() => { if (tokenProblem) setTokenProblem(null); }}
+                  onKeyDown={(e) => {
+                    if (e.key !== 'Enter') return;
+                    // Enter aqui grava o token; não envia o formulário das configurações.
+                    e.preventDefault();
+                    void save();
+                  }}
+                  aria-invalid={tokenProblem ? true : undefined} aria-describedby={tokenHelp}
+                  className="min-w-40 flex-1 font-mono"
+                />
+                <Button type="button" data-testid="phone-token-save" disabled={locked || busy} onClick={() => void save()}>
+                  {saveToken.isPending ? <LoaderCircle aria-hidden className="animate-spin" /> : <KeyRound aria-hidden />}
+                  Gravar token
+                </Button>
+              </div>
+              <p id={tokenHelp} role={tokenProblem ? 'alert' : undefined} className={tokenProblem ? ERROR : HINT}>
+                {tokenProblem ?? 'O token fica cifrado neste computador e nunca volta à tela.'}
+              </p>
+              {saved && (
+                <Button
+                  type="button" size="sm" variant="ghost" data-testid="phone-token-delete" disabled={locked || busy}
+                  onClick={() => void run(async () => {
+                    await deleteToken.mutateAsync();
+                    return 'Token apagado. Nenhum aviso sai até você gravar outro.';
+                  })}
+                >
+                  <Trash2 aria-hidden /> Apagar token
+                </Button>
+              )}
+            </div>
+            <div className="min-w-0 space-y-1.5">
+              <span className={LABEL}>Seu chat</span>
+              <p data-testid="phone-chat" className="flex min-h-9 items-center text-[13px] text-ink-2">
+                {chatId !== null ? <span className="font-mono text-ink">{chatId}</span> : 'Nenhum chat achado ainda.'}
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button" data-testid="phone-find-chat" disabled={locked || busy || !saved}
+                  onClick={() => void run(async () => `Chat achado: ${(await findChat.mutateAsync()).chatId}.`)}
+                >
+                  {findChat.isPending ? <LoaderCircle aria-hidden className="animate-spin" /> : <Search aria-hidden />}
+                  Achar meu chat
+                </Button>
+                <Button
+                  type="button" variant="ghost" data-testid="phone-test" disabled={locked || busy || !saved || chatId === null}
+                  onClick={() => void run(async () => {
+                    await sendTest.mutateAsync();
+                    return 'Mensagem de teste enviada. Confira o Telegram.';
+                  })}
+                >
+                  {sendTest.isPending ? <LoaderCircle aria-hidden className="animate-spin" /> : <Send aria-hidden />}
+                  Enviar teste
+                </Button>
+              </div>
+            </div>
+          </div>
+        </fieldset>
+
+        <AnimatePresence initial={false}>
+          {result && (
+            <motion.div key={result.text} initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={spring} className="overflow-hidden">
+              <Notice tone={result.tone} role={result.tone === 'bad' ? 'alert' : 'status'} data-testid={result.tone === 'bad' ? 'phone-error' : 'phone-result'}>
+                <p className="break-words">{result.text}</p>
+              </Notice>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <p data-testid="phone-privacy" className={cn(HINT, 'flex items-start gap-1.5')}>
+          <ShieldCheck aria-hidden className="mt-px size-3.5 shrink-0" />
+          Só sai da sua máquina o tipo do aviso e o nome da empresa.
+        </p>
+      </div>
+    </Block>
+  );
+}
+
 interface Props {
   dto: SettingsDto;
   form: SettingsForm;
@@ -430,6 +621,8 @@ export function SettingsEmailSection({ dto, form, onChange }: Props) {
           </Block>
 
           <IgnoredMail />
+
+          <PhoneAlertBlock dto={dto} form={form} onChange={onChange} account={a} />
         </div>
       </div>
 

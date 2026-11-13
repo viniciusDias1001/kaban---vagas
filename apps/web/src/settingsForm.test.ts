@@ -41,6 +41,7 @@ const dto: SettingsDto = {
   email: {
     enabled: { value: true, source: 'default' }, moveMode: { value: 'auto', source: 'default' },
     factsMode: { value: 'auto', source: 'default' }, aiDrafts: { value: true, source: 'default' },
+    phoneAlertChannel: { value: 'off', source: 'default' }, telegramChatId: { value: null, source: 'default' },
   },
   general: { nextRunAt: 0 },
 };
@@ -70,6 +71,17 @@ describe('formFromSettings / toSettingsPatch', () => {
     const patch = toSettingsPatch(form, configured);
     expect(patch).toEqual({ provider: null, modelFast: null, modelStrong: null, greenhouseBoards: ['gitlab', 'stripe', 'acme'] });
     expect(SettingsPatchSchema.safeParse(patch).success).toBe(true);
+  });
+
+  it('the phone alert channel starts off and goes in the patch only when it changes', () => {
+    const form = formFromSettings(dto);
+    expect(form.phoneAlertChannel).toBe('off');
+    const on = { ...form, phoneAlertChannel: 'telegram' as const };
+    const patch = toSettingsPatch(on, dto);
+    expect(patch).toEqual({ phoneAlertChannel: 'telegram' });
+    expect(SettingsPatchSchema.safeParse(patch).success).toBe(true);
+    const saved = { ...dto, email: { ...dto.email, phoneAlertChannel: { value: 'telegram' as const, source: 'ui' as const } } };
+    expect(toSettingsPatch(on, saved)).toEqual({});
   });
 });
 

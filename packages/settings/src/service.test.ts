@@ -373,4 +373,15 @@ describe('e-mail settings', () => {
     await s.update({ emailMoveMode: null, emailEnabled: false, emailAiDrafts: false });
     expect(await s.emailConfig()).toEqual({ enabled: false, moveMode: 'auto', factsMode: 'off', aiDrafts: false });
   });
+
+  it('keeps the phone alert off by default and reads back a numeric chat id as text', async () => {
+    const s = service();
+    expect(await s.phoneAlertConfig()).toEqual({ channel: 'off', chatId: null });
+    expect((await s.dto(0)).email.telegramChatId).toEqual({ value: null, source: 'default' });
+    await s.update({ phoneAlertChannel: 'telegram', telegramChatId: '-1001234567890' });
+    expect(await s.phoneAlertConfig()).toEqual({ channel: 'telegram', chatId: '-1001234567890' });
+    expect((await s.dto(0)).email.phoneAlertChannel).toEqual({ value: 'telegram', source: 'ui' });
+    await s.update({ telegramChatId: null });
+    expect(await s.phoneAlertConfig()).toEqual({ channel: 'telegram', chatId: null });
+  });
 });

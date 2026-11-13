@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { EMAIL_KINDS, MAIL_LIMITS } from './email-constants';
+import { EMAIL_KINDS, MAIL_LIMITS, PHONE_ALERT_LIMITS, TELEGRAM_TOKEN_PATTERN } from './email-constants';
 
 /** Schemas Zod do e-mail. O navegador não importa este arquivo (só `email-constants.ts`). */
 
@@ -17,7 +17,16 @@ export const MailAccountInputSchema = z.strictObject({
   address: z.string().trim().toLowerCase().pipe(z.email().max(254)),
   password: z.string().transform((s) => s.replace(/\s+/g, '')).pipe(z.string().min(8).max(64).regex(/^[\x21-\x7e]+$/)),
 });
-export const ReplyEditSchema = z.strictObject({ body: z.string().trim().min(1).max(MAIL_LIMITS.draftChars) });
+/** PUT /email/phone-token. O token é aparado (colar costuma trazer espaço ou quebra de linha); a mensagem de erro nunca o repete. */
+export const PhoneTokenInputSchema = z.strictObject({
+  token: z
+    .string()
+    .trim()
+    .min(PHONE_ALERT_LIMITS.tokenMin, `o token tem pelo menos ${PHONE_ALERT_LIMITS.tokenMin} caracteres`)
+    .max(PHONE_ALERT_LIMITS.tokenMax, `o token tem no máximo ${PHONE_ALERT_LIMITS.tokenMax} caracteres`)
+    .regex(TELEGRAM_TOKEN_PATTERN, 'o token não tem espaços nem acentos'),
+});
+export const ReplyEditSchema =z.strictObject({ body: z.string().trim().min(1).max(MAIL_LIMITS.draftChars) });
 export const LinkMessageSchema = z.strictObject({ jobId: z.number().int().positive() });
 export const AlertMoveSchema = z.strictObject({ accept: z.boolean() });
 export const MailMessagesQuerySchema = z.object({

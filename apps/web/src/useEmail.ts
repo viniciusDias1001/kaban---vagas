@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRef } from 'react';
 import * as api from './emailApi';
 import type { MailAccountInput, MailMessageFilter } from './emailApi';
+import { AI_KEYS } from './useAi';
 import { JOBS_KEY } from './useMoveJob';
 
 /** Chaves do React Query das telas de e-mail. */
@@ -62,6 +63,39 @@ export function useDisconnectMailbox() {
       void qc.invalidateQueries({ queryKey: JOBS_KEY });
     },
   });
+}
+
+/**
+ * O aviso no celular: gravar e apagar o token do bot, achar o chat e mandar o teste. Como na senha de app, o token só existe
+ * nas variáveis da mutação que o grava (`gcTime: 0` e `reset()` ao terminar); quem chama recebe o resultado e o erro pela
+ * promessa de `mutateAsync`.
+ */
+export function usePhoneActions() {
+  const qc = useQueryClient();
+  const reset = useRef<() => void>(() => undefined);
+  const saveToken = useMutation({
+    gcTime: 0,
+    meta: INLINE_ERROR,
+    mutationFn: (token: string) => api.savePhoneToken(token),
+    onSuccess: (account) => qc.setQueryData(EMAIL_KEYS.account, account),
+    onSettled: () => reset.current(),
+  });
+  reset.current = saveToken.reset;
+  return {
+    saveToken,
+    deleteToken: useMutation({
+      meta: INLINE_ERROR,
+      mutationFn: () => api.deletePhoneToken(),
+      onSuccess: () => qc.invalidateQueries({ queryKey: EMAIL_KEYS.account }),
+    }),
+    findChat: useMutation({
+      meta: INLINE_ERROR,
+      mutationFn: () => api.findPhoneChat(),
+      // O chat achado fica gravado nas configurações.
+      onSuccess: () => qc.invalidateQueries({ queryKey: AI_KEYS.settings }),
+    }),
+    sendTest: useMutation({ meta: INLINE_ERROR, mutationFn: () => api.sendPhoneTest() }),
+  };
 }
 
 /** Os alertas abertos, relidos a cada 15 s (o sino). */

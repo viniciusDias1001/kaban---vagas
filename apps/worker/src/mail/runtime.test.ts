@@ -1,16 +1,17 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import {
-  MAIL_QUEUE_LOCK, alerts, createReply, dismissAlert, getMailAccount, insertMailMessage, mailMessages, markReplySending, openAlerts, replyById,
-  saveMailAccount, updateMailAccount, type Db,
+  MAIL_QUEUE_LOCK, alerts, createReply, dismissAlert, getMailAccount, insertMailMessage, jobs, mailMessages, markReplySending, openAlerts,
+  raiseAlert, replyById, saveMailAccount, updateMailAccount, type Db,
 } from '@kv/db';
 import { resetTestDb } from '@kv/db/testing';
 import { deliverFakeMail, fakeMailDir } from '@kv/mail';
 import { createSettingsService, type SettingsService } from '@kv/settings';
-import { createMailRuntime, openOwnerMailbox, takeMailLock, type MailLock } from './runtime';
+import { createMailRuntime, openOwnerMailbox, ownerPhoneNotifier, takeMailLock, type MailLock } from './runtime';
 import { DAY, HOUR, OWNER_ADDRESS, mailTestBed } from './test-helpers';
 
 type Bed = Awaited<ReturnType<typeof mailTestBed>>;
@@ -246,6 +247,52 @@ describe('createMailRuntime', () => {
     expect(await ticking).toEqual({ read: false, worked: false });
     await idle;
     expect(await db.select().from(mailMessages)).toEqual([]);
+    await runtime.close();
+  });
+});
+
+describe('phone alert', () => {
+  const phoneFile = () => join(fakeMailDir(dataDir), 'phone.json');
+  const phoneLines = async () => (existsSync(phoneFile()) ? (await readFile(phoneFile(), 'utf8')).trim().split('\n') : []);
+
+  async function interviewAlert(): Promise<void> {
+    const [job] = await db.select({ id: jobs.id }).from(jobs);
+    await raiseAlert(db, { kind: 'interview', jobId: job!.id }, Date.now());
+  }
+
+  it('builds the notifier from the settings and the vault after each unit of work', async () => {
+    await settings.saveSecret('mail_password', 'abcdefghijklmnop');
+    await settings.saveSecret('telegram_bot_token', '123:ABC-fake-token');
+    await settings.update({ phoneAlertChannel: 'telegram', telegramChatId: '42' });
+    await interviewAlert();
+    const runtime = createMailRuntime(db, settings, { env, log: (m) => logs.push(m) });
+    await runtime.tick();
+    await runtime.idle();
+    const lines = await phoneLines();
+    expect(lines.map((l) => (JSON.parse(l) as { text: string }).text)).toEqual(['Convite de entrevista: Acme']);
+    expect(lines.join('\n')).not.toContain('123:ABC');
+    expect((await db.select().from(alerts))[0]).toMatchObject({ phoneAttempts: 1, resolvedAt: null });
+    await runtime.close();
+  });
+
+  it('has no notifier with the channel off, without a chat or without a token', async () => {
+    expect(await ownerPhoneNotifier(settings, env, dataDir)).toBeNull();
+    await settings.update({ phoneAlertChannel: 'telegram' });
+    expect(await ownerPhoneNotifier(settings, env, dataDir)).toBeNull();
+    await settings.update({ telegramChatId: '42' });
+    expect(await ownerPhoneNotifier(settings, env, dataDir)).toBeNull();
+    await settings.saveSecret('telegram_bot_token', '123:ABC-fake-token');
+    expect(await ownerPhoneNotifier(settings, env, dataDir)).not.toBeNull();
+    await settings.update({ phoneAlertChannel: 'off' });
+    expect(await ownerPhoneNotifier(settings, env, dataDir)).toBeNull();
+
+    await settings.saveSecret('mail_password', 'abcdefghijklmnop');
+    await interviewAlert();
+    const runtime = createMailRuntime(db, settings, { env });
+    await runtime.tick();
+    await runtime.idle();
+    expect(await phoneLines()).toEqual([]);
+    expect((await db.select().from(alerts))[0]).toMatchObject({ phoneAttempts: 0, phoneSentAt: null });
     await runtime.close();
   });
 });

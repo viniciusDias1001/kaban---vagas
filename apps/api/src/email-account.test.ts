@@ -1,12 +1,14 @@
+import { readFile, rm } from 'node:fs/promises';
+import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SAMPLE_PROFILE } from '@kv/ai/testing';
 import {
   closeDb, getMailAccount, insertMailMessage, mailMessages, openAlerts, raiseAlert, saveMailAccount, saveProfile, type Db,
 } from '@kv/db';
 import { createTestDb, resetTestDb } from '@kv/db/testing';
-import { MailTransientError, type Mailbox } from '@kv/mail';
+import { FAKE_TELEGRAM_CHAT_ID, MailTransientError, PhoneAlertError, fakeMailDir, type Mailbox } from '@kv/mail';
 import { createSettingsService } from '@kv/settings';
-import { TEST_SECRET, testAi } from './ai-testing';
+import { TEST_DATA_DIR, TEST_SECRET, testAi } from './ai-testing';
 import { buildApp } from './app';
 
 /** Senha de app fictícia, como o Google mostra (em grupos) e como fica gravada (sem espaços). */
@@ -217,5 +219,146 @@ describe('DELETE /email/account', () => {
     expect((await del('/email/account')).statusCode).toBe(204);
     expect(await getMailAccount(db)).toBeNull();
     expect(await db.select().from(mailMessages)).toHaveLength(1);
+  });
+});
+
+describe('phone alert routes', () => {
+  /** Token fictício no formato do BotFather. */
+  const TOKEN = '123456:ABC-fake-bot-token';
+  const post = (url: string) => app.inject({ method: 'POST', url });
+
+  it('stores the bot token encrypted and never returns it', async () => {
+    expect((await get('/email/account')).json()).toMatchObject({ phoneTokenSaved: false });
+    const res = await put('/email/phone-token', { token: `  ${TOKEN}\n` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ phoneTokenSaved: true });
+    expect(res.body).not.toContain(TOKEN);
+    expect(await settings().readSecret('telegram_bot_token')).toEqual({ value: TOKEN });
+    expect((await get('/email/account')).body).not.toContain(TOKEN);
+    expect((await get('/settings')).body).not.toContain(TOKEN);
+
+    expect((await del('/email/phone-token')).statusCode).toBe(204);
+    expect(await settings().hasSecret('telegram_bot_token')).toBe(false);
+    expect((await get('/email/account')).json()).toMatchObject({ phoneTokenSaved: false });
+  });
+
+  it('rejects a bad token without echoing it, and needs APP_SECRET and a local host', async () => {
+    for (const token of ['curto', 'com espaço no meio', 'x'.repeat(101)]) {
+      const res = await put('/email/phone-token', { token });
+      expect(res.statusCode).toBe(400);
+      expect(res.body).not.toContain(token);
+    }
+    build({ env: {} });
+    const noSecret = await put('/email/phone-token', { token: TOKEN });
+    expect(noSecret.statusCode).toBe(409);
+    expect(noSecret.json()).toMatchObject({ error: 'no_app_secret' });
+    build();
+    vi.stubEnv('HOST', '0.0.0.0');
+    for (const res of [await put('/email/phone-token', { token: TOKEN }), await post('/email/phone-chat'), await post('/email/phone-test')]) {
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ error: 'email_unavailable' });
+    }
+    expect(await settings().hasSecret('telegram_bot_token')).toBe(false);
+  });
+
+  it('finds the chat, stores it and answers it; with nobody writing to the bot, says what to do', async () => {
+    expect((await post('/email/phone-chat')).json()).toMatchObject({ error: 'no_phone_token', message: 'Grave o token do bot antes.' });
+    await settings().saveSecret('telegram_bot_token', TOKEN);
+    const tokens: string[] = [];
+    build({
+      env: { APP_SECRET: TEST_SECRET },
+      findPhoneChat: async (token) => {
+        tokens.push(token);
+        return '42';
+      },
+    });
+    const res = await post('/email/phone-chat');
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ chatId: '42' });
+    expect(tokens).toEqual([TOKEN]);
+    expect((await get('/settings')).json().email.telegramChatId).toEqual({ value: '42', source: 'ui' });
+
+    build({ env: { APP_SECRET: TEST_SECRET }, findPhoneChat: async () => null });
+    const none = await post('/email/phone-chat');
+    expect(none.statusCode).toBe(409);
+    expect(none.json()).toEqual({ error: 'no_chat', message: 'Mande uma mensagem para o seu bot no Telegram e tente de novo.' });
+  });
+
+  it('POST /email/phone-test uses the notifier of the context with the stored token and chat', async () => {
+    await settings().saveSecret('telegram_bot_token', TOKEN);
+    expect((await post('/email/phone-test')).json()).toMatchObject({ error: 'no_phone_chat' });
+    await settings().update({ telegramChatId: '42' });
+    const made: { token: string; chatId: string }[] = [];
+    let tests = 0;
+    build({
+      env: { APP_SECRET: TEST_SECRET },
+      phoneNotifier: (opts) => {
+        made.push(opts);
+        return {
+          async send() {},
+          async sendTest() {
+            tests++;
+          },
+        };
+      },
+    });
+    const res = await post('/email/phone-test');
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    expect(made).toEqual([{ token: TOKEN, chatId: '42' }]);
+    expect(tests).toBe(1);
+  });
+
+  it('answers 502 with a fixed cause and never the token, in the response or the log', async () => {
+    const lines: string[] = [];
+    const capture = (...args: unknown[]) => {
+      lines.push(args.map(String).join(' '));
+    };
+    for (const method of ['error', 'log', 'warn', 'info', 'debug'] as const) vi.spyOn(console, method).mockImplementation(capture);
+    await settings().saveSecret('telegram_bot_token', TOKEN);
+    await settings().update({ telegramChatId: '42' });
+    const leak = new Error(`request to https://api.telegram.org/bot${TOKEN}/sendMessage failed`);
+    build({
+      env: { APP_SECRET: TEST_SECRET },
+      phoneNotifier: () => ({
+        async send() {},
+        async sendTest() {
+          throw leak;
+        },
+      }),
+    });
+    const test = await post('/email/phone-test');
+    expect(test.statusCode).toBe(502);
+    expect(test.json()).toEqual({ error: 'phone_failed', message: 'Não foi possível falar com o Telegram agora.' });
+    build({
+      env: { APP_SECRET: TEST_SECRET },
+      findPhoneChat: async () => {
+        throw new PhoneAlertError('token');
+      },
+    });
+    const chat = await post('/email/phone-chat');
+    expect(chat.statusCode).toBe(502);
+    expect(chat.json()).toMatchObject({ error: 'phone_failed', message: expect.stringContaining('recusou o token') });
+    for (const text of [test.body, chat.body, ...lines]) expect(text).not.toContain(TOKEN);
+  });
+
+  it('limits how often the chat lookup and the test reach Telegram', async () => {
+    await settings().saveSecret('telegram_bot_token', TOKEN);
+    expect((await post('/email/phone-chat')).statusCode).toBe(200);
+    const second = await post('/email/phone-test');
+    expect(second.statusCode).toBe(429);
+    expect(second.json()).toMatchObject({ error: 'rate_limited', message: expect.stringContaining('Aguarde') });
+    expect(second.headers['retry-after']).toBe('5');
+  });
+
+  it('the fake notifier of the tests writes the test text to phone.json', async () => {
+    const file = join(fakeMailDir(TEST_DATA_DIR), 'phone.json');
+    await rm(file, { force: true });
+    await settings().saveSecret('telegram_bot_token', TOKEN);
+    expect((await post('/email/phone-chat')).json()).toEqual({ chatId: FAKE_TELEGRAM_CHAT_ID });
+    build();
+    expect((await post('/email/phone-test')).statusCode).toBe(200);
+    expect(await readFile(file, 'utf8')).toContain('Teste do kanban-vagas');
+    await rm(file, { force: true });
   });
 });

@@ -3,7 +3,7 @@
  * `@kv/shared/client`). A validação fica em `settings.ts`.
  */
 
-import type { EmailConfig } from './email-constants';
+import type { EmailConfig, PhoneAlertChannel } from './email-constants';
 import type { ApplyAiAnswers, ApplyMode, ApplyResumeMode, ApplySiteId } from './apply-constants';
 
 export const AI_PROVIDER_IDS = ['anthropic', 'openai', 'gemini'] as const;
@@ -55,7 +55,7 @@ export const SETTING_KEYS = [
   'provider', 'modelFast', 'modelStrong', 'dailyBudgetUsd', 'tier1Enabled', 'tier2Auto', 'greenhouseBoards', 'leverCompanies',
   'applyEnabled', 'applyMinScore', 'applySiteModes', 'applyDailyCaps', 'applyCompanyCap', 'applyWindow', 'applyResumeMode',
   'applyAiAnswers', 'applyBlockedCompanies', 'applyBlockedTerms',
-  'emailEnabled', 'emailMoveMode', 'emailFactsMode', 'emailAiDrafts',
+  'emailEnabled', 'emailMoveMode', 'emailFactsMode', 'emailAiDrafts', 'phoneAlertChannel', 'telegramChatId',
 ] as const;
 export type SettingKey = (typeof SETTING_KEYS)[number];
 
@@ -139,6 +139,10 @@ export interface SettingsDto {
     moveMode: SettingValue<EmailConfig['moveMode']>;
     factsMode: SettingValue<EmailConfig['factsMode']>;
     aiDrafts: SettingValue<EmailConfig['aiDrafts']>;
+    /** Aviso no celular de convite e oferta. O token do bot fica no cofre: aqui só o canal e o chat. */
+    phoneAlertChannel: SettingValue<PhoneAlertChannel>;
+    /** Gravado por "Achar meu chat"; null até lá. */
+    telegramChatId: SettingValue<string | null>;
   };
   general: {
     /** Próxima busca horária (hora cheia). O estado do worker vem de GET /runs/health. */
@@ -172,6 +176,8 @@ export interface SettingsPatch {
   emailMoveMode?: EmailConfig['moveMode'] | null;
   emailFactsMode?: EmailConfig['factsMode'] | null;
   emailAiDrafts?: EmailConfig['aiDrafts'] | null;
+  phoneAlertChannel?: PhoneAlertChannel | null;
+  telegramChatId?: string | null;
 }
 
 export type TestConnectionOutcome =
