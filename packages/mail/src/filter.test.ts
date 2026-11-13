@@ -41,4 +41,17 @@ describe('filterMail', () => {
     const auto = rawMail({ from: { address: 'joana@acme.com', name: 'Acme' }, subject: 'Aviso', text: 'Texto.', autoSubmitted: true });
     expect(filterMail(auto, ctx)).toEqual({ pass: false, ignoredCompany: 'Acme' });
   });
+  it.each([
+    'Atualização sobre suas candidaturas na Acme',
+    'Your interviews with Acme',
+    'Acme: novas vagas para você',
+    'Acme: open positions',
+  ])('takes a plural hiring word as a signal: %s', (subject) => {
+    const mail = rawMail({ from: { address: 'no-reply@acme.com', name: 'Acme' }, subject, text: 'Texto.', bulk: true });
+    expect(filterMail(mail, ctx)).toEqual({ pass: true, why: 'company' });
+  });
+  it('keeps the whole-word guard for hiring words', () => {
+    const mail = rawMail({ from: { address: 'no-reply@acme.com', name: 'Acme' }, subject: 'Acme: you enrolled in our plan', text: 'Texto.', bulk: true });
+    expect(filterMail(mail, ctx)).toEqual({ pass: false, ignoredCompany: 'Acme' });
+  });
 });

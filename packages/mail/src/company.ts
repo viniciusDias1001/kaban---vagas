@@ -24,10 +24,12 @@ export function normalizeCompany(name: string): string {
 }
 
 /** `phrase` aparece em `text` como palavra ou frase inteira (sem acento, sem diferença de caixa). */
-export function hasPhrase(text: string, phrase: string): boolean {
+export function hasPhrase(text: string, phrase: string, opts: { plural?: boolean } = {}): boolean {
   const needle = words(phrase, 'space').join(' ');
   if (!needle) return false;
-  return ` ${words(text, 'space').join(' ')} `.includes(` ${needle} `);
+  const haystack = ` ${words(text, 'space').join(' ')} `;
+  const endings = opts.plural ? ['', 's', 'es'] : [''];
+  return endings.some((end) => haystack.includes(` ${needle}${end} `));
 }
 
 /** O nome aparece em `text` como palavra inteira. Nome normalizado com menos de 3 letras nunca casa em texto. */

@@ -24,7 +24,7 @@ export const RECRUITING_LOCALS = [
 function hasHiringSignal(mail: RawMail, title: string, ownAddress: string): boolean {
   const body = `${mail.subject}\n${mail.text}`;
   if (hasPhrase(body, title)) return true;
-  if (HIRING_WORDS.some((w) => hasPhrase(body, w))) return true;
+  if (HIRING_WORDS.some((w) => hasPhrase(body, w, { plural: true }))) return true;
   const local = mail.from.address.slice(0, mail.from.address.lastIndexOf('@')).trim().toLowerCase();
   if ((RECRUITING_LOCALS as readonly string[]).includes(local)) return true;
   return !mail.bulk && !mail.autoSubmitted && mail.to.some((a) => a.trim().toLowerCase() === ownAddress);
