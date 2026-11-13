@@ -5,7 +5,7 @@ Committed:
 - JSON recorded from a public API (`greenhouse/job.json`).
 - `fake/` (the test site) and `recording/` (the page that tests the recorder).
 
-Local only (git-ignored, see `.gitignore`): pages, scripts and styles recorded from a third-party site with the
+Local only (git-ignored: `.gitignore` is an allow-list, so everything else in this folder, a new site's recordings included, stays out of git): pages, scripts and styles recorded from a third-party site with the
 recorder's `replay`, `snapshot` and `profile` modes (for example `greenhouse/form/`, `lever/form/`, `lever/rendered.html`, `lever/closed.html`). This repository is public and
 Apache-2.0: a site's own bundles, and pages recorded from the owner's logged-in session, must not be redistributed here.
 Browser tests that need one of these folders skip, naming the command, when it is absent.
