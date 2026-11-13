@@ -15,6 +15,14 @@ describe('realLaunch', () => {
     await realLaunch({ executablePath: '/opt/opera/opera' })('/profile');
     expect(launchPersistentContext).toHaveBeenCalledWith('/profile', { headless: false, executablePath: '/opt/opera/opera' });
   });
+  it('forwards serviceWorkers only when asked, and leaves the default call unchanged', async () => {
+    await realLaunch('chrome', { serviceWorkers: 'block' })('/profile');
+    expect(launchPersistentContext).toHaveBeenLastCalledWith('/profile', { headless: false, channel: 'chrome', serviceWorkers: 'block' });
+    await realLaunch('chrome', { serviceWorkers: 'allow' })('/profile');
+    expect(launchPersistentContext).toHaveBeenLastCalledWith('/profile', { headless: false, channel: 'chrome', serviceWorkers: 'allow' });
+    await realLaunch('chrome', {})('/profile');
+    expect(launchPersistentContext).toHaveBeenLastCalledWith('/profile', { headless: false, channel: 'chrome' });
+  });
 });
 
 describe('detectBrowserChannel', () => {

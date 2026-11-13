@@ -316,7 +316,35 @@ Uma candidatura típica custa perto de US$ 0,08; com o limite padrão de US$ 1,0
 
 Veja a tabela de [Seus dados](#seus-dados-o-que-fica-guardado-e-como-apagar). Em resumo: o banco guarda as candidaturas (estado, motivo, respostas com a origem, o PDF exato enviado, o e-mail usado, o texto de confirmação do site e a linha do tempo) e as suas respostas salvas; as **fotos** do formulário (que têm dados pessoais) ficam na pasta de dados do app; a sessão dos sites fica só no perfil do navegador.
 
-<!-- sites: seção inserida na junção com o plano de sites -->
+### Sites suportados
+
+| Site | Login | Como o app acha o formulário | Observações |
+| --- | --- | --- | --- |
+| Greenhouse | não | pelo endereço da vaga (`job-boards.greenhouse.io/<empresa>/jobs/<id>`) ou pelo `gh_jid` de uma vaga cuja fonte é o Greenhouse | o formulário é lido pela API pública do Greenhouse e preenchido na página |
+| Lever | não | pelo endereço `jobs.lever.co/<empresa>/<id>` | o formulário é lido e preenchido na página; `jobs.eu.lever.co` fica de fora |
+| LinkedIn | sim, pelo dono, na janela | pelo endereço da vaga no LinkedIn | previsto para esta versão, mas **ainda não disponível**: depende de uma gravação com a sua conta |
+
+- **Greenhouse:** vale o endereço no domínio do Greenhouse, ou uma vaga da fonte Greenhouse cujo endereço traz `gh_jid` igual ao número da vaga. Vaga do Greenhouse publicada no domínio da própria empresa, sem `gh_jid`, não é suportada.
+- **Lever:** vale só `jobs.lever.co/<empresa>/<id>`, com ou sem `/apply`. No ensaio o Lever recebe o arquivo do currículo.
+- **LinkedIn:** só a candidatura simplificada dentro do próprio LinkedIn; o link externo da vaga não é seguido. Cada candidatura envia um PDF novo, que fica na lista de currículos recentes da conta.
+- Captcha é detectado e nunca resolvido: a janela fica aberta esperando você.
+
+### Conferir um site de verdade
+
+```bash
+pnpm apply:smoke -- --site <linkedin|greenhouse|lever> --job <endereço da vaga> [--resume <pdf>]
+```
+
+> **Este comando abre o formulário de uma empresa de verdade.** Ele digita o seu nome, e-mail e telefone reais nos campos e anexa o PDF do seu currículo, sem nunca enviar a candidatura. Mesmo sem o envio, **o Lever pode ler o arquivo anexado antes de qualquer clique de envio**. Use só numa vaga em que você aceita isso.
+
+Ele abre a vaga com janela, preenche como o worker faria e fotografa a página inteira. Sempre roda em ensaio: não tem opção de envio e nunca clica em enviar. Recusa rodar na CI. Imprime as perguntas e as respostas, com a origem de cada uma, e grava a foto em `<pasta de dados>/smoke/`, fora do repositório.
+
+- **Com um provedor de IA configurado** (e o limite diário de IA ainda não atingido), o que a IA proporia aparece como **proposta que aguarda aprovação** e **não é digitado**; as chamadas são pagas e entram na camada "Candidatura". **Sem provedor** (ou com o limite atingido), só as regras e as respostas salvas respondem. A primeira linha impressa diz qual é o caso.
+- A vaga do ensaio é montada só pelo endereço. Num endereço do Greenhouse no domínio da empresa, o número vem do `gh_jid` e o nome da empresa é o melhor palpite (o nome do quadro ou do domínio): **respostas salvas só para uma empresa podem não valer num ensaio por endereço**.
+
+### Quando um site muda de layout
+
+A candidatura para em "formulário não reconhecido", com a foto. Grave de novo as páginas com `pnpm apply:fixtures` (veja [Páginas gravadas dos testes](#páginas-gravadas-dos-testes); no LinkedIn, você repete a gravação e a limpeza), corrija o roteiro do site e rode `pnpm test:browser` até voltar a passar.
 
 ### Páginas gravadas dos testes
 
@@ -434,6 +462,7 @@ pnpm db:migrate     # aplica as migrations pendentes no DATABASE_URL
 pnpm start:prod     # migra e sobe api + worker como em produção (veja "Deploy")
 pnpm ai:smoke -- --yes [provedor]   # ATENÇÃO: chamadas reais aos provedores de IA, gasta dinheiro
 pnpm resume:preview   # gera o PDF do seu perfil em uma pasta fora do repositório
+pnpm apply:smoke -- --site <id> --job <url>   # ATENÇÃO: abre um formulário real, em ensaio; nunca envia
 ```
 
 - Os testes unitários não usam rede nem Docker: o banco é um Postgres em memória (PGlite) e as fontes são testadas contra fixtures gravadas.

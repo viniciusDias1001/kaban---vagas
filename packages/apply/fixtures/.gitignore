@@ -1,0 +1,7 @@
+# Pages, scripts and styles recorded from a third-party site (replay, snapshot, profile modes) stay on this machine:
+# the repository is public and those files are the site's own. Hand-written pages (*.synthetic.html), JSON recorded
+# from a public API (job.json) and the fake/ and recording/ folders are tracked. Each site adds its line below.
+/greenhouse/form/
+/lever/form/
+/lever/rendered.html
+/lever/closed.html

@@ -46,13 +46,17 @@ export function detectBrowserChannel(
 
 export type LaunchContext = (userDataDir: string) => Promise<BrowserContext>;
 
-/** O navegador escolhido, perfil persistente, sempre com janela. Importa `playwright` só ao ser chamado. */
-export function realLaunch(choice: BrowserChoice): LaunchContext {
+/**
+ * O navegador escolhido, perfil persistente, sempre com janela. Importa `playwright` só ao ser chamado.
+ * `serviceWorkers` só entra na chamada quando informado (o padrão do Playwright é `allow`).
+ */
+export function realLaunch(choice: BrowserChoice, options: { serviceWorkers?: 'allow' | 'block' } = {}): LaunchContext {
   return async (userDataDir) => {
     const { chromium } = await import('playwright');
     return chromium.launchPersistentContext(userDataDir, {
       headless: false,
       ...(typeof choice === 'string' ? { channel: choice } : { executablePath: choice.executablePath }),
+      ...(options.serviceWorkers ? { serviceWorkers: options.serviceWorkers } : {}),
     });
   };
 }
