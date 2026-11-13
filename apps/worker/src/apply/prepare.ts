@@ -111,8 +111,14 @@ export async function prepare(c: PrepareContext, row: ApplicationRow): Promise<P
       await requeueTomorrow(db, row.id, `limite de ${cfg.companyCap} candidaturas por empresa em ${APPLY_DEFAULTS.companyCapDays} dias atingido`, c.now(), cfg.timeZone);
       return null;
     }
-    const profile = await baseProfile(db);
-    if (profile) gate = (await c.ai.call('fast', (p) => gateJob(p, profile.data, jobForAi(job), { signal: c.signal }))).data;
+    if (row.gateScore !== null) {
+      // De volta à fila (erro passageiro, pergunta respondida, ensaio aprovado): a conferência já foi paga e passou
+      // (elegível); só a nota é comparada de novo, com o mínimo de agora.
+      gate = { score: row.gateScore, eligible: true, ineligibleReason: '' };
+    } else {
+      const profile = await baseProfile(db);
+      if (profile) gate = (await c.ai.call('fast', (p) => gateJob(p, profile.data, jobForAi(job), { signal: c.signal }))).data;
+    }
   }
   const decision = decideGate({ blockedBy, gate, minScore: cfg.minScore, manual });
   if (!decision.pass) {
@@ -126,7 +132,9 @@ export async function prepare(c: PrepareContext, row: ApplicationRow): Promise<P
   const resume = await applicationResume({ db, billing, mayCall: () => c.ai.mayCall(), now: c.now }, job, cfg.resumeMode, c.signal);
   if (!resume.ok) {
     if (resume.reason === 'cancelled') return null; // a vaga foi apagada no meio
-    if (resume.reason === 'budget') await requeueTomorrow(db, row.id, BUDGET_DETAIL, c.now(), cfg.timeZone);
+    if (resume.reason === 'budget') {
+      await requeueTomorrow(db, row.id, BUDGET_DETAIL, c.now(), await c.ai.budgetTimeZone().catch(() => cfg.timeZone));
+    }
     else await stopForOwner(db, row, 'resume_blocked', resume.detail, c.now());
     return null;
   }

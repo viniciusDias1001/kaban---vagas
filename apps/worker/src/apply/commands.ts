@@ -62,8 +62,9 @@ async function execute(deps: CommandDeps, command: ApplyCommandRow, now: () => n
  * Executa um comando do app (já marcado `running` por `nextApplyCommand`) e grava o desfecho: `open_login` abre
  * `loginUrl` e traz a janela; `check_session` grava o estado em `apply_sites`; `logout` apaga os cookies do site;
  * `close_browser` fecha a janela. Um erro (site sem login, site não cadastrado, navegador) termina o comando em `error`.
+ * Devolve o desfecho gravado.
  */
-export async function runApplyCommand(deps: CommandDeps, command: ApplyCommandRow): Promise<void> {
+export async function runApplyCommand(deps: CommandDeps, command: ApplyCommandRow): Promise<{ ok: boolean; message: string }> {
   const now = deps.now ?? Date.now;
   let result: { ok: boolean; message: string };
   try {
@@ -72,4 +73,5 @@ export async function runApplyCommand(deps: CommandDeps, command: ApplyCommandRo
     result = { ok: false, message: errorText(e) };
   }
   await finishApplyCommand(deps.db, command.id, result, now());
+  return result;
 }

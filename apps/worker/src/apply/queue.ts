@@ -3,9 +3,10 @@ import { join } from 'node:path';
 import { dayStartMs, type AiConfig, type AiProvider } from '@kv/ai';
 import { capsLeft, nextAllowedAt, withinWindow, type ApplySite, type BrowserSession } from '@kv/apply';
 import type { DescriptionFetcher } from '@kv/connectors';
+import { and, asc, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import {
-  applicationById, applyCountsSince, nextApplyCommand, nextQueuedApplication, recoverApplications, recoverApplyCommands,
-  siteState, transitionApplication, type Db,
+  applicationById, applications, applyCountsSince, nextApplyCommand, nextQueuedApplication, recoverApplications,
+  recoverApplyCommands, siteState, transitionApplication, type ApplicationRow, type Db,
 } from '@kv/db';
 import type { SettingsService } from '@kv/settings';
 import { APPLY_SITE_IDS, APPLY_TIMING, type ApplyConfig, type ApplySiteId } from '@kv/shared';
@@ -56,12 +57,15 @@ const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
  * A cada verificação, nesta ordem:
  * 1. função indisponível (HOST não local, navegador não encontrado): nada. Disponível: roda os comandos pendentes do app,
  *    mesmo com a função desligada, para o dono conectar as contas antes (não com uma candidatura usando o navegador);
- * 2. sem candidatura em andamento, fecha o navegador parado há mais de `browserIdleMs`;
+ * 2. sem candidatura em andamento, fecha o navegador parado há mais de `browserIdleMs`, menos com uma janela de login
+ *    esperando o dono (até a conferência de sessão achar o dono conectado, ou `humanWaitMs` depois do `open_login`);
  * 3. função desligada: para aqui;
  * 4. a cada `sweepMs`, dentro do horário, cria as candidaturas automáticas que cabem hoje (`sweepCandidates`);
  * 5. sem candidatura em andamento, reivindica a próxima (`preparing`, guardada por `from: ['queued']`) fora dos sites
- *    pausados, sem limite sobrando ou ainda no intervalo de ritmo; fora do horário só as manuais. Começa uma e não espera;
- * 6. uma vez por dia, apaga as fotos com mais de `shotRetentionDays` dias.
+ *    pausados, ainda no intervalo de ritmo ou com a janela de login esperando, e fora dos sites sem limite sobrando
+ *    (salvo uma linha que já abriu o formulário hoje); fora do horário só as manuais. O modo atual do site vale na
+ *    reivindicação (um envio de verdade sem respostas aprovadas vira ensaio num site em ensaio). Começa uma e não espera;
+ * 6. uma vez por dia, apaga as fotos com mais de `shotRetentionDays` dias e as tira da coluna `shots`.
  */
 export function createApplyQueue(deps: ApplyQueueDeps): ApplyQueue {
   const { db, browser, availability } = deps;
@@ -76,6 +80,14 @@ export function createApplyQueue(deps: ApplyQueueDeps): ApplyQueue {
   let lastCleanupDay: number | null = null;
   /** O instante sorteado em que cada site pode abrir o próximo formulário, por último formulário/vaga registrados. */
   const pace = new Map<string, number>();
+  const humanWaitMs = deps.humanWaitMs ?? APPLY_TIMING.humanWaitMs;
+  /**
+   * Janelas de login abertas por `open_login`, por site, com o instante do comando. Enquanto uma espera, o navegador não
+   * fecha por ociosidade e nada começa naquele site (navegaria a página do dono para outro lugar).
+   */
+  const loginWaits = new Map<ApplySiteId, number>();
+  /** Quando a última espera de login acabou: a ociosidade conta a partir daí. */
+  let idleFrom = 0;
 
   function readyAt(site: ApplySiteId, last: { lastFormAt: number | null; lastViewAt: number | null }): number {
     const key = `${site}:${last.lastFormAt}:${last.lastViewAt}`;
@@ -92,22 +104,70 @@ export function createApplyQueue(deps: ApplyQueueDeps): ApplyQueue {
   async function runCommands(): Promise<number> {
     let n = 0;
     for (let command = await nextApplyCommand(db); command; command = await nextApplyCommand(db)) {
-      await runApplyCommand({ db, sites: deps.sites, browser, now }, command);
+      const result = await runApplyCommand({ db, sites: deps.sites, browser, now }, command);
+      if (command.kind === 'open_login' && result.ok && command.site) loginWaits.set(command.site, now());
       n += 1;
     }
     return n;
   }
 
-  /** Sites de onde nada pode começar agora: não cadastrados, pausados, sem limite sobrando hoje ou no intervalo de ritmo. */
-  async function blockedSites(cfg: ApplyConfig, sites: ApplySite[], at: number): Promise<ApplySiteId[]> {
+  /**
+   * Encerra as esperas de login que acabaram: a conferência de sessão do site (o comando `check_session`) achou o dono
+   * conectado depois do `open_login`, passou `humanWaitMs` desde ele, ou a janela não está mais aberta.
+   */
+  async function endLoginWaits(): Promise<void> {
+    const at = now();
+    for (const [site, since] of loginWaits) {
+      let over = !browser.isOpen() || at - since >= humanWaitMs;
+      if (!over) {
+        const state = await siteState(db, site);
+        over = state.session === 'logged_in' && state.sessionCheckedAt !== null && state.sessionCheckedAt > since;
+      }
+      if (over) {
+        loginWaits.delete(site);
+        idleFrom = at;
+      }
+    }
+  }
+
+  /**
+   * Sites de onde nada pode começar agora. `blocked`: não cadastrados, pausados, no intervalo de ritmo ou com a janela de
+   * login esperando o dono. `capped`: sem limite sobrando hoje (só uma linha que já abriu o formulário hoje sai deles).
+   */
+  async function blockedSites(
+    cfg: ApplyConfig, sites: ApplySite[], at: number,
+  ): Promise<{ blocked: ApplySiteId[]; capped: ApplySiteId[] }> {
     const counts = await applyCountsSince(db, dayStartMs(at, cfg.timeZone));
     const blocked = new Set<ApplySiteId>(APPLY_SITE_IDS.filter((id) => !sites.some((s) => s.id === id)));
+    const capped: ApplySiteId[] = [];
     for (const site of sites) {
       const state = await siteState(db, site.id);
       const left = capsLeft(counts, cfg.dailyCaps, site.id);
-      if (state.paused || left.forms <= 0 || left.views <= 0 || readyAt(site.id, state) > at) blocked.add(site.id);
+      if (state.paused || readyAt(site.id, state) > at || loginWaits.has(site.id)) blocked.add(site.id);
+      else if (left.forms <= 0 || left.views <= 0) capped.push(site.id);
     }
-    return [...blocked];
+    return { blocked: [...blocked], capped };
+  }
+
+  /**
+   * A próxima na fila, nos sites sem limite sobrando hoje, que já abriu o formulário hoje: ela já ocupa a vaga dela no
+   * dia (o limite do site e o total) e não conta de novo. Manuais primeiro, depois a mais antiga.
+   */
+  async function nextOpenedToday(sites: ApplySiteId[], dayStart: number, at: number): Promise<ApplicationRow | null> {
+    const [row] = await db
+      .select()
+      .from(applications)
+      .where(
+        and(
+          eq(applications.status, 'queued'),
+          inArray(applications.site, sites),
+          gte(applications.formOpenedAt, dayStart),
+          or(isNull(applications.runAfter), lte(applications.runAfter, at)),
+        ),
+      )
+      .orderBy(sql`(${applications.trigger} = 'manual') desc`, asc(applications.createdAt), asc(applications.id))
+      .limit(1);
+    return row ?? null;
   }
 
   function start(cfg: ApplyConfig, sites: ApplySite[], row: Parameters<typeof runOne>[1]): void {
@@ -129,13 +189,22 @@ export function createApplyQueue(deps: ApplyQueueDeps): ApplyQueue {
   async function startNext(cfg: ApplyConfig, within: boolean): Promise<boolean> {
     const sites = deps.sites();
     const at = now();
-    const excludeSites = await blockedSites(cfg, sites, at);
-    if (excludeSites.length >= APPLY_SITE_IDS.length) return false;
-    const row = await nextQueuedApplication(db, { excludeSites }, at);
+    const { blocked, capped } = await blockedSites(cfg, sites, at);
+    const excludeSites = [...blocked, ...capped];
     // As manuais saem primeiro: se a primeira é automática, fora do horário não há o que começar.
-    if (!row || (!within && row.trigger !== 'manual')) return false;
-    if (!(await transitionApplication(db, row.id, { status: 'preparing', from: ['queued'] }, at))) return false;
-    start(cfg, sites, { ...row, status: 'preparing' });
+    const startable = (r: ApplicationRow | null) => r !== null && (within || r.trigger === 'manual');
+    let row = excludeSites.length < APPLY_SITE_IDS.length ? await nextQueuedApplication(db, { excludeSites }, at) : null;
+    if (!startable(row) && capped.length > 0) row = (await nextOpenedToday(capped, dayStartMs(at, cfg.timeZone), at)) ?? row;
+    if (!row || !startable(row)) return false;
+    // O modo ATUAL do site vale quando a candidatura começa: uma linha criada como envio de verdade num site que voltou
+    // ao ensaio vira ensaio, na mesma gravação que a reivindica. Só a que o dono mandou ("Enviar de verdade", com
+    // respostas aprovadas) segue de verdade. O contrário nunca acontece: um ensaio não vira envio sozinho.
+    const rehearse = row.mode === 'real' && cfg.siteModes[row.site] !== 'real' && row.approvedAnswers.length === 0;
+    const claim = rehearse
+      ? { status: 'preparing' as const, from: ['queued' as const], set: { mode: 'dry_run' as const }, message: 'O site está em modo ensaio: a candidatura vai como ensaio.' }
+      : { status: 'preparing' as const, from: ['queued' as const] };
+    if (!(await transitionApplication(db, row.id, claim, at))) return false;
+    start(cfg, sites, { ...row, status: 'preparing', mode: rehearse ? 'dry_run' : row.mode });
     return true;
   }
 
@@ -149,13 +218,27 @@ export function createApplyQueue(deps: ApplyQueueDeps): ApplyQueue {
     for (const dir of dirs) {
       if (!dir.isDirectory()) continue;
       const path = join(root, dir.name);
+      const removed = new Set<string>();
       for (const file of await readdir(path).catch(() => [] as string[])) {
         const filePath = join(path, file);
         const info = await stat(filePath).catch(() => null);
-        if (info && info.mtimeMs < cutoff) await rm(filePath, { force: true });
+        if (info && info.mtimeMs < cutoff) {
+          await rm(filePath, { force: true });
+          removed.add(`shots/${dir.name}/${file}`); // o caminho relativo que `shotPath` grava
+        }
       }
+      if (removed.size > 0 && /^\d+$/.test(dir.name)) await dropShots(Number(dir.name), removed);
       if ((await readdir(path).catch(() => ['?'])).length === 0) await rm(path, { recursive: true, force: true });
     }
+  }
+
+  /** Tira da coluna `shots` da candidatura as fotos cujos arquivos foram apagados. */
+  async function dropShots(id: number, removed: Set<string>): Promise<void> {
+    const [row] = await db.select({ shots: applications.shots }).from(applications).where(eq(applications.id, id));
+    if (!row) return;
+    const kept = Object.fromEntries(Object.entries(row.shots).filter(([, rel]) => !removed.has(rel))) as typeof row.shots;
+    if (Object.keys(kept).length === Object.keys(row.shots).length) return;
+    await db.update(applications).set({ shots: kept }).where(eq(applications.id, id));
   }
 
   async function tick(): Promise<ApplyTickResult> {
@@ -165,7 +248,10 @@ export function createApplyQueue(deps: ApplyQueueDeps): ApplyQueue {
     try {
       // O navegador é um só: com uma candidatura nele, os comandos esperam a próxima verificação.
       if (!inFlight) result.commands = await runCommands();
-      if (!inFlight && browser.isOpen() && now() - browser.lastUsedAt() > APPLY_TIMING.browserIdleMs) await browser.close();
+      await endLoginWaits();
+      // Uma janela de login esperando o dono não fecha por ociosidade.
+      const idleSince = Math.max(browser.lastUsedAt(), idleFrom);
+      if (!inFlight && loginWaits.size === 0 && browser.isOpen() && now() - idleSince > APPLY_TIMING.browserIdleMs) await browser.close();
 
       const cfg = await deps.settings.applyConfig();
       if (!cfg.enabled) return result;

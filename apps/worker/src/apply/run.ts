@@ -59,7 +59,8 @@ export async function runOne(c: RunContext, row: ApplicationRow): Promise<void> 
       // do próximo início a manda para o dono confirmar no site.
       c.log(`candidatura ${row.id}: erro depois do envio, ficou para conferir: ${errorText(e)}`);
     } else if (e instanceof ApplyBudgetError) {
-      await requeueTomorrow(c.db, row.id, BUDGET_DETAIL, c.now(), c.cfg.timeZone).catch((err) => c.log(errorText(err)));
+      const zone = await ai.budgetTimeZone().catch(() => c.cfg.timeZone);
+      await requeueTomorrow(c.db, row.id, BUDGET_DETAIL, c.now(), zone).catch((err) => c.log(errorText(err)));
     } else {
       c.log(`candidatura ${row.id}: erro passageiro: ${errorText(e)}`);
       await recordTransient(c.db, row, errorText(e), c.now()).catch((err) => c.log(errorText(err)));
@@ -112,10 +113,15 @@ async function engine(
     state, clock, workTimeoutMs: c.workTimeoutMs, humanPollMs: c.humanPollMs, humanWaitMs: c.humanWaitMs, now: c.now,
   });
 
+  // A promessa do motor nunca rejeita (o erro vira `kind: 'error'`): uma execução abandonada que falha tarde, na página
+  // fechada, não chega a ninguém nem toca a linha.
+  let settled = false;
   const work: Promise<Raced> = runApplication(ready.target, deps).then(
-    (result) => ({ kind: 'done', result }),
-    (error) => ({ kind: 'error', error }),
-  );
+    (result): Raced => ({ kind: 'done', result }),
+    (error): Raced => ({ kind: 'error', error }),
+  ).finally(() => {
+    settled = true;
+  });
   clock.start();
   try {
     let raced = await Promise.race([work, timeout]);
@@ -143,6 +149,24 @@ async function engine(
     return raced.result;
   } finally {
     clock.stop();
+    if (!settled) await replaceAbandonedPage(c, page);
+  }
+}
+
+/**
+ * O motor foi abandonado sem terminar (o tempo de descarte acabou, ou o envio não respondeu): ele ainda segura a página,
+ * e um `fillStep` pendente poderia digitar no formulário da próxima vaga. A página é fechada (o motor falha nela) e a
+ * próxima candidatura ganha outra antes de qualquer coisa começar; se a sessão não der uma página nova, fecha inteira.
+ */
+async function replaceAbandonedPage(c: RunContext, page: Awaited<ReturnType<BrowserSession['page']>>): Promise<void> {
+  c.log('candidatura: execução abandonada; a página dela foi fechada');
+  await page.close().catch(() => {});
+  if (!c.browser.isOpen()) return;
+  try {
+    const fresh = await c.browser.page();
+    if (fresh === page || fresh.isClosed()) await c.browser.close();
+  } catch {
+    await c.browser.close().catch(() => {});
   }
 }
 

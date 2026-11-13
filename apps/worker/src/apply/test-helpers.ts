@@ -133,17 +133,40 @@ export function createRecordingSite(opts: { needsLogin?: boolean; id?: ApplySite
   return site;
 }
 
-/** `BrowserSession` de mentira: a página só sabe tirar foto. */
-export function createFakeBrowser(): BrowserSession & { calls: string[]; usedAt: number; open: boolean } {
-  const page = { screenshot: async () => Buffer.from('jpeg') } as unknown as Awaited<ReturnType<BrowserSession['page']>>;
+type FakePage = Awaited<ReturnType<BrowserSession['page']>>;
+
+/**
+ * `BrowserSession` de mentira: a página só sabe tirar foto, navegar (sem efeito) e fechar. Como a de verdade, `page()`
+ * devolve a mesma página até ela ser fechada (ou a sessão), e então uma nova. `pages` guarda todas as que criou.
+ */
+export function createFakeBrowser(): BrowserSession & { calls: string[]; usedAt: number; open: boolean; pages: FakePage[] } {
+  let current: FakePage | null = null;
+  const newPage = (): FakePage => {
+    let closed = false;
+    const page = {
+      screenshot: async () => {
+        if (closed) throw new Error('page closed');
+        return Buffer.from('jpeg');
+      },
+      goto: async () => null,
+      close: async () => {
+        closed = true;
+      },
+      isClosed: () => closed,
+    } as unknown as FakePage;
+    browser.pages.push(page);
+    return page;
+  };
   const browser = {
     calls: [] as string[],
     usedAt: 0,
     open: false,
+    pages: [] as FakePage[],
     async page() {
       browser.open = true;
       browser.usedAt = Date.now();
-      return page;
+      if (!current || current.isClosed()) current = newPage();
+      return current;
     },
     async bringToFront() {
       browser.calls.push('front');
@@ -151,6 +174,8 @@ export function createFakeBrowser(): BrowserSession & { calls: string[]; usedAt:
     async close() {
       browser.calls.push('close');
       browser.open = false;
+      await current?.close();
+      current = null;
     },
     isOpen: () => browser.open,
     lastUsedAt: () => browser.usedAt,

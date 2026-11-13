@@ -26,6 +26,8 @@ export interface ApplyAi {
   call<T>(tier: AiTier, fn: (provider: AiProvider) => Promise<TaskResult<T>>): Promise<TaskResult<T>>;
   /** Para `applicationResume`: a cobrança com a camada trocada por `apply` (ela pergunta `mayCall` sozinha). */
   billing(): Promise<Billing>;
+  /** O fuso em que o dia do orçamento é contado: a espera pelo próximo dia de orçamento vai até a meia-noite dele. */
+  budgetTimeZone(): Promise<string>;
 }
 
 /**
@@ -55,6 +57,9 @@ export function createApplyAi(deps: {
     async billing() {
       const { billing } = await load();
       return { provider: billing.provider, billed: (_layer, tier, call) => billing.billed('apply', tier, call) };
+    },
+    async budgetTimeZone() {
+      return (await load()).config.budgetTimeZone;
     },
   };
 }

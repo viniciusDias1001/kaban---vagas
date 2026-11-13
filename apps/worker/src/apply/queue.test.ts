@@ -1,4 +1,5 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -613,6 +614,202 @@ describe('errors', () => {
     expect(row.detail).toMatch(/passou de/);
     expect(site.calls).toContain('discard');
     expect(site.calls).not.toContain('submit');
+  });
+});
+
+describe('the site mode when an application starts', () => {
+  const approved: AnswerRecord[] = BASIC_QUESTIONS.map((x): AnswerRecord => ({
+    questionId: x.id, value: x.kind === 'file' ? 'Curriculo.pdf' : 'valor do ensaio', source: 'rule', category: x.kind === 'file' ? 'file' : 'identity',
+    basis: [], bankAnswerId: null, label: x.label, help: x.help, kind: x.kind, options: [], required: x.required,
+  }));
+  const queuedRow = async (mode: ApplyMode, extra: Partial<typeof applications.$inferInsert> = {}) => {
+    const { id: jobId } = await candidate();
+    const id = (await createApplication(db, { jobId, site: 'fake', trigger: 'auto', mode }, NOON))!;
+    if (Object.keys(extra).length > 0) await db.update(applications).set(extra).where(eq(applications.id, id));
+    return jobId;
+  };
+
+  it('rehearses a row queued for real when the site went back to rehearsal', async () => {
+    const jobId = await queuedRow('real');
+    await runUntilIdle(queue({ mode: 'dry_run' }));
+    expect(await applicationForJob(db, jobId)).toMatchObject({ status: 'dry_run_ready', mode: 'dry_run' });
+    expect(site.calls).not.toContain('submit');
+  });
+
+  it('keeps sending for real a row the owner sent himself', async () => {
+    const jobId = await queuedRow('real', { approvedAnswers: approved });
+    await runUntilIdle(queue({ mode: 'dry_run' }));
+    expect(await applicationForJob(db, jobId)).toMatchObject({ status: 'submitted', mode: 'real' });
+  });
+
+  it('never turns a rehearsal into a real send when the site went real', async () => {
+    const jobId = await queuedRow('dry_run');
+    await runUntilIdle(queue({ mode: 'real' }));
+    expect(await applicationForJob(db, jobId)).toMatchObject({ status: 'dry_run_ready', mode: 'dry_run' });
+    expect(site.calls).not.toContain('submit');
+  });
+});
+
+describe('an abandoned run', () => {
+  it('closes the page it held and gives the next application a new one', async () => {
+    let release!: () => void;
+    site.variants.hang = { readStep: () => new Promise<void>((resolve) => { release = resolve; }) };
+    const opened: { isClosed(): boolean }[] = [];
+    const origOpen = site.open;
+    site.open = async (page, target) => {
+      opened.push(page);
+      return origOpen(page, target);
+    };
+    const { id: hungJob } = await candidate({ variant: 'hang', score: 95 });
+    const { id: nextJob } = await candidate({ score: 80 });
+    await runUntilIdle(queue({ mode: 'real', deps: { workTimeoutMs: 50, abortGraceMs: 20 } }));
+    expect(await applicationForJob(db, hungJob)).toMatchObject({ status: 'queued', attempts: 1 });
+    expect(await applicationForJob(db, nextJob)).toMatchObject({ status: 'submitted' });
+    expect(opened).toHaveLength(2);
+    expect(opened[1]).not.toBe(opened[0]);
+    expect(opened[0].isClosed()).toBe(true);
+    expect(opened[1].isClosed()).toBe(false);
+
+    // O motor abandonado acorda tarde: a página dele está fechada e a linha não muda.
+    const before = await applicationForJob(db, hungJob);
+    release();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(await applicationForJob(db, hungJob)).toEqual(before);
+    expect(site.calls.filter((c) => c === 'fillStep')).toHaveLength(1);
+  });
+});
+
+describe('the login window', () => {
+  beforeEach(() => {
+    site = createRecordingSite({ needsLogin: true });
+    site.sessions = 'logged_out';
+    clock.now = Date.now(); // o navegador de mentira marca o uso com o relógio real
+  });
+  const manualRow = async () => {
+    const { id: jobId } = await candidate({ score: null });
+    await createApplication(db, { jobId, site: 'fake', trigger: 'manual', mode: 'real' }, clock.now);
+    return jobId;
+  };
+
+  it('stays open and holds the site until the session check says logged in', async () => {
+    const jobId = await manualRow();
+    const q = queue({ mode: 'real', deps: { humanWaitMs: 20 * MIN } });
+    await enqueueApplyCommand(db, 'open_login', 'fake', clock.now);
+    expect(await q.tick()).toMatchObject({ commands: 1, started: false });
+
+    clock.now += 6 * MIN;
+    browser.usedAt = clock.now - 6 * MIN;
+    expect(await q.tick()).toMatchObject({ started: false });
+    expect(browser.calls).not.toContain('close');
+
+    site.sessions = 'logged_in';
+    await enqueueApplyCommand(db, 'check_session', 'fake', clock.now);
+    expect(await q.tick()).toMatchObject({ commands: 1, started: true });
+    await q.idle();
+    expect(await applicationForJob(db, jobId)).toMatchObject({ status: 'submitted' });
+  });
+
+  it('gives up the hold once the wait is over, and the window closes when idle after that', async () => {
+    const jobId = await manualRow();
+    const q = queue({ mode: 'real', deps: { humanWaitMs: 10 * MIN } });
+    const opened = clock.now;
+    await enqueueApplyCommand(db, 'open_login', 'fake', clock.now);
+    await q.tick();
+
+    clock.now = opened + 9 * MIN;
+    browser.usedAt = opened;
+    expect(await q.tick()).toMatchObject({ started: false });
+    expect(browser.calls).not.toContain('close');
+
+    // A espera acabou: a candidatura começa (e encontra o site deslogado).
+    clock.now = opened + 11 * MIN;
+    expect(await q.tick()).toMatchObject({ started: true });
+    await q.idle();
+    expect(await applicationForJob(db, jobId)).toMatchObject({ status: 'needs_human', reason: 'login' });
+    expect(browser.calls).not.toContain('close');
+
+    clock.now = opened + 17 * MIN;
+    browser.usedAt = opened + 11 * MIN;
+    await q.tick();
+    expect(browser.calls).toContain('close');
+  });
+});
+
+describe('the daily cap and a form already opened today', () => {
+  for (const caps of [{ fake: 1 }, { total: 1 }]) {
+    it(`runs today an application that opened its form today, with the cap reached (${Object.keys(caps)[0]})`, async () => {
+      const opened = await candidate({ score: null });
+      const waiting = await candidate({ score: null });
+      const id = (await createApplication(db, { jobId: opened.id, site: 'fake', trigger: 'auto', mode: 'real' }, NOON))!;
+      await transitionApplication(db, id, { status: 'needs_human', reason: 'question', set: { formOpenedAt: NOON - HOUR, viewedAt: NOON - HOUR } }, NOON);
+      await createApplication(db, { jobId: waiting.id, site: 'fake', trigger: 'auto', mode: 'real' }, NOON);
+      const q = queue({ mode: 'real', cfg: { dailyCaps: { ...APPLY_DEFAULTS.dailyCaps, ...caps } } });
+      expect(await q.tick()).toMatchObject({ started: false });
+
+      // O dono respondeu a pergunta: a candidatura volta à fila e roda hoje, sem contar de novo.
+      await transitionApplication(db, id, { status: 'queued', set: { pendingQuestions: [] } }, NOON);
+      expect(await q.tick()).toMatchObject({ started: true });
+      await q.idle();
+      expect(await applicationForJob(db, opened.id)).toMatchObject({ status: 'submitted', formOpenedAt: NOON - HOUR });
+      expect(await q.tick()).toMatchObject({ started: false });
+      expect((await applicationForJob(db, waiting.id))!.status).toBe('queued');
+      expect((await applyCountsSince(db, NOON - 2 * HOUR)).forms.fake).toBe(1);
+    });
+  }
+});
+
+describe('old photos', () => {
+  it('deletes the files past the retention and drops them from the row', async () => {
+    const { id: jobId } = await candidate({ score: null });
+    const id = (await createApplication(db, { jobId, site: 'fake', trigger: 'auto', mode: 'real' }, NOON))!;
+    const shots = { filled: `shots/${id}/filled.jpg`, confirmation: `shots/${id}/confirmation.jpg` };
+    await transitionApplication(db, id, { status: 'submitted', set: { shots } }, NOON);
+    await mkdir(join(dataDir, 'shots', String(id)), { recursive: true });
+    for (const rel of Object.values(shots)) await writeFile(join(dataDir, rel), 'jpeg');
+    const old = (NOON - 100 * 86_400_000) / 1000;
+    await utimes(join(dataDir, shots.filled), old, old);
+    const recent = (NOON - 86_400_000) / 1000;
+    await utimes(join(dataDir, shots.confirmation), recent, recent);
+
+    await queue().tick();
+    expect(existsSync(join(dataDir, shots.filled))).toBe(false);
+    expect(existsSync(join(dataDir, shots.confirmation))).toBe(true);
+    expect((await applicationForJob(db, jobId))!.shots).toEqual({ confirmation: shots.confirmation });
+  });
+});
+
+describe('a row that comes back to the queue', () => {
+  it('reuses the score the gate already gave, against the current minimum', async () => {
+    const pass = await candidate({ score: null });
+    const fail = await candidate({ score: null });
+    for (const [job, gateScore] of [[pass.id, 80], [fail.id, 72]] as const) {
+      const id = (await createApplication(db, { jobId: job, site: 'fake', trigger: 'auto', mode: 'real' }, NOON))!;
+      await db.update(applications).set({ gateScore }).where(eq(applications.id, id));
+    }
+    await runUntilIdle(queue({ mode: 'real', cfg: { minScore: 75 } }));
+    expect(tasks).not.toContain('apply_gate');
+    expect(await applicationForJob(db, pass.id)).toMatchObject({ status: 'submitted', gateScore: 80 });
+    expect(await applicationForJob(db, fail.id)).toMatchObject({ status: 'skipped', reason: 'below_min_score', gateScore: 72 });
+  });
+
+  it('stops for the owner when the site with login is logged out', async () => {
+    site = createRecordingSite({ needsLogin: true });
+    site.sessions = 'logged_out';
+    const { id: jobId } = await candidate();
+    await runUntilIdle(queue({ mode: 'real' }));
+    expect(await applicationForJob(db, jobId)).toMatchObject({ status: 'needs_human', reason: 'login' });
+    expect(site.calls).toEqual(['sessionState']);
+    expect(await siteState(db, 'fake')).toMatchObject({ session: 'logged_out', sessionCheckedAt: NOON });
+    expect((await jobRow(jobId)).needsHuman).toBe(true);
+  });
+
+  it('waits for the midnight of the AI budget time zone when the budget is spent', async () => {
+    aiConfig.dailyBudgetUsd = 1;
+    aiConfig.budgetTimeZone = 'UTC';
+    await spend(1.0);
+    const { id: jobId } = await candidate();
+    await runUntilIdle(queue({ mode: 'real' }));
+    expect(await applicationForJob(db, jobId)).toMatchObject({ status: 'queued', runAfter: Date.UTC(2026, 10, 12, 0, 0) });
   });
 });
 
