@@ -198,6 +198,9 @@ export function scrubFixture(text: string, identity: ScrubIdentity, kind: Fixtur
     return `${name}${quote}${scrubAttributeValue(quoted.slice(1, -1))}${quote}`;
   });
 
+  // Imagem embutida longa fora de atributo (CSS em bloco `style`): mesma regra das fotos.
+  out = out.replace(DATA_IMAGE, (m) => (m.length > DATA_IMAGE_LIMIT ? PLACEHOLDER.pixel : m));
+
   // 7. campos preenchidos
   out = out.replace(INPUT_TAG, (tag) => {
     if (!TEXT_INPUT_TYPES.has(inputType(tag))) return tag;

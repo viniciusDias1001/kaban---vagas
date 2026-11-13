@@ -1,10 +1,11 @@
 import type { ApplyJob, ApplySite, ApplyTarget } from '../types';
 import { createFakeSite } from './fake';
 import { greenhouseSite } from './greenhouse';
+import { leverSite } from './lever';
 
 /** Sites reais registrados. */
 function realSites(): ApplySite[] {
-  return [greenhouseSite];
+  return [greenhouseSite, leverSite];
 }
 
 /** Com `FAKE_APPLY_SITE=1`, só o site de teste; senão, os sites reais registrados. */

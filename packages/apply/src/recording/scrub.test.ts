@@ -32,6 +32,13 @@ describe('scrubFixture', () => {
     expect(scrubFixture(LI, NO_IDENTITY)).not.toMatch(/ana-souza|ACoAAB12|licdn\.com|ajax:1234/);
   });
 
+  it('replaces a long inline image in a style block, not only in attributes', () => {
+    const css = '<style>.box::after{background-image:url("data:image/png;base64,' + 'A'.repeat(300) + '")}</style>';
+    expect(findLeaks(css).map((l) => l.rule)).toEqual(['photo']);
+    expect(scrubFixture(css, NO_IDENTITY)).toBe('<style>.box::after{background-image:url("' + PLACEHOLDER.pixel + '")}</style>');
+    expect(findLeaks(scrubFixture(css, NO_IDENTITY))).toEqual([]);
+  });
+
   it('is idempotent and leaves nothing for findLeaks', () => {
     expect(scrubFixture(scrubFixture(DIRTY, me), me)).toBe(scrubFixture(DIRTY, me));
     expect(findLeaks(scrubFixture(DIRTY, me))).toEqual([]);
