@@ -245,27 +245,37 @@ export async function applyCandidates(
   return rows.map((r) => ({ ...r, score: r.score! }));
 }
 
-/** No início do worker: `preparing`, `filling` e `waiting_human` voltam a `queued`; `submitting` vira `needs_human` com `confirm_submission`. */
+/**
+ * No início do worker: `preparing`, `filling` e `waiting_human` voltam a `queued`, ou viram `cancelled` se o dono pediu o
+ * cancelamento (o pedido estava pendente, não velho); `submitting` vira `needs_human` com `confirm_submission`, com ou
+ * sem pedido (o clique pode ter acontecido).
+ */
 export async function recoverApplications(db: Db, now: number = Date.now()): Promise<{ requeued: number; unconfirmed: number[] }> {
   const stuck = await db
-    .select({ id: applications.id, status: applications.status })
+    .select({ id: applications.id, status: applications.status, cancelRequested: applications.cancelRequested })
     .from(applications)
     .where(inArray(applications.status, [...RUNNING_STATUSES]))
     .orderBy(asc(applications.id));
   let requeued = 0;
   const unconfirmed: number[] = [];
-  for (const { id, status } of stuck) {
+  for (const { id, status, cancelRequested } of stuck) {
     if (status === 'submitting') {
       // O clique final pode ter acontecido: nunca refazer, o dono confere no site.
       const ok = await transitionApplication(
         db, id,
         {
-          status: 'needs_human', reason: 'confirm_submission', set: { waitingGate: null },
+          status: 'needs_human', reason: 'confirm_submission', set: { waitingGate: null, cancelRequested: false },
           message: 'O app foi reiniciado durante o envio: confira no site se a candidatura foi enviada.',
         },
         now,
       );
       if (ok) unconfirmed.push(id);
+    } else if (cancelRequested) {
+      await transitionApplication(
+        db, id,
+        { status: 'cancelled', set: { waitingGate: null, cancelRequested: false }, message: 'Cancelada pelo dono.' },
+        now,
+      );
     } else {
       const ok = await transitionApplication(
         db, id,

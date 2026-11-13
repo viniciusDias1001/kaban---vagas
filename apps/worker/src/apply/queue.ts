@@ -61,8 +61,8 @@ const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
  *    esperando o dono (até a conferência de sessão achar o dono conectado, ou `humanWaitMs` depois do `open_login`);
  * 3. função desligada: para aqui;
  * 4. a cada `sweepMs`, dentro do horário, cria as candidaturas automáticas que cabem hoje (`sweepCandidates`);
- * 5. sem candidatura em andamento, reivindica a próxima (`preparing`, guardada por `from: ['queued']`) fora dos sites
- *    pausados, ainda no intervalo de ritmo ou com a janela de login esperando, e fora dos sites sem limite sobrando
+ * 5. sem candidatura em andamento nem janela de login esperando, reivindica a próxima (`preparing`, guardada por
+ *    `from: ['queued']`) fora dos sites pausados ou ainda no intervalo de ritmo, e fora dos sites sem limite sobrando
  *    (salvo uma linha que já abriu o formulário hoje); fora do horário só as manuais. O modo atual do site vale na
  *    reivindicação (um envio de verdade sem respostas aprovadas vira ensaio num site em ensaio). Começa uma e não espera;
  * 6. uma vez por dia, apaga as fotos com mais de `shotRetentionDays` dias e as tira da coluna `shots`.
@@ -83,7 +83,7 @@ export function createApplyQueue(deps: ApplyQueueDeps): ApplyQueue {
   const humanWaitMs = deps.humanWaitMs ?? APPLY_TIMING.humanWaitMs;
   /**
    * Janelas de login abertas por `open_login`, por site, com o instante do comando. Enquanto uma espera, o navegador não
-   * fecha por ociosidade e nada começa naquele site (navegaria a página do dono para outro lugar).
+   * fecha por ociosidade e nenhuma candidatura começa, em site nenhum (navegaria a página do dono para outro lugar).
    */
   const loginWaits = new Map<ApplySiteId, number>();
   /** Quando a última espera de login acabou: a ociosidade conta a partir daí. */
@@ -131,8 +131,8 @@ export function createApplyQueue(deps: ApplyQueueDeps): ApplyQueue {
   }
 
   /**
-   * Sites de onde nada pode começar agora. `blocked`: não cadastrados, pausados, no intervalo de ritmo ou com a janela de
-   * login esperando o dono. `capped`: sem limite sobrando hoje (só uma linha que já abriu o formulário hoje sai deles).
+   * Sites de onde nada pode começar agora. `blocked`: não cadastrados, pausados ou no intervalo de ritmo. `capped`: sem
+   * limite sobrando hoje (só uma linha que já abriu o formulário hoje sai deles).
    */
   async function blockedSites(
     cfg: ApplyConfig, sites: ApplySite[], at: number,
@@ -143,7 +143,7 @@ export function createApplyQueue(deps: ApplyQueueDeps): ApplyQueue {
     for (const site of sites) {
       const state = await siteState(db, site.id);
       const left = capsLeft(counts, cfg.dailyCaps, site.id);
-      if (state.paused || readyAt(site.id, state) > at || loginWaits.has(site.id)) blocked.add(site.id);
+      if (state.paused || readyAt(site.id, state) > at) blocked.add(site.id);
       else if (left.forms <= 0 || left.views <= 0) capped.push(site.id);
     }
     return { blocked: [...blocked], capped };
@@ -187,6 +187,9 @@ export function createApplyQueue(deps: ApplyQueueDeps): ApplyQueue {
   }
 
   async function startNext(cfg: ApplyConfig, within: boolean): Promise<boolean> {
+    // O navegador tem uma página e um usuário por vez: com uma janela de login esperando o dono, nada começa em site
+    // nenhum (navegaria a página dele para outro lugar).
+    if (loginWaits.size > 0) return false;
     const sites = deps.sites();
     const at = now();
     const { blocked, capped } = await blockedSites(cfg, sites, at);

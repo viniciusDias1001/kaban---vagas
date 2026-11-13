@@ -483,15 +483,13 @@ describe('a stale cancel flag never follows a row back to the queue', () => {
     const allRehearsals = await create();
     const waiting = await create();
     const answered = await create();
-    const interrupted = await create();
     const asked = await create();
     await transitionApplication(db, retried.id, { status: 'failed' });
     await transitionApplication(db, rehearsal.id, { status: 'dry_run_ready', set: { answers: [answer] } });
     await transitionApplication(db, waiting.id, { status: 'needs_human', reason: 'question' });
     await transitionApplication(db, answered.id, { status: 'needs_human', reason: 'question' });
-    await transitionApplication(db, interrupted.id, { status: 'filling' });
     await transitionApplication(db, asked.id, { status: 'needs_human', reason: 'captcha' });
-    for (const r of [retried, rehearsal, allRehearsals, waiting, answered, interrupted]) await flag(r.id);
+    for (const r of [retried, rehearsal, allRehearsals, waiting, answered]) await flag(r.id);
 
     expect(await retryApplication(db, retried.id)).toBe('queued');
     expect(await sendRehearsal(db, rehearsal.id)).toBe('queued');
@@ -500,11 +498,30 @@ describe('a stale cancel flag never follows a row back to the queue', () => {
     const answeredRow = (await applicationForJob(db, answered.job.id))!;
     expect(await settlePendingQuestions(db, answeredRow, [])).toBe(true);
     expect(await requeueQuestionWaits(db, asked.id)).toEqual([waiting.id]);
-    expect(await recoverApplications(db, 5000)).toEqual({ requeued: 1, unconfirmed: [] });
 
-    for (const r of [retried, rehearsal, allRehearsals, waiting, answered, interrupted]) {
+    for (const r of [retried, rehearsal, allRehearsals, waiting, answered]) {
       expect(await applicationForJob(db, r.job.id)).toMatchObject({ status: 'queued', cancelRequested: false });
     }
+  });
+
+  it('at recovery, honours the pending cancel of a row stopped before the click and never resends one past it', async () => {
+    const cancelled = await create();
+    const plain = await create();
+    const clicked = await create();
+    await transitionApplication(db, cancelled.id, { status: 'waiting_human', set: { waitingGate: 'captcha' } }, 2000);
+    await transitionApplication(db, plain.id, { status: 'filling' }, 2000);
+    await transitionApplication(db, clicked.id, { status: 'submitting', set: { waitingGate: 'captcha' } }, 2000);
+    for (const r of [cancelled, clicked]) await flag(r.id);
+
+    expect(await recoverApplications(db, 5000)).toEqual({ requeued: 1, unconfirmed: [clicked.id] });
+    expect(await applicationForJob(db, cancelled.job.id)).toMatchObject({
+      status: 'cancelled', cancelRequested: false, waitingGate: null, finishedAt: 5000,
+    });
+    expect((await listApplicationEvents(db, cancelled.id)).at(-1)).toMatchObject({ status: 'cancelled', at: 5000 });
+    expect(await applicationForJob(db, plain.job.id)).toMatchObject({ status: 'queued', cancelRequested: false });
+    expect(await applicationForJob(db, clicked.job.id)).toMatchObject({
+      status: 'needs_human', reason: 'confirm_submission', cancelRequested: false, waitingGate: null,
+    });
   });
 });
 
