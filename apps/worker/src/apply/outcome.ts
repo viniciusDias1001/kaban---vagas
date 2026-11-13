@@ -145,12 +145,21 @@ export async function recordResult(
       // Ensaio pronto (ou envio de verdade cujo formulário ganhou pergunta obrigatória): o modo da linha não muda.
       status = await settle(db, row.id, { status: 'dry_run_ready', set: { answers: result.answers, pendingQuestions: [] } }, now);
       break;
-    case 'needs_human':
-      status = await stopForOwner(
-        db, row, result.reason, result.detail, now, { answers: result.answers, pendingQuestions: result.pending },
-        { keepOnCancel: result.reason === 'confirm_submission' },
-      );
+    case 'needs_human': {
+      // Um arquivo obrigatório que o app não envia: o dono não tem como responder na tela, então a candidatura vai para
+      // ele concluir no site, sem pendências (o formulário foi lido: não conta como formato desconhecido no freio).
+      const file = result.reason === 'question' ? result.pending.find((p) => p.question.required && p.question.kind === 'file') : undefined;
+      status = file
+        ? await stopForOwner(
+          db, row, 'unsupported_form', `o formulário pede um arquivo que o app não envia (${file.question.label}); conclua esta candidatura no site`,
+          now, { answers: result.answers, pendingQuestions: [] },
+        )
+        : await stopForOwner(
+          db, row, result.reason, result.detail, now, { answers: result.answers, pendingQuestions: result.pending },
+          { keepOnCancel: result.reason === 'confirm_submission' },
+        );
       break;
+    }
     case 'skipped':
       status = await settle(db, row.id, { status: 'skipped', reason: result.reason }, now);
       if (status === 'skipped' && result.reason === 'already_applied') await markAppliedByOwner(db, row.jobId, now);

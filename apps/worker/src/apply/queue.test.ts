@@ -318,6 +318,29 @@ describe('answers', () => {
     expect(answers.find((a) => a.questionId === 'salary')).toMatchObject({ value: '20000', source: 'bank' });
   });
 
+  it('never leaves the owner a file question he cannot answer in the app: the application goes to him to finish on the site', async () => {
+    const cover = { ...BASIC_QUESTIONS[0], id: 'cover', label: 'Cover letter', kind: 'file' as const };
+    site.variants.form = { questions: [...BASIC_QUESTIONS, cover] };
+    const { id: jobId } = await candidate();
+    await runUntilIdle(queue({ mode: 'real' }));
+    expect(await applicationForJob(db, jobId)).toMatchObject({
+      status: 'needs_human', reason: 'unsupported_form', pendingQuestions: [],
+      detail: 'o formulário pede um arquivo que o app não envia (Cover letter); conclua esta candidatura no site',
+    });
+    expect((await jobRow(jobId)).needsHuman).toBe(true);
+    expect((await siteState(db, 'fake')).consecutiveFailures).toBe(0); // o formulário foi lido: não é layout desconhecido
+  });
+
+  it('keeps an optional file question as a pending question', async () => {
+    const cover = { ...BASIC_QUESTIONS[0], id: 'cover', label: 'Cover letter', kind: 'file' as const, required: false };
+    site.variants.form = { questions: [...BASIC_QUESTIONS, cover, { ...BASIC_QUESTIONS[0], id: 'salary', label: 'Pretensão salarial mensal (R$)' }] };
+    const { id: jobId } = await candidate();
+    await runUntilIdle(queue({ mode: 'real' }));
+    const row = (await applicationForJob(db, jobId))!;
+    expect(row).toMatchObject({ status: 'needs_human', reason: 'question' });
+    expect(row.pendingQuestions.map((p) => p.question.id)).toContain('salary');
+  });
+
   describe('answers proposed by the model', () => {
     beforeEach(() => {
       site.variants.form = { questions: [...BASIC_QUESTIONS, MOTIVATION] };
