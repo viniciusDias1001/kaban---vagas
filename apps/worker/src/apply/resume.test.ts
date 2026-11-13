@@ -219,6 +219,19 @@ describe('applicationResume', () => {
       expect(await row()).toEqual(before);
     });
 
+    it('is never overwritten by a draft whose model call was running while the owner edited it, and is the one sent', async () => {
+      const job = await seedJob();
+      await db.insert(tailoredResumes).values({ jobId: job.id, lang: 'pt-BR', content: base(), profileVersion: 0, createdAt: 1, editedAt: null });
+      const mine = { ...base(), summary: 'Editado pelo dono durante a chamada.' };
+      onCall = async () => {
+        await db.update(tailoredResumes).set({ content: mine, editedAt: 7 }).where(eq(tailoredResumes.jobId, job.id));
+      };
+      expect(await applicationResume(deps(), job, 'tailored', signal)).toMatchObject({ ok: true });
+      expect(calls).toBe(1);
+      expect(await row()).toMatchObject({ editedAt: 7, profileVersion: 0, content: { summary: mine.summary } });
+      expect(rendered.map((r) => r.summary)).toEqual([mine.summary]);
+    });
+
     it('is reported for review, never overwritten, when the profile changed and it no longer resolves', async () => {
       const job = await store((await profileFor(db, 'pt-BR'))!.version, (r) => ({
         ...r, skills: [...r.skills, { id: 'skill_zzzzzzz9', name: 'Inventada', group: '' }],

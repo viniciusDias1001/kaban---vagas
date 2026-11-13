@@ -2,7 +2,9 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
 import {
   ACTIVE_APPLICATION_STATUSES, APPLY_DEFAULTS, APPLY_TIMING, applyAvailability, isActiveApplication,
   normalizeQuestionText, bankBoolean, bankList, bankText, SHOT_KINDS, PendingAnswersBodySchema, ApplyAnswerInputSchema, type AnswerValue, type ApplicationStatus,
-  type PendingQuestion,
+  type PendingQuestion, COLUMNS, isAppliedOrLater, type CannotApplyReason, type JobApplicationDto,
+  APPLICATION_FILTERS, APPLICATION_FILTER_STATUSES, APPLICATION_STATUSES, applicationFilterOf, type ApplicationFilter,
+  NUMBER_FORMAT_PROBLEM, parseNumberAnswer,
 } from './index';
 
 describe('apply constants', () => {
@@ -40,6 +42,49 @@ describe('apply constants', () => {
     expect(APPLY_DEFAULTS.minScore).toBe(70);
     expect(APPLY_DEFAULTS.dailyCaps).toMatchObject({ linkedin: 10, greenhouse: 15, lever: 15, total: 30, linkedinViews: 30 });
     expect(APPLY_TIMING.humanWaitMs).toBe(600_000);
+  });
+});
+
+describe('the number rule', () => {
+  it('accepts digits with an optional minus and up to two decimals, and returns them with a dot', () => {
+    expect(parseNumberAnswer(' 20000 ')).toBe('20000');
+    expect(parseNumberAnswer('1234,56')).toBe('1234.56');
+    expect(parseNumberAnswer('8000.5')).toBe('8000.5');
+    expect(parseNumberAnswer('-5')).toBe('-5');
+    expect(parseNumberAnswer('0')).toBe('0');
+    for (const bad of ['', ' ', '20.000', '20,000', '1.234,56', '1,2345', '1e3', '0x10', 'abc', '12a', '1,2,3', '- 5', '5.']) {
+      expect(parseNumberAnswer(bad)).toBeNull();
+    }
+    expect(NUMBER_FORMAT_PROBLEM).toBe('Use só dígitos, com no máximo duas casas decimais e sem separador de milhar (ex.: 20000 ou 1234,56).');
+  });
+});
+
+describe('application filters', () => {
+  it('puts every status in exactly one filter', () => {
+    expect(APPLICATION_FILTERS).toEqual(['active', 'needs_human', 'rehearsals', 'submitted', 'skipped']);
+    const of = Object.fromEntries(APPLICATION_STATUSES.map((s) => [s, applicationFilterOf(s)]));
+    expect(of).toEqual({
+      queued: 'active', preparing: 'active', filling: 'active', waiting_human: 'active', submitting: 'active',
+      needs_human: 'needs_human', dry_run_ready: 'rehearsals', submitted: 'submitted',
+      skipped: 'skipped', failed: 'skipped', cancelled: 'skipped',
+    });
+    for (const f of APPLICATION_FILTERS) {
+      expect(APPLICATION_FILTER_STATUSES[f]).toEqual(APPLICATION_STATUSES.filter((s) => applicationFilterOf(s) === f));
+    }
+    expectTypeOf(applicationFilterOf).returns.toEqualTypeOf<ApplicationFilter>();
+  });
+});
+
+describe('already applied', () => {
+  it('counts Aplicada and every column after it as applied', () => {
+    expect(COLUMNS.filter(isAppliedOrLater)).toEqual(['aplicada', 'entrevista', 'oferta', 'arquivada']);
+  });
+  it('describes the application of a job and why it cannot be applied to', () => {
+    const dto: JobApplicationDto = { application: null, site: null, canApply: false, cannotApplyReason: 'unsupported_site' };
+    expectTypeOf(dto.cannotApplyReason).toEqualTypeOf<CannotApplyReason | null>();
+    expectTypeOf<CannotApplyReason>().toEqualTypeOf<
+      'unsupported_site' | 'already_applied' | 'blocked' | 'apply_unavailable' | 'apply_disabled' | 'already_exists'
+    >();
   });
 });
 

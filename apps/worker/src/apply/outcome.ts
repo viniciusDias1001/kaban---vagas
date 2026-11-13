@@ -95,11 +95,16 @@ export async function recordSolvedWait(db: Db, site: ApplySiteId): Promise<void>
 
 /**
  * Sequências do site: formulário desconhecido (`unsupported_form`) numa, parada depois do clique (`confirm_submission`)
- * noutra; `brakeAfter` seguidas pausam o site com `brake`. Página de restrição pausa na hora. Um envio zera as três.
+ * noutra; `brakeAfter` seguidas pausam o site com `brake`. Página de restrição pausa na hora. Um envio zera as três; um
+ * ensaio pronto zera a do formulário desconhecido (o formulário foi lido e preenchido até o fim).
  */
 async function updateSiteAfter(db: Db, site: ApplySiteId, result: EngineResult, now: number): Promise<void> {
   if (result.status === 'submitted') {
     await updateSiteState(db, site, { consecutiveFailures: 0, consecutiveRejections: 0, humanTimeouts: 0 });
+    return;
+  }
+  if (result.status === 'dry_run_ready') {
+    await updateSiteState(db, site, { consecutiveFailures: 0 });
     return;
   }
   if (result.status !== 'needs_human') return;
@@ -145,12 +150,21 @@ export async function recordResult(
       // Ensaio pronto (ou envio de verdade cujo formulário ganhou pergunta obrigatória): o modo da linha não muda.
       status = await settle(db, row.id, { status: 'dry_run_ready', set: { answers: result.answers, pendingQuestions: [] } }, now);
       break;
-    case 'needs_human':
-      status = await stopForOwner(
-        db, row, result.reason, result.detail, now, { answers: result.answers, pendingQuestions: result.pending },
-        { keepOnCancel: result.reason === 'confirm_submission' },
-      );
+    case 'needs_human': {
+      // Um arquivo obrigatório que o app não envia: o dono não tem como responder na tela, então a candidatura vai para
+      // ele concluir no site, sem pendências (o formulário foi lido: não conta como formato desconhecido no freio).
+      const file = result.reason === 'question' ? result.pending.find((p) => p.question.required && p.question.kind === 'file') : undefined;
+      status = file
+        ? await stopForOwner(
+          db, row, 'unsupported_form', `o formulário pede um arquivo que o app não envia (${file.question.label}); conclua esta candidatura no site`,
+          now, { answers: result.answers, pendingQuestions: [] },
+        )
+        : await stopForOwner(
+          db, row, result.reason, result.detail, now, { answers: result.answers, pendingQuestions: result.pending },
+          { keepOnCancel: result.reason === 'confirm_submission' },
+        );
       break;
+    }
     case 'skipped':
       status = await settle(db, row.id, { status: 'skipped', reason: result.reason }, now);
       if (status === 'skipped' && result.reason === 'already_applied') await markAppliedByOwner(db, row.jobId, now);

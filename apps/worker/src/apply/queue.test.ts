@@ -4,9 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desc, eq } from 'drizzle-orm';
-import { createFakeProvider, parseOutput, readBlock, readTask, type AiConfig, type AiProvider } from '@kv/ai';
+import { AiError, createFakeProvider, parseOutput, readBlock, readTask, type AiConfig, type AiProvider } from '@kv/ai';
 import {
-  applications, applicationForJob, applyCommands, applyCountsSince, closeDb, createApplication, enqueueApplyCommand, jobEvents, jobs,
+  applications, applicationForJob, applyCommands, applyCountsSince, applyWorkerState, jobAi, lockApplication, closeDb, createApplication, enqueueApplyCommand, jobEvents, jobs,
   nextApplyCommand, nextQueuedApplication, recordUsage, requestCancel, retryApplication, saveApplyAnswer, siteState, transitionApplication,
   updateSiteState, usageByLayer,
   type Db,
@@ -23,7 +23,7 @@ import {
 // Para o teste da reivindicação: um gancho entre a leitura da próxima candidatura e a reivindicação dela.
 vi.mock('@kv/db', async (importOriginal) => {
   const mod = await importOriginal<typeof import('@kv/db')>();
-  return { ...mod, nextQueuedApplication: vi.fn(mod.nextQueuedApplication) };
+  return { ...mod, nextQueuedApplication: vi.fn(mod.nextQueuedApplication), lockApplication: vi.fn(mod.lockApplication) };
 });
 
 const TZ = 'America/Sao_Paulo';
@@ -132,6 +132,43 @@ describe('the switches', () => {
     expect(site.calls).toEqual(['sessionState']);
   });
 
+  it('says why it cannot run: publishes the reason, logs it once and ends every command with it', async () => {
+    const logs: string[] = [];
+    await candidate();
+    await enqueueApplyCommand(db, 'open_login', 'fake');
+    await enqueueApplyCommand(db, 'check_session', 'fake');
+    const q = queue({ availability: { available: false, reason: 'Opera GX não encontrado' }, deps: { log: (m) => logs.push(m) } });
+    expect(await q.tick()).toEqual({ commands: 2, swept: 0, started: false });
+    expect(await applyWorkerState(db)).toEqual({ available: false, reason: 'Opera GX não encontrado', seenAt: NOON });
+    expect((await db.select().from(applyCommands)).map((c) => [c.status, c.result])).toEqual([
+      ['error', 'Opera GX não encontrado'], ['error', 'Opera GX não encontrado'],
+    ]);
+    clock.now += MIN;
+    await enqueueApplyCommand(db, 'check_session', 'fake');
+    expect((await q.tick()).commands).toBe(1);
+    expect(logs.filter((l) => l.includes('Opera GX não encontrado'))).toHaveLength(1);
+    expect((await applyWorkerState(db))!.seenAt).toBe(NOON); // nada mudou: nada a publicar
+    expect(await db.select().from(applications)).toEqual([]);
+    expect(site.calls).toEqual([]);
+  });
+
+  it('publishes when it is available, and again whenever that changes', async () => {
+    const logs: string[] = [];
+    let state = { available: true, reason: null as string | null };
+    const q = queue({ enabled: false, availability: () => state, deps: { log: (m) => logs.push(m) } });
+    await q.tick();
+    expect(await applyWorkerState(db)).toEqual({ available: true, reason: null, seenAt: NOON });
+    clock.now += MIN;
+    state = { available: false, reason: 'sem navegador' };
+    await q.tick();
+    expect(await applyWorkerState(db)).toEqual({ available: false, reason: 'sem navegador', seenAt: NOON + MIN });
+    clock.now += MIN;
+    state = { available: true, reason: null };
+    await q.tick();
+    expect(await applyWorkerState(db)).toEqual({ available: true, reason: null, seenAt: NOON + 2 * MIN });
+    expect(logs.filter((l) => l.includes('sem navegador'))).toHaveLength(1);
+  });
+
   it('closes a browser left idle', async () => {
     const q = queue({ enabled: false });
     await browser.page();
@@ -194,6 +231,18 @@ describe('one application', () => {
     expect(await jobRow(jobId)).toMatchObject({ column: 'aplicada', appliedBy: 'humano' });
   });
 
+  it('ends without opening anything an application of a job the owner already applied to', async () => {
+    for (const extra of [{ column: 'entrevista' as const }, { appliedBy: 'humano' as const }]) {
+      const { id: jobId } = await seedJob(db, { version, score: null });
+      await db.update(jobs).set(extra).where(eq(jobs.id, jobId));
+      await createApplication(db, { jobId, site: 'fake', trigger: 'manual', mode: 'real' }, NOON);
+      await runUntilIdle(queue({ mode: 'real' }));
+      expect(await applicationForJob(db, jobId)).toMatchObject({ status: 'skipped', reason: 'already_applied' });
+    }
+    expect(site.calls).toEqual([]);
+    expect(tasks).toEqual([]);
+  });
+
   it('records usage in the apply layer', async () => {
     await candidate();
     await runUntilIdle(queue({ mode: 'real' }));
@@ -242,6 +291,14 @@ describe('crash recovery', () => {
     expect(await applicationForJob(db, jobId)).toMatchObject({ status: 'submitted' });
   });
 
+  it('removes the résumé files a killed run left on disk', async () => {
+    await mkdir(join(dataDir, 'resumes', '7'), { recursive: true });
+    await writeFile(join(dataDir, 'resumes', '7', 'Curriculo.pdf'), 'pdf');
+    await queue().recoverInterrupted();
+    expect(existsSync(join(dataDir, 'resumes'))).toBe(false);
+    expect(existsSync(dataDir)).toBe(true);
+  });
+
   it('turns commands left running into errors', async () => {
     await enqueueApplyCommand(db, 'check_session', 'fake');
     await nextApplyCommand(db);
@@ -267,6 +324,43 @@ describe('answers', () => {
     expect((await applicationForJob(db, job2))!.status).toBe('submitted'); // sem parar
     const answers = (await applicationForJob(db, job2))!.answers;
     expect(answers.find((a) => a.questionId === 'salary')).toMatchObject({ value: '20000', source: 'bank' });
+  });
+
+  it('uses a saved answer tied to a country only on a job of that country', async () => {
+    const visa = { ...BASIC_QUESTIONS[0], id: 'visa', label: 'Do you require visa sponsorship?' };
+    site.variants.form = { questions: [...BASIC_QUESTIONS, visa] };
+    await saveApplyAnswer(db, { question: visa.label, answer: 'No', kind: 'text', scope: 'always', scopeValue: null, country: 'INT' });
+    const q = queue({ mode: 'real' });
+    const { id: abroad } = await candidate({ country: 'INT' });
+    await db.update(jobAi).set({ language: 'pt' }).where(eq(jobAi.jobId, abroad)); // currículo em pt-BR, o perfil semeado
+    await runUntilIdle(q);
+    expect(await applicationForJob(db, abroad)).toMatchObject({ status: 'submitted' });
+    const { id: home } = await candidate({ country: 'BR' });
+    await runUntilIdle(q);
+    expect(await applicationForJob(db, home)).toMatchObject({ status: 'needs_human', reason: 'question' });
+  });
+
+  it('never leaves the owner a file question he cannot answer in the app:the application goes to him to finish on the site', async () => {
+    const cover = { ...BASIC_QUESTIONS[0], id: 'cover', label: 'Cover letter', kind: 'file' as const };
+    site.variants.form = { questions: [...BASIC_QUESTIONS, cover] };
+    const { id: jobId } = await candidate();
+    await runUntilIdle(queue({ mode: 'real' }));
+    expect(await applicationForJob(db, jobId)).toMatchObject({
+      status: 'needs_human', reason: 'unsupported_form', pendingQuestions: [],
+      detail: 'o formulário pede um arquivo que o app não envia (Cover letter); conclua esta candidatura no site',
+    });
+    expect((await jobRow(jobId)).needsHuman).toBe(true);
+    expect((await siteState(db, 'fake')).consecutiveFailures).toBe(0); // o formulário foi lido: não é layout desconhecido
+  });
+
+  it('keeps an optional file question as a pending question', async () => {
+    const cover = { ...BASIC_QUESTIONS[0], id: 'cover', label: 'Cover letter', kind: 'file' as const, required: false };
+    site.variants.form = { questions: [...BASIC_QUESTIONS, cover, { ...BASIC_QUESTIONS[0], id: 'salary', label: 'Pretensão salarial mensal (R$)' }] };
+    const { id: jobId } = await candidate();
+    await runUntilIdle(queue({ mode: 'real' }));
+    const row = (await applicationForJob(db, jobId))!;
+    expect(row).toMatchObject({ status: 'needs_human', reason: 'question' });
+    expect(row.pendingQuestions.map((p) => p.question.id)).toContain('salary');
   });
 
   describe('answers proposed by the model', () => {
@@ -404,6 +498,30 @@ describe('the daily AI limit', () => {
   });
 });
 
+describe('without AI configured', () => {
+  const noAi = { ai: async () => { throw new AiError('config', 'IA não configurada'); } };
+
+  it('an automatic application that needs the gate waits, with a reason the owner can act on', async () => {
+    const { id: jobId } = await candidate();
+    await runUntilIdle(queue({ mode: 'real', deps: noAi }));
+    expect(await applicationForJob(db, jobId)).toMatchObject({
+      status: 'queued', detail: 'IA não configurada; configure em Configurações', attempts: 0, runAfter: NOON + 30 * MIN,
+    });
+    expect(site.calls).toEqual([]);
+  });
+
+  it('a manual application with the base résumé still runs: rules and saved answers apply, the rest goes to the owner', async () => {
+    site.variants.form = { questions: [...BASIC_QUESTIONS, MOTIVATION] };
+    const { id: jobId } = await candidate({ score: null });
+    await createApplication(db, { jobId, site: 'fake', trigger: 'manual', mode: 'real' }, NOON);
+    await runUntilIdle(queue({ mode: 'real', cfg: { resumeMode: 'base', aiAnswers: 'auto' }, deps: noAi }));
+    const row = (await applicationForJob(db, jobId))!;
+    expect(row).toMatchObject({ status: 'needs_human', reason: 'question', attempts: 0 });
+    expect(row.pendingQuestions.map((p) => p.question.id)).toEqual(['why']);
+    expect(row.answers.find((a) => a.questionId === 'name')).toMatchObject({ source: 'rule' });
+  });
+});
+
 describe('limits and working hours', () => {
   it('does not count yesterday and starts nothing automatic outside working hours', async () => {
     // 15 formulários fake abertos ontem às 23:59 no fuso; agora 08:00: ainda cabem 15
@@ -465,6 +583,14 @@ describe('the state of a site', () => {
     expect((await applicationForJob(db, leverJob))!.status).toBe('submitted');
     const rows = await db.select().from(applications).where(eq(applications.site, 'fake'));
     expect(rows.filter((r) => r.status === 'queued')).toHaveLength(1);
+  });
+
+  it('a finished rehearsal resets the unknown-layout streak, and leaves the after-click one', async () => {
+    await updateSiteState(db, 'fake', { consecutiveFailures: 2, consecutiveRejections: 2 });
+    const { id: jobId } = await candidate();
+    await runUntilIdle(queue({ mode: 'dry_run' }));
+    expect((await applicationForJob(db, jobId))!.status).toBe('dry_run_ready');
+    expect(await siteState(db, 'fake')).toMatchObject({ paused: false, consecutiveFailures: 0, consecutiveRejections: 2 });
   });
 
   it('pauses a site at once on a restriction page', async () => {
@@ -599,6 +725,21 @@ describe('errors', () => {
     expect((await siteState(db, 'fake')).consecutiveFailures).toBe(0);
   });
 
+  it('sends to the owner to confirm, at once, an application whose result could not be recorded after the click', async () => {
+    site.variants.form = {
+      submit: async () => {
+        // O banco falha na gravação do resultado, logo depois do clique.
+        vi.mocked(lockApplication).mockRejectedValueOnce(new Error('conexão perdida'));
+        return { confirmation: 'Recebida' };
+      },
+    };
+    const { id: jobId } = await candidate();
+    await runUntilIdle(queue({ mode: 'real' }));
+    expect(await applicationForJob(db, jobId)).toMatchObject({ status: 'needs_human', reason: 'confirm_submission' });
+    expect((await jobRow(jobId)).needsHuman).toBe(true);
+    expect(site.calls.filter((c) => c === 'submit')).toHaveLength(1);
+  });
+
   it('aborts work that runs past the time limit, discards the form and counts a transient error', async () => {
     let release!: () => void;
     site.variants.form = { readStep: () => new Promise<void>((resolve) => { release = resolve; }) };
@@ -640,6 +781,25 @@ describe('the site mode when an application starts', () => {
     const jobId = await queuedRow('real', { approvedAnswers: approved });
     await runUntilIdle(queue({ mode: 'dry_run' }));
     expect(await applicationForJob(db, jobId)).toMatchObject({ status: 'submitted', mode: 'real' });
+  });
+
+  it('sends a row the owner approved past the current minimum score and the company cap, but not past the block list', async () => {
+    const jobId = await queuedRow('real', { approvedAnswers: approved, gateScore: 72 });
+    const company = (await jobRow(jobId)).company;
+    // Duas candidaturas da mesma empresa já abertas no período: o limite por empresa está cheio.
+    for (let i = 0; i < 2; i++) {
+      const other = await candidate({ score: null, company });
+      const id = (await createApplication(db, { jobId: other.id, site: 'fake', trigger: 'auto', mode: 'real' }, NOON))!;
+      await db.update(applications).set({ status: 'submitted', formOpenedAt: NOON - HOUR }).where(eq(applications.id, id));
+    }
+    await runUntilIdle(queue({ mode: 'real', cfg: { minScore: 90 } }));
+    expect(await applicationForJob(db, jobId)).toMatchObject({ status: 'submitted', gateScore: 72 });
+    expect(tasks).not.toContain('apply_gate');
+
+    const blocked = await queuedRow('real', { approvedAnswers: approved, gateScore: 95 });
+    await db.update(jobs).set({ company: 'Bloqueada SA' }).where(eq(jobs.id, blocked));
+    await runUntilIdle(queue({ mode: 'real', cfg: { blockedCompanies: ['Bloqueada'] } }));
+    expect(await applicationForJob(db, blocked)).toMatchObject({ status: 'skipped', reason: 'blocked' });
   });
 
   it('never turns a rehearsal into a real send when the site went real', async () => {
@@ -794,7 +954,7 @@ describe('the daily cap and a form already opened today', () => {
 });
 
 describe('old photos', () => {
-  it('deletes the files past the retention and drops them from the row', async () => {
+  for (const enabled of [true, false]) it(`deletes the files past the retention and drops them from the row (feature ${enabled ? 'on' : 'off'})`, async () => {
     const { id: jobId } = await candidate({ score: null });
     const id = (await createApplication(db, { jobId, site: 'fake', trigger: 'auto', mode: 'real' }, NOON))!;
     const shots = { filled: `shots/${id}/filled.jpg`, confirmation: `shots/${id}/confirmation.jpg` };
@@ -806,7 +966,7 @@ describe('old photos', () => {
     const recent = (NOON - 86_400_000) / 1000;
     await utimes(join(dataDir, shots.confirmation), recent, recent);
 
-    await queue().tick();
+    await queue({ enabled }).tick();
     expect(existsSync(join(dataDir, shots.filled))).toBe(false);
     expect(existsSync(join(dataDir, shots.confirmation))).toBe(true);
     expect((await applicationForJob(db, jobId))!.shots).toEqual({ confirmation: shots.confirmation });

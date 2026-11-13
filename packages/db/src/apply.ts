@@ -1,11 +1,11 @@
-import { and, asc, desc, eq, gte, inArray, isNotNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, getTableColumns, gte, inArray, isNotNull, sql, type SQL } from 'drizzle-orm';
 import type {
-  ApplicationDto, ApplicationEventDto, ApplicationListItemDto, ApplicationReason, ApplicationStatus, ApplyMode, ApplySiteId,
-  ApplyTrigger,
+  ApplicationDto, ApplicationEventDto, ApplicationFilter, ApplicationListItemDto, ApplicationReason, ApplicationStatus, ApplyMode,
+  ApplySiteId, ApplyTrigger, ApplyWorkerState, JobListItemDto,
 } from '@kv/shared';
-import { APPLY_SITE_IDS } from '@kv/shared';
+import { APPLICATION_FILTERS, APPLICATION_FILTER_STATUSES, APPLY_SITE_IDS, applicationFilterOf, isAppliedOrLater } from '@kv/shared';
 import type { Db } from './client';
-import { applicationEvents as eventsTable, applications, applyAnswers, applyCommands, applySites, candidateProfiles, jobAi, jobs } from './schema';
+import { applicationEvents as eventsTable, applications, applyAnswers, applyCommands, applySites, candidateProfiles, jobAi, jobs, settings } from './schema';
 
 export type ApplicationRow = typeof applications.$inferSelect;
 export type ApplyCommandRow = typeof applyCommands.$inferSelect;
@@ -39,6 +39,11 @@ export interface Transition {
   status: ApplicationStatus;
   /** Só grava se o estado atual está na lista (a leitura e a escrita são na mesma transação travada); senão devolve false. */
   from?: readonly ApplicationStatus[];
+  /**
+   * Não grava (devolve false) se o dono pediu o cancelamento: o pedido é lido na mesma transação travada, então um
+   * cancelamento gravado antes da escrita sempre vence (o `submitting` antes do clique final usa isto).
+   */
+  unlessCancelled?: true;
   reason?: ApplicationReason | null;
   detail?: string | null;
   /** Texto do evento na linha do tempo. */
@@ -79,6 +84,7 @@ export async function transitionApplication(db: Db, id: number, t: Transition, n
     const [row] = await tx.select().from(applications).where(eq(applications.id, id)).for('update');
     if (!row || row.status === 'submitted') return false;
     if (t.from && !t.from.includes(row.status)) return false;
+    if (t.unlessCancelled && row.cancelRequested) return false;
     await writeTransition(tx, row, t, now);
     return true;
   });
@@ -128,12 +134,19 @@ export async function listApplicationEvents(db: Db, id: number): Promise<Applica
   return rows;
 }
 
-/** Mais novas primeiro, até 200. Não seleciona o PDF. */
+/** Teto de linhas de `listApplications` (por filtro). */
+export const APPLICATION_LIST_LIMIT = 200;
+
+/**
+ * Mais novas primeiro, até 200 (`APPLICATION_LIST_LIMIT`), do filtro da aba (`filter`), de um estado ou de um site. Não
+ * seleciona o PDF. As contagens verdadeiras de cada filtro vêm de `applicationFilterCounts`.
+ */
 export async function listApplications(
   db: Db,
-  filter: { status?: ApplicationStatus; site?: ApplySiteId },
+  filter: { filter?: ApplicationFilter; status?: ApplicationStatus; site?: ApplySiteId },
 ): Promise<ApplicationListItemDto[]> {
   const conditions = [];
+  if (filter.filter) conditions.push(inArray(applications.status, [...APPLICATION_FILTER_STATUSES[filter.filter]]));
   if (filter.status) conditions.push(eq(applications.status, filter.status));
   if (filter.site) conditions.push(eq(applications.site, filter.site));
   return db
@@ -156,7 +169,37 @@ export async function listApplications(
     .innerJoin(jobs, eq(jobs.id, applications.jobId))
     .where(conditions.length > 0 ? and(...conditions) : undefined)
     .orderBy(desc(applications.createdAt), desc(applications.id))
-    .limit(200);
+    .limit(APPLICATION_LIST_LIMIT);
+}
+
+/** Quantas candidaturas há em cada filtro da aba, contadas no banco sobre todas as linhas. */
+export async function applicationFilterCounts(db: Db): Promise<Record<ApplicationFilter, number>> {
+  const rows = await db
+    .select({ status: applications.status, n: sql<number>`count(*)::int`.mapWith(Number) })
+    .from(applications)
+    .groupBy(applications.status);
+  const counts = Object.fromEntries(APPLICATION_FILTERS.map((f) => [f, 0])) as Record<ApplicationFilter, number>;
+  for (const r of rows) counts[applicationFilterOf(r.status)] += r.n;
+  return counts;
+}
+
+/**
+ * Colunas de um item do quadro: tudo o que o card usa. Ficam de fora a descrição (o campo mais pesado, só lido no
+ * detalhe da vaga) e o `dedupHash` (interno do worker).
+ */
+const { description: _description, dedupHash: _dedupHash, ...JOB_LIST_COLUMNS } = getTableColumns(jobs);
+
+/**
+ * As vagas do quadro (`GET /jobs`), com o estado da candidatura de cada uma (null sem candidatura), na ordem do quadro
+ * (posição, id). `where` filtra pela tabela `jobs`.
+ */
+export async function listJobItems(db: Db, where?: SQL): Promise<JobListItemDto[]> {
+  return db
+    .select({ ...JOB_LIST_COLUMNS, applicationStatus: applications.status })
+    .from(jobs)
+    .leftJoin(applications, eq(applications.jobId, jobs.id))
+    .where(where)
+    .orderBy(asc(jobs.position), asc(jobs.id));
 }
 
 /** Sem os bytes do PDF: só `hasResume`. */
@@ -167,7 +210,7 @@ export function toApplicationDto(row: ApplicationRow, events: ApplicationEventDt
     resumeFileName: row.resumeFileName, hasResume: row.resumePdf !== null, answers: row.answers,
     pendingQuestions: row.pendingQuestions, confirmation: row.confirmation,
     shots: Object.keys(row.shots) as ApplicationDto['shots'], attempts: row.attempts, createdAt: row.createdAt,
-    startedAt: row.startedAt, submittedAt: row.submittedAt, finishedAt: row.finishedAt, events,
+    startedAt: row.startedAt, submittedAt: row.submittedAt, finishedAt: row.finishedAt, cancelRequested: row.cancelRequested, events,
   };
 }
 
@@ -291,10 +334,12 @@ export async function recoverApplications(db: Db, now: number = Date.now()): Pro
 /**
  * O dono moveu o card: `queued`, `needs_human` e `dry_run_ready` viram `cancelled` na hora; `preparing`, `filling`,
  * `waiting_human` e `submitting` ganham `cancel_requested` (o worker para). `submitted`, `skipped`, `failed` e `cancelled`
- * ficam como estão. Devolve se havia o que cancelar.
+ * ficam como estão. Devolve se havia o que cancelar. Trava a vaga e depois a candidatura.
  */
 export async function requestCancel(db: Db, jobId: number, now: number = Date.now()): Promise<boolean> {
   return db.transaction(async (tx) => {
+    const [job] = await tx.select({ id: jobs.id }).from(jobs).where(eq(jobs.id, jobId)).for('update');
+    if (!job) return false;
     const [row] = await tx.select().from(applications).where(eq(applications.jobId, jobId)).for('update');
     if (!row) return false;
     if (row.status === 'queued' || row.status === 'needs_human' || row.status === 'dry_run_ready') {
@@ -368,6 +413,33 @@ export async function finishApplyCommand(
     .where(eq(applyCommands.id, id));
 }
 
+/**
+ * Chave da linha de `settings` onde o worker publica se a candidatura automática pode rodar nele. Não é uma configuração
+ * da tela (o serviço de configurações ignora chaves que não conhece) e sobrevive a "Apagar todos os dados de IA".
+ */
+const WORKER_STATE_KEY = 'applyWorkerState';
+
+/** O worker publica a disponibilidade (no início e quando muda); a API a mostra em `GET /apply/status`. */
+export async function saveApplyWorkerState(
+  db: Db, state: { available: boolean; reason: string | null }, now: number = Date.now(),
+): Promise<void> {
+  const value = { available: state.available, reason: state.reason, seenAt: now };
+  await db
+    .insert(settings)
+    .values({ key: WORKER_STATE_KEY, value, updatedAt: now })
+    .onConflictDoUpdate({ target: settings.key, set: { value, updatedAt: now } });
+}
+
+/** O que o worker publicou da última vez; null se nenhum worker publicou (ou a linha não tem a forma esperada). */
+export async function applyWorkerState(db: Db): Promise<ApplyWorkerState | null> {
+  const [row] = await db.select({ value: settings.value }).from(settings).where(eq(settings.key, WORKER_STATE_KEY));
+  const v = row?.value as Partial<ApplyWorkerState> | undefined;
+  if (!v || typeof v.available !== 'boolean' || typeof v.seenAt !== 'number' || !(v.reason === null || typeof v.reason === 'string')) {
+    return null;
+  }
+  return { available: v.available, reason: v.reason, seenAt: v.seenAt };
+}
+
 /** Lê o estado do site, criando a linha com os padrões na primeira vez. */
 export async function siteState(db: Db, site: ApplySiteId): Promise<ApplySiteRow> {
   await db.insert(applySites).values({ site }).onConflictDoNothing();
@@ -381,13 +453,35 @@ export async function updateSiteState(db: Db, site: ApplySiteId, patch: Partial<
   await db.update(applySites).set(patch).where(eq(applySites.site, site));
 }
 
-/** Apaga o banco de respostas e esvazia respostas, pendências, PDF, fotos, e-mail e confirmação das candidaturas; estado e datas ficam. */
-export async function deleteApplyData(db: Db): Promise<void> {
+/**
+ * Apaga o banco de respostas e esvazia o conteúdo das candidaturas: respostas, pendências, PDF, fotos (a coluna; os
+ * arquivos em `<pasta de dados>/shots` e `/resumes` são da rota), e-mail, confirmação, detalhe e os textos dos eventos.
+ * Estado e datas ficam, menos nas que esperavam perguntas do dono: sem as pendências não há o que responder, então viram
+ * `cancelled` e a marca "precisa de você" do card sai. Trava as vagas antes das candidaturas.
+ */
+export async function deleteApplyData(db: Db, now: number = Date.now()): Promise<void> {
   await db.transaction(async (tx) => {
     await tx.delete(applyAnswers);
+    await tx.update(eventsTable).set({ message: null });
+    const questionWait = and(eq(applications.status, 'needs_human'), eq(applications.reason, 'question'));
+    const waitingJobs = (await tx.select({ jobId: applications.jobId }).from(applications).where(questionWait)).map((r) => r.jobId);
+    if (waitingJobs.length > 0) {
+      await tx.update(jobs).set({ needsHuman: false, needsHumanReason: null }).where(inArray(jobs.id, waitingJobs));
+    }
+    const waiting = await tx.select().from(applications).where(questionWait).orderBy(asc(applications.id)).for('update');
     await tx
       .update(applications)
-      .set({ answers: [], approvedAnswers: [], pendingQuestions: [], resumePdf: null, shots: {}, contactEmail: null, confirmation: null });
+      .set({
+        answers: [], approvedAnswers: [], pendingQuestions: [], resumePdf: null, shots: {}, contactEmail: null, confirmation: null,
+        detail: null,
+      });
+    for (const row of waiting) {
+      await writeTransition(
+        tx, row,
+        { status: 'cancelled', message: 'Os dados de IA foram apagados: a candidatura foi cancelada.', set: { cancelRequested: false, waitingGate: null } },
+        now,
+      );
+    }
   });
 }
 
@@ -395,6 +489,60 @@ export async function deleteApplyData(db: Db): Promise<void> {
 export async function lockApplication(db: Db, id: number): Promise<ApplicationRow | null> {
   const [row] = await db.select().from(applications).where(eq(applications.id, id)).for('update');
   return row ?? null;
+}
+
+export type JobRow = typeof jobs.$inferSelect;
+
+/**
+ * A vaga e a candidatura travadas, nesta ordem (`db` é a transação): a ordem dos locks é uma só em todo lugar, a vaga
+ * primeiro (a rota que move o card trava a vaga e depois a candidatura). Null se a candidatura não existe.
+ */
+export async function lockApplicationWithJob(db: Db, id: number): Promise<{ row: ApplicationRow; job: JobRow } | null> {
+  const [ref] = await db.select({ jobId: applications.jobId }).from(applications).where(eq(applications.id, id));
+  if (!ref) return null;
+  const [job] = await db.select().from(jobs).where(eq(jobs.id, ref.jobId)).for('update');
+  if (!job) return null;
+  const row = await lockApplication(db, id);
+  return row ? { row, job } : null;
+}
+
+/** O dono já se candidatou a esta vaga: o card está em Aplicada ou depois, ou `applied_by` está preenchido. */
+export function jobAlreadyApplied(job: Pick<JobRow, 'column' | 'appliedBy'>): boolean {
+  return isAppliedOrLater(job.column) || job.appliedBy !== null;
+}
+
+const APPLIED_BY_OWNER_MESSAGE = 'Você marcou esta vaga como aplicada.';
+
+/**
+ * O dono moveu o card para Aplicada ou depois (ou disse "Já apliquei por conta própria"): uma candidatura em `queued`,
+ * `needs_human` (qualquer motivo, `confirm_submission` também) ou `dry_run_ready` vira `skipped` com `already_applied`, sem
+ * pendências, e a marca "precisa de você" do card sai; uma em andamento só ganha o pedido de cancelamento. As demais ficam
+ * como estão. Trava a vaga e depois a candidatura. Devolve se havia o que mudar.
+ */
+export async function settleAppliedByOwner(db: Db, jobId: number, now: number = Date.now()): Promise<boolean> {
+  return db.transaction(async (tx) => {
+    const [job] = await tx.select({ id: jobs.id }).from(jobs).where(eq(jobs.id, jobId)).for('update');
+    if (!job) return false;
+    const [row] = await tx.select().from(applications).where(eq(applications.jobId, jobId)).for('update');
+    if (!row) return false;
+    if (row.status === 'queued' || row.status === 'needs_human' || row.status === 'dry_run_ready') {
+      await writeTransition(
+        tx, row,
+        {
+          status: 'skipped', reason: 'already_applied', message: APPLIED_BY_OWNER_MESSAGE,
+          set: { pendingQuestions: [], cancelRequested: false, waitingGate: null, runAfter: null },
+        },
+        now,
+      );
+      await tx.update(jobs).set({ needsHuman: false, needsHumanReason: null }).where(eq(jobs.id, jobId));
+      return true;
+    }
+    if ((RUNNING_STATUSES as readonly string[]).includes(row.status)) {
+      await tx.update(applications).set({ cancelRequested: true }).where(eq(applications.id, row.id));
+      return true;
+    }
+    return false;
+  });
 }
 
 /** Quantas candidaturas esperam na fila, quantas esperam o dono e quantas estão em andamento. */
@@ -423,19 +571,23 @@ export async function waitingApplication(db: Db): Promise<{ applicationId: numbe
   return row ? { ...row, gate: row.gate ?? 'unknown' } : null;
 }
 
-export type RetryOutcome = 'queued' | 'not_found' | 'sent' | 'in_progress' | 'confirm_submission' | 'not_retryable';
+export type RetryOutcome = 'queued' | 'not_found' | 'sent' | 'in_progress' | 'already_applied' | 'confirm_submission' | 'not_retryable';
 
 /**
  * Botão "Tentar de novo": `needs_human`, `failed`, `skipped` e `cancelled` voltam a `queued` (sem espera e sem tentativas
  * gastas; uma pulada pela conferência, `below_min_score` ou `not_eligible`, volta como manual). Nunca copia nada para `approved_answers`. `submitted` é recusada (`sent`), uma linha em andamento também
- * (`in_progress`), e uma parada em `confirm_submission` nunca volta por botão: depois do clique ninguém sabe se o site recebeu.
+ * (`in_progress`), uma vaga que o dono já aplicou (`already_applied`: card em Aplicada ou depois, ou `applied_by`
+ * preenchido) também, e uma parada em `confirm_submission` nunca volta por botão: depois do clique ninguém sabe se o site
+ * recebeu. Trava a vaga e depois a candidatura.
  */
 export async function retryApplication(db: Db, id: number, now: number = Date.now()): Promise<RetryOutcome> {
   return db.transaction(async (tx) => {
-    const row = await lockApplication(tx, id);
-    if (!row) return 'not_found';
+    const locked = await lockApplicationWithJob(tx, id);
+    if (!locked) return 'not_found';
+    const { row, job } = locked;
     if (row.status === 'submitted') return 'sent';
     if ((RUNNING_STATUSES as readonly string[]).includes(row.status)) return 'in_progress';
+    if (jobAlreadyApplied(job)) return 'already_applied';
     if (row.status === 'needs_human' && row.reason === 'confirm_submission') return 'confirm_submission';
     if (!['needs_human', 'failed', 'skipped', 'cancelled'].includes(row.status)) return 'not_retryable';
     // Tentar de novo uma vaga que a conferência pulou é a mesma decisão de "Aplicar com IA": volta como manual.
@@ -470,28 +622,57 @@ async function approveRow(tx: Db, row: ApplicationRow, now: number): Promise<voi
   });
 }
 
-/** "Enviar de verdade": só de `dry_run_ready`. As respostas do ensaio viram `approved_answers`. */
-export async function sendRehearsal(db: Db, id: number, now: number = Date.now()): Promise<'queued' | 'not_found' | 'not_rehearsal'> {
+/**
+ * "Enviar de verdade": só de `dry_run_ready` e de uma vaga que o dono ainda não aplicou (`already_applied`). As respostas
+ * do ensaio viram `approved_answers`. Trava a vaga e depois a candidatura.
+ */
+export async function sendRehearsal(
+  db: Db, id: number, now: number = Date.now(),
+): Promise<'queued' | 'not_found' | 'not_rehearsal' | 'already_applied'> {
   return db.transaction(async (tx) => {
-    const row = await lockApplication(tx, id);
-    if (!row) return 'not_found';
+    const locked = await lockApplicationWithJob(tx, id);
+    if (!locked) return 'not_found';
+    const { row, job } = locked;
     if (row.status !== 'dry_run_ready') return 'not_rehearsal';
+    if (jobAlreadyApplied(job)) return 'already_applied';
     await approveRow(tx, row, now);
     return 'queued';
   });
 }
 
-/** O mesmo para todos os ensaios prontos. Devolve quantos. */
-export async function sendAllRehearsals(db: Db, now: number = Date.now()): Promise<number> {
+/**
+ * "Enviar todos os ensaios": o mesmo de `sendRehearsal` para exatamente as candidaturas de `ids` (as que a tela listou)
+ * que ainda estão em `dry_run_ready` e cuja vaga o dono não aplicou. Devolve quantas foram para a fila e quantas ficaram
+ * de fora (não existem, saíram do ensaio, vaga já aplicada). Trava as vagas e depois as candidaturas.
+ */
+export async function sendAllRehearsals(
+  db: Db, ids: number[], now: number = Date.now(),
+): Promise<{ queued: number; skipped: number }> {
+  const wanted = [...new Set(ids)];
+  if (wanted.length === 0) return { queued: 0, skipped: 0 };
   return db.transaction(async (tx) => {
+    const refs = await tx.select({ jobId: applications.jobId }).from(applications).where(inArray(applications.id, wanted));
+    const lockedJobs = refs.length === 0 ? [] : await tx
+      .select()
+      .from(jobs)
+      .where(inArray(jobs.id, refs.map((r) => r.jobId)))
+      .orderBy(asc(jobs.id))
+      .for('update');
+    const jobById = new Map(lockedJobs.map((j) => [j.id, j]));
     const rows = await tx
       .select()
       .from(applications)
-      .where(eq(applications.status, 'dry_run_ready'))
+      .where(and(inArray(applications.id, wanted), eq(applications.status, 'dry_run_ready')))
       .orderBy(asc(applications.id))
       .for('update');
-    for (const row of rows) await approveRow(tx, row, now);
-    return rows.length;
+    let queued = 0;
+    for (const row of rows) {
+      const job = jobById.get(row.jobId);
+      if (!job || jobAlreadyApplied(job)) continue;
+      await approveRow(tx, row, now);
+      queued += 1;
+    }
+    return { queued, skipped: wanted.length - queued };
   });
 }
 
@@ -500,12 +681,24 @@ export async function sendAllRehearsals(db: Db, now: number = Date.now()): Promi
  * desligada: uma resposta nova pode servir a elas. Mantêm `approved_answers` e `mode`. Devolve os ids.
  */
 export async function requeueQuestionWaits(db: Db, exceptId: number, now: number = Date.now()): Promise<number[]> {
+  const waiting = and(eq(applications.status, 'needs_human'), eq(applications.reason, 'question'), sql`${applications.id} <> ${exceptId}`);
+  const candidates = await db.select({ jobId: applications.jobId }).from(applications).where(waiting);
+  if (candidates.length === 0) return [];
+  // A vaga primeiro, depois a candidatura (a ordem de todo lugar). Uma vaga ou linha que outra ação do dono já travou
+  // (outro PUT de respostas, que recoloca a linha dele na fila; uma mudança de card, que a cancela) fica de fora:
+  // pular evita o impasse entre as duas.
+  const lockedJobs = await db
+    .select({ id: jobs.id })
+    .from(jobs)
+    .where(inArray(jobs.id, candidates.map((c) => c.jobId)))
+    .orderBy(asc(jobs.id))
+    .for('update', { skipLocked: true });
+  if (lockedJobs.length === 0) return [];
   const rows = await db
     .select()
     .from(applications)
-    .where(and(eq(applications.status, 'needs_human'), eq(applications.reason, 'question'), sql`${applications.id} <> ${exceptId}`))
+    .where(and(waiting, inArray(applications.jobId, lockedJobs.map((j) => j.id))))
     .orderBy(asc(applications.id))
-    // Uma linha que outro PUT de respostas já travou é recolocada na fila por ele: pular evita o impasse entre os dois.
     .for('update', { skipLocked: true });
   for (const row of rows) {
     await writeTransition(db, row, { status: 'queued', message: 'Uma resposta nova foi salva: voltou para a fila.', set: { runAfter: null, cancelRequested: false } }, now);

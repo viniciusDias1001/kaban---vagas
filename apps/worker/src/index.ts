@@ -96,7 +96,8 @@ const aiTimer = setInterval(() => void pollAi(), POLL_MS);
 void pollAi();
 
 // Fila de candidaturas: uma candidatura por vez, com timer próprio. Indisponível (HOST não local ou sem navegador) ela
-// não faz nada; desligada, só atende os comandos de conta do app. Liga e desliga pela aba Configurações, sem reiniciar.
+// publica o motivo para a tela, registra-o no log e termina os comandos de conta do app com ele; desligada, só atende os
+// comandos de conta. Liga e desliga pela aba Configurações, sem reiniciar.
 const apply = createApplyRuntime(db, settings, { log });
 await apply.recoverInterrupted();
 async function pollApply() {

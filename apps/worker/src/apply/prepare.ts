@@ -1,16 +1,18 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { eq } from 'drizzle-orm';
-import { baseProfile, applications, companyFormsSince, jobs, profileFor, updateSiteState, type ApplicationRow, type Db } from '@kv/db';
+import {
+  baseProfile, applications, companyFormsSince, jobAlreadyApplied, jobs, profileFor, updateSiteState, type ApplicationRow, type Db,
+} from '@kv/db';
 import { gateJob, type JobForAi } from '@kv/ai';
 import { decideGate, isBlocked, siteFor, type ApplySite, type ApplyTarget, type BrowserSession } from '@kv/apply';
 import { MAX_DESCRIPTION_CHARS, type DescriptionFetcher } from '@kv/connectors';
-import { APPLY_DEFAULTS, type ApplyConfig, type CandidateProfile, type ResumeLang } from '@kv/shared';
+import { APPLY_DEFAULTS, APPLY_TIMING, type ApplyConfig, type CandidateProfile, type ResumeLang } from '@kv/shared';
 import type { Billing } from '../ai/billing';
 import type { ApplyAi } from './ai-calls';
 import { moveCardByAi } from './board';
 import { DAY_MS } from './day';
-import { cancelRequested, requeueTomorrow, settle, stopForOwner, BUDGET_DETAIL } from './outcome';
+import { BEFORE_CLICK, cancelRequested, requeueTomorrow, settle, stopForOwner, BUDGET_DETAIL } from './outcome';
 import { applicationResume } from './resume';
 
 export type JobRow = typeof jobs.$inferSelect;
@@ -40,6 +42,9 @@ export interface Prepared {
 }
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+export const NO_AI_DETAIL = 'IA não configurada; configure em Configurações';
+/** Sem IA configurada, a candidatura automática olha de novo depois disto (sem gastar tentativa). */
+const NO_AI_RETRY_MS = APPLY_TIMING.retryMs[1];
 const NO_BILLING: Billing = {
   provider: { id: 'fake', generate: async () => { throw new Error('nenhuma chamada ao modelo era esperada aqui'); } },
   billed: async () => { throw new Error('nenhuma chamada ao modelo era esperada aqui'); },
@@ -89,6 +94,11 @@ export async function prepare(c: PrepareContext, row: ApplicationRow): Promise<P
 
   const [found] = await db.select().from(jobs).where(eq(jobs.id, row.jobId));
   if (!found) return null; // vaga apagada: a candidatura foi junto
+  // O dono já se candidatou (card em Aplicada ou depois, ou `applied_by`): nada se abre, nem a conferência.
+  if (jobAlreadyApplied(found)) {
+    await settle(db, row.id, { status: 'skipped', reason: 'already_applied', message: 'Você já se candidatou a esta vaga.' }, c.now());
+    return null;
+  }
   const match = siteFor(
     { id: found.id, source: found.source, url: found.url, externalId: found.externalId, company: found.company, title: found.title },
     c.sites,
@@ -98,11 +108,16 @@ export async function prepare(c: PrepareContext, row: ApplicationRow): Promise<P
     return null;
   }
   const job = await withDescription(c, found);
-  const manual = row.trigger === 'manual';
+  // Uma linha que o dono mandou enviar ("Enviar de verdade", com respostas aprovadas) vale como pedido dele: a conferência,
+  // a nota mínima e o limite por empresa não a seguram mais. A lista de bloqueio, os limites diários, o orçamento e o
+  // modo do site continuam valendo.
+  const ownerApproved = row.approvedAnswers.length > 0;
+  const manual = row.trigger === 'manual' || ownerApproved;
 
   // Bloqueio (vale também para o pedido manual), limite por empresa e conferência da vaga (só automáticas).
   const blockedBy = isBlocked(job, cfg);
   let gate: { score: number; eligible: boolean; ineligibleReason: string } | null = null;
+  if (ownerApproved && row.gateScore !== null) gate = { score: row.gateScore, eligible: true, ineligibleReason: '' };
   if (!manual && blockedBy === null) {
     const since = c.now() - APPLY_DEFAULTS.companyCapDays * DAY_MS;
     let used = await companyFormsSince(db, job.company, since);
@@ -117,6 +132,14 @@ export async function prepare(c: PrepareContext, row: ApplicationRow): Promise<P
       // de uma vaga que passou: uma pulada pela conferência que o dono manda tentar de novo volta como manual
       // (`retryApplication`) e nem chega aqui.
       gate = { score: row.gateScore, eligible: true, ineligibleReason: '' };
+    } else if (!(await c.ai.configured())) {
+      // Sem IA não há conferência: a candidatura automática espera (sem gastar tentativa) até o dono configurar a IA.
+      await settle(
+        db, row.id,
+        { status: 'queued', detail: NO_AI_DETAIL, message: NO_AI_DETAIL, from: BEFORE_CLICK, set: { runAfter: c.now() + NO_AI_RETRY_MS } },
+        c.now(),
+      );
+      return null;
     } else {
       const profile = await baseProfile(db);
       if (profile) gate = (await c.ai.call('fast', (p) => gateJob(p, profile.data, jobForAi(job), { signal: c.signal }))).data;

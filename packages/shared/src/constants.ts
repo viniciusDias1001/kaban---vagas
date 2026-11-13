@@ -15,7 +15,12 @@ export const COLUMN_LABELS: Record<Column, string> = {
   arquivada: 'Arquivada',
 };
 
-export const LEVELS = ['junior', 'pleno', 'senior'] as const;
+/** A vaga já foi aplicada: o card está em Aplicada ou numa coluna depois dela (Entrevista, Oferta, Arquivada). */
+export function isAppliedOrLater(column: Column): boolean {
+  return COLUMNS.indexOf(column) >= COLUMNS.indexOf('aplicada');
+}
+
+export const LEVELS =['junior', 'pleno', 'senior'] as const;
 export type Level = (typeof LEVELS)[number];
 
 export const REGIONS = ['brasil', 'exterior', 'remoto'] as const;

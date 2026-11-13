@@ -7,9 +7,10 @@ import {
   waitingApplication, listApplicationEvents, applicationForJob, applyCandidates, applyCountsSince, companyFormsSince, createApplication,
   deleteApplyData, enqueueApplyCommand, finishApplyCommand, listApplications, nextApplyCommand, nextQueuedApplication,
   recoverApplications, recoverApplyCommands, requestCancel, siteState, toApplicationDto, transitionApplication, updateSiteState,
+  settleAppliedByOwner, lockApplicationWithJob, applyWorkerState, saveApplyWorkerState, applicationFilterCounts, listJobItems,
 } from './apply';
 import { deleteAllAiData } from './ai';
-import { applications, applyAnswers, applyCommands, candidateProfiles, jobAi, jobs } from './schema';
+import { applications, applyAnswers, applyCommands, candidateProfiles, jobAi, jobs, settings } from './schema';
 import { createTestDb, resetTestDb } from './testing';
 
 let db: Db;
@@ -94,6 +95,15 @@ describe('createApplication / transitionApplication', () => {
     expect(await applicationForJob(db, job.id)).toMatchObject({ status: 'preparing', startedAt: 5004 });
   });
 
+  it('refuses a transition marked unlessCancelled when the cancel flag is set, under the same lock', async () => {
+    const { job, id } = await create();
+    await transitionApplication(db, id, { status: 'filling' }, 2000);
+    await db.update(applications).set({ cancelRequested: true }).where(eq(applications.id, id));
+    expect(await transitionApplication(db, id, { status: 'submitting', from: ['filling'], unlessCancelled: true }, 3000)).toBe(false);
+    expect(await applicationForJob(db, job.id)).toMatchObject({ status: 'filling', cancelRequested: true });
+    expect(await transitionApplication(db, id, { status: 'cancelled', from: ['filling'] }, 3000)).toBe(true);
+  });
+
   it('returns false for an unknown id', async () => {
     expect(await transitionApplication(db, 999, { status: 'queued' }, 1)).toBe(false);
   });
@@ -139,9 +149,67 @@ describe('queue reads', () => {
     expect(await listApplications(db, { status: 'needs_human' })).toHaveLength(1);
     const row = (await applicationForJob(db, b.job.id))!;
     const dto = toApplicationDto(row, await listApplicationEvents(db, b.id));
-    expect(dto).toMatchObject({ id: b.id, hasResume: true, resumeFileName: 'cv.pdf' });
+    expect(dto).toMatchObject({ id: b.id, hasResume: true, resumeFileName: 'cv.pdf', cancelRequested: false });
+    expect(toApplicationDto({ ...row, cancelRequested: true }, []).cancelRequested).toBe(true);
     expect(JSON.stringify(dto)).not.toContain('resumePdf');
     expect(dto.events).toHaveLength(2);
+  });
+});
+
+describe('lists, counts and the board', () => {
+  /** `n` candidaturas no estado dado, criadas em lote (vaga e candidatura), com `createdAt` crescente a partir de `from`. */
+  async function bulk(n: number, status: 'skipped' | 'dry_run_ready' | 'queued' | 'cancelled', from: number) {
+    const base = seq;
+    seq += n;
+    const rows = await db.insert(jobs).values(Array.from({ length: n }, (_, i) => {
+      const url = `https://example.com/bulk/${base + i}`;
+      return {
+        source: 'gupy', externalId: url, url, title: 'Dev', company: 'ACME', location: 'Remoto', country: 'BR' as const,
+        remote: true, stacks: [], description: '', discoveredAt: 1, dedupHash: url, position: base + i,
+      };
+    })).returning({ id: jobs.id });
+    return db.insert(applications).values(rows.map((r, i) => ({
+      jobId: r.id, site: 'fake' as const, status, trigger: 'auto' as const, mode: 'real' as const, createdAt: from + i,
+    }))).returning({ id: applications.id, jobId: applications.jobId });
+  }
+
+  it('counts every filter over all rows and lists the 200 newest of one filter', async () => {
+    const old = await bulk(205, 'cancelled', 1000);
+    await bulk(3, 'skipped', 5000);
+    await bulk(2, 'dry_run_ready', 6000);
+    const running = await create();
+    await transitionApplication(db, running.id, { status: 'filling' });
+    expect(await applicationFilterCounts(db)).toEqual({ active: 1, needs_human: 0, rehearsals: 2, submitted: 0, skipped: 208 });
+    const skipped = await listApplications(db, { filter: 'skipped' });
+    expect(skipped).toHaveLength(200);
+    expect(skipped.every((r) => ['skipped', 'cancelled', 'failed'].includes(r.status))).toBe(true);
+    expect(skipped.map((r) => r.id)).not.toContain(old[0].id); // os mais antigos ficam de fora
+    expect(await listApplications(db, { filter: 'rehearsals' })).toHaveLength(2);
+    expect((await listApplications(db, { filter: 'active' })).map((r) => r.id)).toEqual([running.id]);
+  });
+
+  it('sends exactly the listed rows that are still rehearsals, and counts the rest as skipped', async () => {
+    const [a, b, c] = await bulk(3, 'dry_run_ready', 1000);
+    const [d] = await bulk(1, 'queued', 1000);
+    const [applied] = await bulk(1, 'dry_run_ready', 1000);
+    await db.update(jobs).set({ column: 'aplicada', appliedBy: 'humano' }).where(eq(jobs.id, applied.jobId));
+    expect(await sendAllRehearsals(db, [a.id, b.id, d.id, applied.id, 999_999], 2000)).toEqual({ queued: 2, skipped: 3 });
+    expect(await applicationForJob(db, a.jobId)).toMatchObject({ status: 'queued', mode: 'real' });
+    expect((await applicationForJob(db, c.jobId))!.status).toBe('dry_run_ready');
+    expect((await applicationForJob(db, applied.jobId))!.status).toBe('dry_run_ready');
+    expect(await sendAllRehearsals(db, [], 2000)).toEqual({ queued: 0, skipped: 0 });
+  });
+
+  it('lists the board with each job application status and without the heavy columns', async () => {
+    const plain = await seedJob();
+    const { job, id } = await create();
+    await transitionApplication(db, id, { status: 'needs_human', reason: 'question' });
+    const items = await listJobItems(db);
+    expect(items.map((i) => [i.id, i.applicationStatus])).toEqual([[plain.id, null], [job.id, 'needs_human']]);
+    expect(items[0]).not.toHaveProperty('description');
+    expect(items[0]).not.toHaveProperty('dedupHash');
+    expect(items[0]).toMatchObject({ title: 'Dev', column: 'descobertas', appliedBy: null });
+    expect((await listJobItems(db, eq(jobs.id, job.id))).map((i) => i.id)).toEqual([job.id]);
   });
 });
 
@@ -310,6 +378,24 @@ describe('commands and site state', () => {
   });
 });
 
+describe('the worker state', () => {
+  it('is null until a worker reports, then reads back the last report', async () => {
+    expect(await applyWorkerState(db)).toBeNull();
+    await saveApplyWorkerState(db, { available: false, reason: 'sem navegador' }, 1000);
+    expect(await applyWorkerState(db)).toEqual({ available: false, reason: 'sem navegador', seenAt: 1000 });
+    await saveApplyWorkerState(db, { available: true, reason: null }, 2000);
+    expect(await applyWorkerState(db)).toEqual({ available: true, reason: null, seenAt: 2000 });
+  });
+
+  it('survives the deletion of the AI data and reads a damaged row as null', async () => {
+    await saveApplyWorkerState(db, { available: true, reason: null }, 1000);
+    await deleteAllAiData(db);
+    expect(await applyWorkerState(db)).not.toBeNull();
+    await db.update(settings).set({ value: { available: 'yes' } });
+    expect(await applyWorkerState(db)).toBeNull();
+  });
+});
+
 describe('deleteApplyData', () => {
   it('deletes personal data but keeps status and dates', async () => {
     const { job, id } = await create();
@@ -331,6 +417,36 @@ describe('deleteApplyData', () => {
       confirmation: null, shots: {},
     });
     expect(await db.select().from(applyAnswers)).toEqual([]);
+  });
+
+  it('also empties the details and the event texts, and cancels the applications waiting on questions', async () => {
+    const sent = await create();
+    await transitionApplication(db, sent.id, { status: 'submitted', message: 'Obrigado pela candidatura, Fulano!' }, 2000);
+    const failed = await create();
+    await transitionApplication(db, failed.id, { status: 'failed', detail: 'erro com o currículo de Fulano' }, 2000);
+    const asked = await create();
+    await transitionApplication(db, asked.id, {
+      status: 'needs_human', reason: 'question', detail: 'uma pergunta precisa de você',
+      set: { pendingQuestions: [{ question: { id: 'q', label: 'L', help: '', kind: 'text', options: [], required: true, maxLength: null }, category: 'open', kind: 'unanswered', proposal: null }] },
+    }, 2000);
+    const captcha = await create();
+    await transitionApplication(db, captcha.id, { status: 'needs_human', reason: 'captcha', detail: 'resolva' }, 2000);
+    await db.update(jobs).set({ needsHuman: true, needsHumanReason: 'x' });
+
+    await deleteApplyData(db, 3000);
+
+    expect(await applicationForJob(db, failed.job.id)).toMatchObject({ status: 'failed', detail: null });
+    expect(await applicationForJob(db, asked.job.id)).toMatchObject({
+      status: 'cancelled', reason: null, detail: null, pendingQuestions: [], finishedAt: 3000,
+    });
+    expect((await db.select().from(jobs).where(eq(jobs.id, asked.job.id)))[0]).toMatchObject({ needsHuman: false, needsHumanReason: null });
+    expect(await applicationForJob(db, captcha.job.id)).toMatchObject({ status: 'needs_human', reason: 'captcha', detail: null });
+    expect((await db.select().from(jobs).where(eq(jobs.id, captcha.job.id)))[0]).toMatchObject({ needsHuman: true });
+    const sentEvents = await listApplicationEvents(db, sent.id);
+    expect(sentEvents.map((e) => e.message)).toEqual([null, null]);
+    expect((await listApplicationEvents(db, asked.id)).at(-1)).toEqual({
+      status: 'cancelled', message: 'Os dados de IA foram apagados: a candidatura foi cancelada.', at: 3000,
+    });
   });
 
   it('runs with deleteAllAiData', async () => {
@@ -428,11 +544,75 @@ describe('sendRehearsal / sendAllRehearsals', () => {
       await transitionApplication(db, r.id, { status: 'dry_run_ready', set: { answers: [answer('q', String(r.id))], mode: 'dry_run' } });
     }
     await transitionApplication(db, other.id, { status: 'failed' });
-    expect(await sendAllRehearsals(db)).toBe(2);
+    expect(await sendAllRehearsals(db, [one.id, two.id, other.id])).toEqual({ queued: 2, skipped: 1 });
     expect((await applicationForJob(db, one.job.id))!.approvedAnswers).toEqual([answer('q', String(one.id))]);
     expect(await applicationForJob(db, two.job.id)).toMatchObject({ status: 'queued', mode: 'real' });
     expect(await applicationForJob(db, other.job.id)).toMatchObject({ status: 'failed', approvedAnswers: [] });
-    expect(await sendAllRehearsals(db)).toBe(0);
+    expect(await sendAllRehearsals(db, [one.id, two.id])).toEqual({ queued: 0, skipped: 2 });
+  });
+});
+
+describe('a job the owner already applied to', () => {
+  const applied = [{ column: 'aplicada' }, { column: 'arquivada' }, { appliedBy: 'humano' }] as const;
+  const answer = { questionId: 'q', value: 'x', source: 'bank' as const, category: 'profile_fact' as const, basis: [], bankAnswerId: null, label: 'q', help: '', kind: 'text' as const, options: [], required: true };
+
+  it('is never retried', async () => {
+    for (const extra of applied) {
+      const { id, job } = await create();
+      await transitionApplication(db, id, { status: 'cancelled' });
+      await db.update(jobs).set(extra).where(eq(jobs.id, job.id));
+      expect(await retryApplication(db, id)).toBe('already_applied');
+      expect((await applicationForJob(db, job.id))!.status).toBe('cancelled');
+    }
+  });
+
+  it('is never sent, alone or with the others', async () => {
+    for (const extra of applied) {
+      const { id, job } = await create();
+      await transitionApplication(db, id, { status: 'dry_run_ready', set: { answers: [answer] } });
+      await db.update(jobs).set(extra).where(eq(jobs.id, job.id));
+      expect(await sendRehearsal(db, id)).toBe('already_applied');
+      expect((await applicationForJob(db, job.id))!.status).toBe('dry_run_ready');
+    }
+  });
+
+  it('settles a waiting application as applied by the owner, flags a running one and leaves the rest', async () => {
+    const message = 'Você marcou esta vaga como aplicada.';
+    const cases = [
+      { status: 'queued', reason: null }, { status: 'needs_human', reason: 'question' },
+      { status: 'needs_human', reason: 'confirm_submission' }, { status: 'dry_run_ready', reason: null },
+    ] as const;
+    for (const c of cases) {
+      const { id, job } = await create();
+      if (c.status !== 'queued') await transitionApplication(db, id, { status: c.status, reason: c.reason }, 2000);
+      await db.update(jobs).set({ needsHuman: true, needsHumanReason: 'x' }).where(eq(jobs.id, job.id));
+      expect(await settleAppliedByOwner(db, job.id, 3000)).toBe(true);
+      expect(await applicationForJob(db, job.id)).toMatchObject({
+        status: 'skipped', reason: 'already_applied', finishedAt: 3000, pendingQuestions: [], cancelRequested: false,
+      });
+      expect((await listApplicationEvents(db, id)).at(-1)).toEqual({ status: 'skipped', message, at: 3000 });
+      expect((await db.select().from(jobs).where(eq(jobs.id, job.id)))[0]).toMatchObject({ needsHuman: false });
+      await db.update(jobs).set({ column: 'aplicada', appliedBy: 'humano' }).where(eq(jobs.id, job.id)); // o que a rota grava
+      expect(await retryApplication(db, id)).toBe('already_applied');
+    }
+    const running = await create();
+    await transitionApplication(db, running.id, { status: 'submitting' }, 2000);
+    expect(await settleAppliedByOwner(db, running.job.id, 3000)).toBe(true);
+    expect(await applicationForJob(db, running.job.id)).toMatchObject({ status: 'submitting', cancelRequested: true });
+    const failed = await create();
+    await transitionApplication(db, failed.id, { status: 'failed' }, 2000);
+    expect(await settleAppliedByOwner(db, failed.job.id, 3000)).toBe(false);
+    expect((await applicationForJob(db, failed.job.id))!.status).toBe('failed');
+    expect(await settleAppliedByOwner(db, 123_456, 3000)).toBe(false);
+  });
+
+  it('locks the job row before the application', async () => {
+    const { id, job } = await create();
+    await db.transaction(async (tx) => {
+      const locked = await lockApplicationWithJob(tx, id);
+      expect(locked).toMatchObject({ row: { id }, job: { id: job.id } });
+    });
+    expect(await db.transaction((tx) => lockApplicationWithJob(tx, 999_999))).toBeNull();
   });
 });
 
@@ -494,7 +674,7 @@ describe('a stale cancel flag never follows a row back to the queue', () => {
     expect(await retryApplication(db, retried.id)).toBe('queued');
     expect(await sendRehearsal(db, rehearsal.id)).toBe('queued');
     await transitionApplication(db, allRehearsals.id, { status: 'dry_run_ready', set: { answers: [answer] } });
-    expect(await sendAllRehearsals(db)).toBe(1);
+    expect(await sendAllRehearsals(db, [allRehearsals.id])).toEqual({ queued: 1, skipped: 0 });
     const answeredRow = (await applicationForJob(db, answered.job.id))!;
     expect(await settlePendingQuestions(db, answeredRow, [])).toBe(true);
     expect(await requeueQuestionWaits(db, asked.id)).toEqual([waiting.id]);

@@ -104,6 +104,23 @@ export function isActiveApplication(status: ApplicationStatus): boolean {
   return (ACTIVE_APPLICATION_STATUSES as readonly string[]).includes(status);
 }
 
+/** Os filtros da aba Candidaturas. Cada estado cai em exatamente um. */
+export const APPLICATION_FILTERS = ['active', 'needs_human', 'rehearsals', 'submitted', 'skipped'] as const;
+export type ApplicationFilter = (typeof APPLICATION_FILTERS)[number];
+/** Os estados de cada filtro; "Não enviadas" (`skipped`) junta puladas, falhas e canceladas. */
+export const APPLICATION_FILTER_STATUSES: Record<ApplicationFilter, readonly ApplicationStatus[]> = {
+  active: ACTIVE_APPLICATION_STATUSES,
+  needs_human: ['needs_human'],
+  rehearsals: ['dry_run_ready'],
+  submitted: ['submitted'],
+  skipped: ['skipped', 'failed', 'cancelled'],
+};
+
+/** O filtro em que um estado aparece. */
+export function applicationFilterOf(status: ApplicationStatus): ApplicationFilter {
+  return APPLICATION_FILTERS.find((f) => APPLICATION_FILTER_STATUSES[f].includes(status))!;
+}
+
 /** A função só existe com HOST local: ausente, `127.0.0.1`, `localhost` ou `::1`. */
 export function applyAvailability(env: { HOST?: string }): { available: boolean; reason: string | null } {
   const host = env.HOST?.trim();
@@ -121,8 +138,14 @@ export interface ApplicationDto {
   resumeLang: 'pt-BR' | 'en' | null; resumeFileName: string | null; hasResume: boolean;
   answers: AnswerRecord[]; pendingQuestions: PendingQuestion[]; confirmation: string | null; shots: ShotKind[];
   attempts: number; createdAt: number; startedAt: number | null; submittedAt: number | null; finishedAt: number | null;
+  /** O dono pediu o cancelamento de uma candidatura em andamento; vale no próximo ponto seguro. */
+  cancelRequested: boolean;
   events: ApplicationEventDto[];
 }
+/** Por que "Aplicar com IA" não pode aparecer para uma vaga (a primeira checagem da rota que falha). */
+export type CannotApplyReason = 'unsupported_site' | 'already_applied' | 'blocked' | 'apply_unavailable' | 'apply_disabled' | 'already_exists';
+/** Resposta de GET /jobs/:id/application: a candidatura (ou null) e se o botão "Aplicar com IA" pode aparecer. */
+export interface JobApplicationDto { application: ApplicationDto | null; site: ApplySiteId | null; canApply: boolean; cannotApplyReason: CannotApplyReason | null }
 export interface ApplicationListItemDto {
   id: number; jobId: number; jobTitle: string; company: string; site: ApplySiteId; status: ApplicationStatus;
   reason: ApplicationReason | null; detail: string | null; mode: ApplyMode; gateScore: number | null;
@@ -133,8 +156,12 @@ export interface ApplySiteStateDto {
   sessionCheckedAt: number | null; paused: boolean; pauseReason: SitePauseReason | null;
   formsToday: number; formsCap: number; viewsToday: number | null; viewsCap: number | null;
 }
+/** O que o worker publicou da última vez sobre a candidatura automática poder rodar nele (HOST local, navegador). */
+export interface ApplyWorkerState { available: boolean; reason: string | null; seenAt: number }
 export interface ApplyStatusDto {
   available: boolean; unavailableReason: string | null; enabled: boolean; withinWindow: boolean;
+  /** O estado publicado pelo worker; null enquanto nenhum worker publicou. */
+  worker: ApplyWorkerState | null;
   sites: ApplySiteStateDto[]; totalToday: number; totalCap: number; queued: number; needsHuman: number;
   /** Candidaturas em `preparing`, `filling`, `waiting_human` ou `submitting`. */
   running: number;
@@ -155,7 +182,20 @@ export function bankText(value: AnswerValue): string {
   return value.trim();
 }
 
-const BANK_YES = ['sim', 'yes', 'true', 'verdadeiro', 's', 'y', '1'];
+/** A mensagem única para um número fora da regra de `parseNumberAnswer` (API e tela). */
+export const NUMBER_FORMAT_PROBLEM = 'Use só dígitos, com no máximo duas casas decimais e sem separador de milhar (ex.: 20000 ou 1234,56).';
+
+/**
+ * A regra única da resposta numérica: o texto aparado, dígitos com sinal de menos opcional e no máximo duas casas
+ * decimais (`.` ou `,`). Devolve o número com `.` decimal, ou null se não serve. 20.000 é vinte mil no Brasil e vinte fora
+ * dele: não dá para adivinhar, então `.` ou `,` seguido de três dígitos é recusado.
+ */
+export function parseNumberAnswer(text: string): string | null {
+  const t = text.trim();
+  return /^-?\d+([.,]\d{1,2})?$/.test(t) ? t.replace(',', '.') : null;
+}
+
+const BANK_YES =['sim', 'yes', 'true', 'verdadeiro', 's', 'y', '1'];
 const BANK_NO = ['nao', 'no', 'false', 'falso', 'n', '0'];
 
 /** Lê uma resposta salva como sim ou não: sim, yes, true, verdadeiro, s, y, 1 / não, nao, no, false, falso, n, 0 (sem diferenciar maiúsculas e acentos). Qualquer outra coisa: null. */

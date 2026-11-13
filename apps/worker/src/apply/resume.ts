@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { eq, isNull } from 'drizzle-orm';
 import {
   AiError, draftTailored, fullDraftOf, isStructural, resolveTailored, tailoredLangFor, toCorrections, violationCodes,
   type TailoredCorrection,
@@ -68,6 +68,13 @@ export async function applicationResume(
   const profile = await profileFor(db, lang);
   if (!profile) return blocked(`Não há perfil em ${LANG_NAMES[lang]}: envie o currículo ou gere o perfil por tradução.`);
   const context = { jobCompany: job.company, jobTitle: job.title, jobKeywords: keywordsOf(ai) };
+  /** O currículo que o dono editou: vale o rascunho dele, verificado de novo contra o perfil atual; senão, revisão. */
+  const ownerEdited = (stored: typeof tailoredResumes.$inferSelect): TailoredResume | null => {
+    if (stored.lang === lang && stored.profileVersion === profile.version) return stored.content;
+    const again = resolveTailored(draftOf(stored.content), profile.data, lang, context);
+    if (stored.lang !== lang || again.violations.some((v) => isStructural(v) || v.code === 'limit')) return null;
+    return again.resume;
+  };
 
   let resume: TailoredResume;
   if (mode === 'base') {
@@ -77,10 +84,10 @@ export async function applicationResume(
     if (stored && stored.lang === lang && stored.profileVersion === profile.version) {
       resume = stored.content;
     } else if (stored && stored.editedAt !== null) {
-      // Do dono: nunca é sobrescrito. Vale o rascunho dele, verificado de novo contra o perfil atual.
-      const again = resolveTailored(draftOf(stored.content), profile.data, lang, context);
-      if (stored.lang !== lang || again.violations.some((v) => isStructural(v) || v.code === 'limit')) return blocked(EDITED_STALE);
-      resume = again.resume;
+      // Do dono: nunca é sobrescrito.
+      const mine = ownerEdited(stored);
+      if (!mine) return blocked(EDITED_STALE);
+      resume = mine;
     } else if (job.description.trim() === '') {
       // Nada a adaptar e nenhum currículo guardado que sirva: sai o base.
       resume = baseResume(profile.data, lang);
@@ -107,15 +114,25 @@ export async function applicationResume(
       }
       resume = result.resume;
       const values = { lang, content: resume, profileVersion: profile.version, createdAt: now(), editedAt: null };
+      let written: { id: number }[];
       try {
-        await db
+        // Uma edição do dono feita durante a chamada ao modelo nunca é sobrescrita (`setWhere`).
+        written = await db
           .insert(tailoredResumes)
           .values({ jobId: job.id, ...values })
-          .onConflictDoUpdate({ target: tailoredResumes.jobId, set: values });
+          .onConflictDoUpdate({ target: tailoredResumes.jobId, set: values, setWhere: isNull(tailoredResumes.editedAt) })
+          .returning({ id: tailoredResumes.id });
       } catch (e) {
         // A vaga foi apagada durante a chamada ao modelo (o uso já foi registrado): cancelamento limpo, como no executor.
         if (!isForeignKeyViolation(e)) throw e;
         return { ok: false, reason: 'cancelled', detail: 'A vaga foi apagada durante a preparação do currículo.' };
+      }
+      if (written.length === 0) {
+        // O dono editou o currículo da vaga enquanto o modelo escrevia: vale o dele, nunca o rascunho descartado.
+        const [mineRow] = await db.select().from(tailoredResumes).where(eq(tailoredResumes.jobId, job.id));
+        const mine = mineRow ? ownerEdited(mineRow) : null;
+        if (!mine) return blocked(EDITED_STALE);
+        resume = mine;
       }
     }
   }

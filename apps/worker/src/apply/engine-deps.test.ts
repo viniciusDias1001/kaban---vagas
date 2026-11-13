@@ -1,8 +1,15 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { applicationForJob, closeDb, createApplication, transitionApplication, type Db } from '@kv/db';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { eq } from 'drizzle-orm';
+import { applicationForJob, applications, closeDb, createApplication, transitionApplication, type Db } from '@kv/db';
 import { createTestDb, resetTestDb } from '@kv/db/testing';
 import { WorkClock, buildEngineDeps, type EngineDepsInput, type RunPhase } from './engine-deps';
 import { NOON, createFakeBrowser, createRecordingSite, seedJob } from './test-helpers';
+
+// Para o teste do cancelamento: um gancho logo antes da gravação travada da transição.
+vi.mock('@kv/db', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('@kv/db')>();
+  return { ...mod, transitionApplication: vi.fn(mod.transitionApplication) };
+});
 
 let db: Db;
 beforeAll(async () => {
@@ -27,6 +34,36 @@ async function setup(phase: RunPhase) {
   });
   return { deps, browser, state, jobId: job.id };
 }
+
+describe('a cancel that lands just before a transition', () => {
+  const real = async () => (await vi.importActual<typeof import('@kv/db')>('@kv/db')).transitionApplication;
+  /** A próxima transição: o dono cancela logo antes da gravação, depois de qualquer leitura feita antes dela. */
+  const cancelBeforeNextWrite = async (id: number) => {
+    const actual = await real();
+    vi.mocked(transitionApplication).mockImplementationOnce(async (...args) => {
+      await db.update(applications).set({ cancelRequested: true }).where(eq(applications.id, id));
+      return actual(...args);
+    });
+  };
+
+  it('wins over the submitting claim: the report says no and the click never follows', async () => {
+    const { deps, state, jobId } = await setup('pre');
+    const id = (await applicationForJob(db, jobId))!.id;
+    await transitionApplication(db, id, { status: 'filling', set: { waitingGate: null } }, NOON);
+    await cancelBeforeNextWrite(id);
+    expect(await deps.report({ status: 'submitting', answers: [] })).toBe(false);
+    expect(state.phase).toBe('pre');
+    expect(await applicationForJob(db, jobId)).toMatchObject({ status: 'filling', cancelRequested: true });
+  });
+
+  it('wins over a transition before the click too', async () => {
+    const { deps, jobId } = await setup('pre');
+    const id = (await applicationForJob(db, jobId))!.id;
+    await cancelBeforeNextWrite(id);
+    expect(await deps.report({ status: 'filling' })).toBe(false);
+    expect((await applicationForJob(db, jobId))!.status).toBe('waiting_human');
+  });
+});
 
 describe('waitHuman of a run that was given up', () => {
   for (const phase of ['aborted', 'abandoned'] as const) {
