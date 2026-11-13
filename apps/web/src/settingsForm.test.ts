@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { SettingsPatchSchema, type AiKeyMetaDto, type SettingsDto } from '@kv/shared';
 import {
-  OUTCOME_TONE, apiKeyProblem, changeProvider, collectBlockItems, collectCompanies, formFromSettings, isDirty, keyView, maskedKey, parseBudget,
-  toSettingsPatch, validateSettings,
+  OUTCOME_TONE, apiKeyProblem, badDailyCap, changeProvider, collectBlockItems, collectCompanies, formFromSettings, isDirty, keyView, maskedKey, parseBudget,
+  toSettingsPatch, validateSettings, type SettingsForm,
 } from './settingsForm';
 
 const key = (over: Partial<AiKeyMetaDto> = {}): AiKeyMetaDto => ({
@@ -171,5 +171,33 @@ describe('apply settings', () => {
     expect(validateSettings({ ...form, applyCompanyCap: '21' }).applyCompanyCap).toBeDefined();
     expect(validateSettings({ ...form, applyCompanyCap: '0' }).applyCompanyCap).toBeDefined();
     expect(validateSettings({ ...form, applyBlockedTermsDraft: 'x'.repeat(81) }).applyBlockedTerms).toBeDefined();
+  });
+
+  it('names the first invalid daily cap, the same one validateSettings rejects', () => {
+    const form = formFromSettings(dto);
+    const caps = (over: Partial<SettingsForm['applyDailyCaps']>) => ({ ...form, applyDailyCaps: { ...form.applyDailyCaps, ...over } });
+    // Todos válidos: nenhum campo e nenhum erro.
+    expect(badDailyCap(form)).toBeUndefined();
+    expect(validateSettings(form).applyDailyCaps).toBeUndefined();
+    // Vazio.
+    expect(badDailyCap(caps({ fake: '' }))).toBe('fake');
+    // Acima do máximo.
+    expect(badDailyCap(caps({ linkedinViews: '201' }))).toBe('linkedinViews');
+    expect(badDailyCap(caps({ total: '200' }))).toBeUndefined();
+    // Vários inválidos: o primeiro na ordem da tela (sites, depois total e vagas abertas).
+    expect(badDailyCap(caps({ lever: '201', total: '', linkedin: '1,5' }))).toBe('linkedin');
+    // O erro existe exatamente quando há um campo para receber o foco.
+    for (const over of [{ fake: '' }, { linkedinViews: '201' }, { total: '200' }, { lever: 'x' }, {}]) {
+      const f = caps(over);
+      expect(validateSettings(f).applyDailyCaps !== undefined).toBe(badDailyCap(f) !== undefined);
+    }
+  });
+
+  it('keeps the one-time "Enviar" confirmation in the form only: never sent, reset with the form', () => {
+    const form = formFromSettings(dto);
+    expect(form.applyRealConfirmed).toEqual([]);
+    const confirmed = { ...form, applyRealConfirmed: ['fake' as const] };
+    expect(toSettingsPatch(confirmed, dto)).toEqual({});
+    expect(isDirty(confirmed, dto)).toBe(false);
   });
 });

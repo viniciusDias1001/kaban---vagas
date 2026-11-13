@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { APPLICATION_STATUSES, NEEDS_HUMAN_REASONS, SKIP_REASONS, type AnswerSource, type ApplicationListItemDto, type ApplicationStatus, type ApplyStatusDto, type PendingQuestion, type Question } from '@kv/shared';
+import { APPLICATION_STATUSES, type ApplyAnswerDto, NEEDS_HUMAN_REASONS, SKIP_REASONS, type AnswerSource, type ApplicationListItemDto, type ApplicationStatus, type ApplyStatusDto, type PendingQuestion, type Question } from '@kv/shared';
 import {
   AI_ANSWER_LABELS, FILTER_LABELS, PENDING_KIND_LABELS, type ApplicationFilter, ANSWER_SOURCE_LABELS, STATUS_LABELS, applyErrorMessage, applyPollMs, cardBadge, filterApplications,
-  filterCounts, reasonText, toPendingAnswersBody, validatePendingDrafts, type PendingDraft,
+  ANSWER_LIMITS, EMPTY_NEW_ANSWER, accountFeedback, answerField, answerInput, answerProblem, answerToStore, booleanAnswer, booleanChoice, counterVisible,
+  countryLabel, kindHint, newAnswerInput, numberProblem, saveStateLabel, scopeLabel, splitAnswers, usedLabel, validateNewAnswer, filterCounts, reasonText, toPendingAnswersBody, validatePendingDrafts, type AccountAction, type AccountMutationView, type PendingDraft,
 } from './apply';
 
 const item = (id: number, status: ApplicationStatus): ApplicationListItemDto => ({
@@ -130,5 +131,103 @@ describe('pending answers', () => {
     expect(validatePendingDrafts(pending, [
       draft('a', { value: 'ok' }), draft('s', { value: 'Sim' }), draft('m', { value: ['x'] }), draft('n', { value: '3,5' }),
     ])).toEqual({});
+  });
+});
+
+describe('accountFeedback', () => {
+  const idleM: AccountMutationView = { isPending: false, isSuccess: false, isError: false, error: null, variables: undefined };
+  const states = (over: Partial<Record<AccountAction, Partial<AccountMutationView>>> = {}) => ({
+    open: { ...idleM, ...over.open }, check: { ...idleM, ...over.check }, logout: { ...idleM, ...over.logout },
+  });
+
+  it('shows nothing before a click', () => {
+    expect(accountFeedback(null, 'linkedin', states())).toEqual({ kind: 'idle' });
+  });
+
+  it('shows only the last clicked action: a later success hides an earlier error', () => {
+    const s = states({
+      open: { isError: true, error: { message: 'falhou' }, variables: 'linkedin' },
+      check: { isSuccess: true, variables: 'linkedin' },
+    });
+    expect(accountFeedback('check', 'linkedin', s)).toEqual({ kind: 'sent' });
+    expect(accountFeedback('open', 'linkedin', s)).toEqual({ kind: 'error', message: 'falhou' });
+  });
+
+  it('shows pending while the last action runs, and ignores a mutation used for another site', () => {
+    expect(accountFeedback('logout', 'linkedin', states({ logout: { isPending: true, variables: 'linkedin' } }))).toEqual({ kind: 'pending' });
+    expect(accountFeedback('check', 'linkedin', states({ check: { isSuccess: true, variables: 'greenhouse' } }))).toEqual({ kind: 'idle' });
+  });
+});
+
+const row = (over: Partial<ApplyAnswerDto>): ApplyAnswerDto => ({
+  id: 1, question: 'Pergunta?', key: null, answer: '', kind: 'text', scope: 'always', scopeValue: null, country: null,
+  aliases: [], usedCount: 0, updatedAt: 1, ...over,
+});
+
+describe('answer bank rows', () => {
+  it('splits the common questions (with a key) from the learned ones, keeping the API order', () => {
+    const rows = [row({ id: 1, key: 'a' }), row({ id: 2 }), row({ id: 3, key: 'b' }), row({ id: 4 })];
+    const { common, learned } = splitAnswers(rows);
+    expect(common.map((r) => r.id)).toEqual([1, 3]);
+    expect(learned.map((r) => r.id)).toEqual([2, 4]);
+  });
+  it('picks the field by kind: choice is text, one option per line', () => {
+    expect(['text', 'number', 'boolean', 'choice'].map((k) => answerField(k as ApplyAnswerDto['kind']))).toEqual(['text', 'number', 'boolean', 'text']);
+  });
+  it('reads and writes a boolean as Sim, Não or nothing', () => {
+    expect(['Sim', 'Não', '', 'talvez'].map(booleanChoice)).toEqual(['yes', 'no', 'none', 'none']);
+    expect((['yes', 'no', 'none'] as const).map(booleanAnswer)).toEqual(['Sim', 'Não', '']);
+  });
+  it('refuses a number with a thousands separator or letters, accepts a plain or decimal one', () => {
+    for (const ok of ['', '  ', '20000', '8000,50', '8000.5', '0']) expect(numberProblem(ok)).toBeNull();
+    for (const bad of ['20.000', '20,000', '1.234,56', '0.125']) expect(numberProblem(bad)).toMatch(/milhar/);
+    for (const bad of ['abc', '12a', '-5', '1,2,3']) expect(numberProblem(bad)).toMatch(/só números/);
+    expect(answerProblem('text', '20.000')).toBeNull();
+    expect(answerProblem('number', '20.000')).toMatch(/milhar/);
+  });
+  it('stores what was typed in the shape the bank expects', () => {
+    expect(answerToStore('number', ' 8000,5 ')).toBe('8000.5');
+    expect(answerToStore('choice', ' A \n\n B, C \r\n')).toBe('A\nB, C');
+    expect(answerToStore('text', '  Imediato \n')).toBe('Imediato');
+    expect(answerToStore('boolean', 'Sim')).toBe('Sim');
+  });
+  it('labels the save state like the job notes', () => {
+    expect(saveStateLabel('saving', true)).toBe('Salvando…');
+    expect(saveStateLabel('error', true)).toBe('Não salvo');
+    expect(saveStateLabel('saved', false)).toBe('Salvo');
+    expect(saveStateLabel('saved', true)).toBe('');
+    expect(saveStateLabel('idle', false)).toBe('');
+  });
+  it('shows the scope, country and use in words', () => {
+    expect(scopeLabel('always', null)).toBe('sempre');
+    expect(scopeLabel('company', 'Acme Fictícia')).toBe('só na empresa Acme Fictícia');
+    expect(scopeLabel('job', 'x')).toBe('só nesta vaga');
+    expect(countryLabel('BR')).toBe('vagas no Brasil');
+    expect(countryLabel('US')).toBe('vagas em US');
+    expect(countryLabel(null)).toBeNull();
+    expect([0, 1, 3].map(usedLabel)).toEqual(['ainda não usada', 'usada 1 vez', 'usada 3 vezes']);
+  });
+  it('hints at the expected shape of a number or a choice', () => {
+    expect(kindHint('number')).toMatch(/milhar/);
+    expect(kindHint('choice')).toMatch(/linha/);
+    expect([kindHint('text'), kindHint('boolean')]).toEqual(['', '']);
+  });
+  it('shows the counter only near the limit', () => {
+    expect(counterVisible(1799, ANSWER_LIMITS.answer)).toBe(false);
+    expect(counterVisible(1800, ANSWER_LIMITS.answer)).toBe(true);
+  });
+  it('keeps everything but the answer when a row is saved', () => {
+    const r = row({ question: 'Q?', kind: 'number', scope: 'company', scopeValue: 'Acme', country: 'BR', key: 'k' });
+    expect(answerInput(r, '5')).toEqual({ question: 'Q?', answer: '5', kind: 'number', scope: 'company', scopeValue: 'Acme', country: 'BR' });
+  });
+  it('validates and builds a new answer', () => {
+    expect(validateNewAnswer(EMPTY_NEW_ANSWER)).toEqual({ question: 'Escreva a pergunta.', answer: 'Escreva a resposta.' });
+    const draft = { ...EMPTY_NEW_ANSWER, question: ' Visto? ', answer: ' Não ', kind: 'boolean' as const, scope: 'company' as const, company: ' ', brazilOnly: true };
+    expect(validateNewAnswer(draft)).toEqual({ company: 'Escreva o nome da empresa.' });
+    expect(newAnswerInput({ ...draft, company: ' Acme ' })).toEqual({
+      question: 'Visto?', answer: 'Não', kind: 'boolean', scope: 'company', scopeValue: 'Acme', country: 'BR',
+    });
+    expect(validateNewAnswer({ ...EMPTY_NEW_ANSWER, question: 'x', answer: '20.000', kind: 'number' }).answer).toMatch(/milhar/);
+    expect(newAnswerInput({ ...EMPTY_NEW_ANSWER, question: 'x', answer: 'y' })).toMatchObject({ scope: 'always', scopeValue: null, country: null });
   });
 });

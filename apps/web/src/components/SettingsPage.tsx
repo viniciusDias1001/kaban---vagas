@@ -11,6 +11,7 @@ import { bottomBarRef, showToast } from '../toast';
 import { AI_KEYS, useSaveSettings, useSettings } from '../useAi';
 import { isWorkerStale } from '../workerStale';
 import { CARD, ERROR, HINT, LABEL, SectionHeader, SettingsAiSection, SourceTag, type SettingsFieldIds } from './SettingsAiSection';
+import { SettingsApplySection } from './SettingsApplySection';
 import { Button } from './ui/button';
 import { Skeleton } from './ui/skeleton';
 import { TagInput } from './ui/tag-input';
@@ -21,8 +22,15 @@ import { TagInput } from './ui/tag-input';
  */
 let keptForm: SettingsForm | null = null;
 
-// Só os campos que esta tela já desenha; os de candidatura ganham campo (e posição aqui) na tela de candidatura.
-const ERROR_ORDER: (keyof SettingsFormErrors & keyof SettingsFieldIds)[] = ['modelFast', 'modelStrong', 'dailyBudget', 'greenhouseBoards', 'leverCompanies'];
+/** A ordem dos campos na tela: um salvamento bloqueado leva o foco ao primeiro erro. */
+const ERROR_ORDER = [
+  'modelFast', 'modelStrong', 'dailyBudget',
+  'applyMinScore', 'applyDailyCaps', 'applyCompanyCap', 'applyWindow', 'applyBlockedCompanies', 'applyBlockedTerms',
+  'greenhouseBoards', 'leverCompanies',
+] as const satisfies readonly (keyof SettingsFormErrors)[];
+// Todo erro precisa de lugar na ordem: uma chave nova em SettingsFormErrors sem posição aqui não compila.
+const ERROR_ORDER_COMPLETE: Exclude<keyof SettingsFormErrors, (typeof ERROR_ORDER)[number]> extends never ? true : never = true;
+void ERROR_ORDER_COMPLETE;
 const time = (ms: number) => new Date(ms).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 
 function PageShell({ children, footer }: { children: ReactNode; footer?: ReactNode }) {
@@ -149,6 +157,8 @@ function SettingsLoaded({ dto }: { dto: SettingsDto }) {
   const sourcesTitle = useId();
   const ids: SettingsFieldIds = {
     modelFast: useId(), modelStrong: useId(), dailyBudget: useId(), greenhouseBoards: useId(), leverCompanies: useId(),
+    applyMinScore: useId(), applyDailyCaps: useId(), applyCompanyCap: useId(), applyWindow: useId(), applyBlockedCompanies: useId(),
+    applyBlockedTerms: useId(),
   };
   const errors = validateSettings(form);
   const dirty = isDirty(form, dto);
@@ -173,7 +183,10 @@ function SettingsLoaded({ dto }: { dto: SettingsDto }) {
     setAttempted(true);
     const first = ERROR_ORDER.find((k) => errors[k]);
     if (first) {
-      document.getElementById(ids[first])?.focus();
+      // O campo vai para o meio da tela: na borda de baixo, a barra de salvar cobriria o erro.
+      const field = document.getElementById(ids[first]);
+      field?.focus({ preventScroll: true });
+      field?.scrollIntoView({ block: 'center' });
       return;
     }
     save.mutate(toSettingsPatch(form, dto), {
@@ -224,6 +237,7 @@ function SettingsLoaded({ dto }: { dto: SettingsDto }) {
       >
         <motion.div initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ ...spring, delay: 0.04 }} className="space-y-6">
           <SettingsAiSection dto={dto} form={form} errors={errors} showErrors={showErrors} dirty={dirty} ids={ids} onChange={change} />
+          <SettingsApplySection dto={dto} form={form} errors={errors} showErrors={showErrors} dirty={dirty} ids={ids} onChange={change} />
 
           <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_25rem]">
             <section data-testid="settings-sources" aria-labelledby={sourcesTitle} className={cn(CARD, '@container min-w-0')}>

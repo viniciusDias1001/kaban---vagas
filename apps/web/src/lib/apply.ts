@@ -1,10 +1,11 @@
 import {
   ACTIVE_APPLICATION_STATUSES,
   type AnswerScope, type AnswerSource, type AnswerValue, type ApplicationListItemDto, type ApplicationReason, type ApplicationStatus,
-  type ApplyAiAnswers, type ApplyStatusDto, type PendingQuestion,
+  type ApplyAiAnswers, type ApplyAnswerDto, type ApplyStatusDto, type PendingQuestion, bankBoolean, bankList, bankText,
 } from '@kv/shared/client';
 import type { Question, ShotKind } from '@kv/shared/client';
 import { errorMessage } from '../apiError';
+import type { ApplyAnswerInput } from '../applyApi';
 
 /** Lógica pura das telas de candidatura automática (sem React). */
 
@@ -155,6 +156,32 @@ export function validatePendingDrafts(pending: PendingQuestion[], drafts: Pendin
   return errors;
 }
 
+/** Os pedidos de conta que a linha de um site faz ao worker. */
+export type AccountAction = 'open' | 'check' | 'logout';
+
+/** O que importa de uma mutação do React Query para a resposta ao clique. */
+export interface AccountMutationView {
+  isPending: boolean; isSuccess: boolean; isError: boolean; error: { message: string } | null; variables: unknown;
+}
+
+export type AccountFeedback = { kind: 'idle' } | { kind: 'pending' } | { kind: 'sent' } | { kind: 'error'; message: string };
+
+/**
+ * A resposta mostrada na linha do site: só a do último botão clicado. Cada mutação guarda o próprio erro; sem isto,
+ * um erro antigo de "Abrir" esconderia o "Pedido enviado." de um "Verificar" que deu certo depois.
+ */
+export function accountFeedback(
+  last: AccountAction | null, site: string, states: Record<AccountAction, AccountMutationView>,
+): AccountFeedback {
+  if (!last) return { kind: 'idle' };
+  const m = states[last];
+  if (m.variables !== site) return { kind: 'idle' };
+  if (m.isPending) return { kind: 'pending' };
+  if (m.isError) return { kind: 'error', message: m.error?.message ?? 'Não foi possível enviar o pedido.' };
+  if (m.isSuccess) return { kind: 'sent' };
+  return { kind: 'idle' };
+}
+
 /** Mensagens em pt-BR dos códigos `{ error }` que as rotas de candidatura devolvem. */
 const ERROR_CODE_MESSAGES: Record<string, string> = {
   in_progress: 'A candidatura está em andamento agora. Espere terminar ou cancele antes de tentar de novo.',
@@ -291,4 +318,117 @@ export function pendingErrorFor(pending: PendingQuestion[], message: string): { 
   if (!hit) return null;
   const rest = message.slice(hit.question.label.length + 2).trim();
   return { questionId: hit.question.id, text: rest.charAt(0).toUpperCase() + rest.slice(1) };
+}
+/** Limites do banco de respostas (os mesmos de `ApplyAnswerInputSchema`). */
+export const ANSWER_LIMITS = { question: 500, answer: 2000, company: 200 } as const;
+
+/** O contador de caracteres só aparece perto do limite (a partir de 90%). */
+export const counterVisible = (length: number, max: number): boolean => length >= Math.floor(max * 0.9);
+
+/** As perguntas comuns (têm `key`) e as aprendidas (sem `key`), cada grupo na ordem em que a API devolveu. */
+export function splitAnswers(rows: ApplyAnswerDto[]): { common: ApplyAnswerDto[]; learned: ApplyAnswerDto[] } {
+  return { common: rows.filter((r) => r.key !== null), learned: rows.filter((r) => r.key === null) };
+}
+
+/** Qual campo edita a resposta: sim/não/sem resposta, número, ou texto (que cresce; `choice` é uma opção por linha). */
+export type AnswerField = 'boolean' | 'number' | 'text';
+export const answerField = (kind: ApplyAnswerDto['kind']): AnswerField =>
+  kind === 'boolean' ? 'boolean' : kind === 'number' ? 'number' : 'text';
+
+export type BooleanChoice = 'yes' | 'no' | 'none';
+export const BOOLEAN_LABELS: Record<BooleanChoice, string> = { yes: 'Sim', no: 'Não', none: 'Sem resposta' };
+
+/** O texto salvo lido como sim, não ou sem resposta (texto que não é sim nem não também é "sem resposta"). */
+export function booleanChoice(answer: string): BooleanChoice {
+  const value = bankBoolean(answer);
+  return value === true ? 'yes' : value === false ? 'no' : 'none';
+}
+
+/** O texto que se salva para a escolha: `Sim`, `Não` ou vazio. */
+export const booleanAnswer = (choice: BooleanChoice): string => (choice === 'none' ? '' : bankText(choice === 'yes'));
+
+/** Problema do número digitado, em pt-BR; null quando está vazio ou serve. Mesma regra da API: sem separador de milhar. */
+export function numberProblem(text: string): string | null {
+  const value = text.trim();
+  if (value === '') return null;
+  if (/\d[.,]\d{3}(\D|$)/.test(value)) return 'Escreva o número sem separador de milhar (por exemplo 20000).';
+  if (!/^\d+([.,]\d+)?$/.test(value)) return 'Use só números, com vírgula ou ponto para os decimais (por exemplo 8000 ou 8000,50).';
+  return null;
+}
+
+/** O que é gravado a partir do que foi digitado: texto aparado, uma opção por linha, número com ponto decimal. */
+export function answerToStore(kind: ApplyAnswerDto['kind'], draft: string): string {
+  if (kind === 'number') return draft.trim().replace(',', '.');
+  if (kind === 'choice') return bankText(bankList(draft));
+  return draft.trim();
+}
+
+/** Problema que impede salvar a resposta digitada; null quando pode. */
+export const answerProblem = (kind: ApplyAnswerDto['kind'], draft: string): string | null =>
+  kind === 'number' ? numberProblem(draft) : null;
+
+export type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
+
+/** O estado ao lado do campo, como nas notas da vaga; `dirty` é texto mudado depois do último salvamento. */
+export function saveStateLabel(status: SaveStatus, dirty: boolean): string {
+  if (status === 'saving') return 'Salvando…';
+  if (status === 'error') return 'Não salvo';
+  return status === 'saved' && !dirty ? 'Salvo' : '';
+}
+
+/** O alcance da resposta em palavras. */
+export function scopeLabel(scope: AnswerScope, scopeValue: string | null): string {
+  if (scope === 'always') return 'sempre';
+  if (scope === 'job') return 'só nesta vaga';
+  return `só na empresa ${scopeValue?.trim() || '(sem nome)'}`;
+}
+
+/** O país a que a resposta se limita; null quando vale em qualquer um. */
+export function countryLabel(country: string | null): string | null {
+  if (!country) return null;
+  return country === 'BR' ? 'vagas no Brasil' : `vagas em ${country}`;
+}
+
+export function usedLabel(count: number): string {
+  return count === 0 ? 'ainda não usada' : count === 1 ? 'usada 1 vez' : `usada ${count} vezes`;
+}
+
+/** O corpo de PUT /apply/answers/:id: a mesma resposta, com o novo texto. */
+export function answerInput(row: ApplyAnswerDto, answer: string): ApplyAnswerInput {
+  return { question: row.question, answer, kind: row.kind, scope: row.scope, scopeValue: row.scopeValue, country: row.country };
+}
+
+export type NewAnswerKind = ApplyAnswerDto['kind'];
+export const NEW_ANSWER_KIND_LABELS: Record<NewAnswerKind, string> = { text: 'Texto', number: 'Número', boolean: 'Sim ou não', choice: 'Escolha' };
+
+/** O formulário "Adicionar resposta". "Só nesta vaga" não existe aqui: só faz sentido dentro de uma candidatura. */
+export interface NewAnswerDraft {
+  question: string; answer: string; kind: NewAnswerKind; scope: 'always' | 'company'; company: string; brazilOnly: boolean;
+}
+export const EMPTY_NEW_ANSWER: NewAnswerDraft = { question: '', answer: '', kind: 'text', scope: 'always', company: '', brazilOnly: false };
+
+export type NewAnswerErrors = Partial<Record<'question' | 'answer' | 'company', string>>;
+
+export function validateNewAnswer(draft: NewAnswerDraft): NewAnswerErrors {
+  const errors: NewAnswerErrors = {};
+  if (draft.question.trim() === '') errors.question = 'Escreva a pergunta.';
+  const problem = answerProblem(draft.kind, draft.answer);
+  if (problem) errors.answer = problem;
+  else if (draft.answer.trim() === '') errors.answer = 'Escreva a resposta.';
+  if (draft.scope === 'company' && draft.company.trim() === '') errors.company = 'Escreva o nome da empresa.';
+  return errors;
+}
+
+export function newAnswerInput(draft: NewAnswerDraft): ApplyAnswerInput {
+  return {
+    question: draft.question.trim(), answer: answerToStore(draft.kind, draft.answer), kind: draft.kind, scope: draft.scope,
+    scopeValue: draft.scope === 'company' ? draft.company.trim() : null, country: draft.brazilOnly ? 'BR' : null,
+  };
+}
+
+/** A dica curta sob a pergunta, conforme o tipo de resposta; '' quando não há o que dizer. */
+export function kindHint(kind: ApplyAnswerDto['kind']): string {
+  if (kind === 'number') return 'Número, sem separador de milhar (por exemplo 8000).';
+  if (kind === 'choice') return 'Uma opção por linha.';
+  return '';
 }
