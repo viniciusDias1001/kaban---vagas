@@ -165,11 +165,11 @@ function profileItems(profile: CandidateProfile): Item[] {
     ({ id, kind, texts, fields: texts.map(tokenize), end });
   return [
     ...profile.experiences.flatMap((e) => [
-      item(e.id, 'experience', [e.title, e.company, ...e.achievements.map((a) => a.text)], e.end),
+      item(e.id, 'experience', [e.title, e.company, e.note ?? '', ...e.achievements.map((a) => a.text)], e.end),
       ...e.achievements.map((a) => item(a.id, 'achievement', [a.text])),
     ]),
     ...profile.education.map((e) => item(e.id, 'education', [e.degree, e.institution], e.end)),
-    ...profile.skills.map((s) => item(s.id, 'other', [s.name])),
+    ...profile.skills.map((s) => item(s.id, 'other', [s.name, s.group ?? ''])),
     ...profile.languages.map((l) => item(l.id, 'other', [l.name, l.level])),
     ...profile.certifications.map((c) => item(c.id, 'other', [c.name, c.issuer])),
     // Um link existe no perfil, mas não afirma nada: citá-lo não sustenta resposta.

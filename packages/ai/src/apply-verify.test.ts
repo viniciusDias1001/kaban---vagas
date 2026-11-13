@@ -104,6 +104,24 @@ describe('verifyProfileFact', () => {
     expect(verifyProfileFact(profile, bool('Tem experiência com React?'), { answer: 'Sim', basis: ['skill_1a2b3c4d'] }, now).ok).toBe(false);
   });
 
+  it('counts an experience note as part of that experience', () => {
+    const withNote: CandidateProfile = {
+      ...profile,
+      experiences: profile.experiences.map((e) => (e.id === exp1 ? { ...e, note: 'Plataforma sobre Kubernetes' } : e)),
+    };
+    expect(verifyProfileFact(withNote, bool('Tem experiência com Kubernetes?'), { answer: 'true', basis: [exp1] }, now)).toEqual({ ok: true, value: true });
+    expect(verifyProfileFact(profile, bool('Tem experiência com Kubernetes?'), { answer: 'true', basis: [exp1] }, now).ok).toBe(false);
+  });
+
+  it('counts a skill group as part of that skill', () => {
+    const grouped: CandidateProfile = {
+      ...profile,
+      skills: [...profile.skills, { id: 'skill_9z8y7x6w', name: 'Terraform', group: 'Observabilidade' }],
+    };
+    expect(verifyProfileFact(grouped, bool('Tem experiência com Observabilidade?'), { answer: 'true', basis: ['skill_9z8y7x6w'] }, now)).toEqual({ ok: true, value: true });
+    expect(verifyProfileFact(profile, bool('Tem experiência com Observabilidade?'), { answer: 'true', basis: ['skill_1a2b3c4d'] }, now).ok).toBe(false);
+  });
+
   it('refuses to affirm a technology that the profile does not list even with a basis', () => {
     expect(verifyProfileFact(profile, bool('Tem experiência com Kubernetes?'), { answer: 'true', basis: [exp1] }, now).ok).toBe(false);
   });
