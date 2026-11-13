@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { resolveTailored } from '@kv/ai';
-import { SAMPLE_PROFILE } from '@kv/ai/testing';
+import { legacyProfile, SAMPLE_PROFILE } from '@kv/ai/testing';
 import { aiTasks, closeDb, jobAi, saveProfile, tailoredResumes, type Db } from '@kv/db';
 import { createTestDb, resetTestDb } from '@kv/db/testing';
 import { extractResumeText } from '@kv/resume';
@@ -145,6 +145,19 @@ describe('GET /jobs/:id/tailored.pdf', () => {
       expect(text.ok && text.text).toContain('Maria Exemplo da Silva');
       expect(text.ok && text.text).toContain('Empresa Fictícia Ltda');
     }
+  });
+
+  it('still renders a tailored résumé stored before the layout fields', async () => { // Review Focus 1
+    const old = legacyProfile(SAMPLE_PROFILE);
+    const profile = await saveProfile(db, 'pt-BR', old, 'extraido');
+    const job = await seedJob(db);
+    const { headline: _headline, ...content } = resolveTailored(fullDraft(), old, 'pt-BR').resume; // como o worker gravava antes
+    await db.insert(tailoredResumes).values({ jobId: job.id, lang: 'pt-BR', content, profileVersion: profile.version, createdAt: 1 });
+    const res = await app.inject({ method: 'GET', url: `/jobs/${job.id}/tailored.pdf` });
+    expect(res.statusCode).toBe(200);
+    const text = await extractResumeText(res.rawPayload, 'pdf');
+    for (const expected of ['MARIA EXEMPLO DA SILVA', 'Maria Exemplo da Silva • 1']) expect(text.ok && text.text).toContain(expected);
+    expect(text.ok && text.text).not.toContain('undefined');
   });
 
   it('needs no change to the content security policy of the pages', () => {
