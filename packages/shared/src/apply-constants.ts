@@ -51,7 +51,7 @@ export interface ResolvedAnswer {
   bankAnswerId: number | null;
 }
 /** O que fica gravado na candidatura: a resposta com a pergunta como apareceu. */
-export interface AnswerRecord extends ResolvedAnswer { label: string; kind: QuestionKind; options: string[]; required: boolean }
+export interface AnswerRecord extends ResolvedAnswer { label: string; help: string; kind: QuestionKind; options: string[]; required: boolean }
 export interface PendingQuestion {
   question: Question; category: QuestionCategory;
   /**
@@ -63,6 +63,9 @@ export interface PendingQuestion {
     /** A resposta salva proposta (`confirm_match`); null em `confirm_proposal`. */
     bankAnswerId: number | null;
     bankQuestion: string | null;
+    /** O texto da resposta salva, como o dono a gravou (`confirm_match`); null em `confirm_proposal`. */
+    bankAnswer: string | null;
+    /** O valor proposto para ESTA pergunta (ex.: salvo "Não", proposto "No"). */
     value: AnswerValue;
     /** De onde vem o valor proposto. */
     source: 'bank' | 'profile' | 'written';

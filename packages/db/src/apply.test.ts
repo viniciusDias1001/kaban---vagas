@@ -303,7 +303,7 @@ describe('deleteApplyData', () => {
         confirmation: 'ok', contactEmail: 'a@example.com', resumePdf: Buffer.from('x'), shots: { filled: 'f.png' },
         answers: [{
           questionId: 'q', value: 'v', source: 'bank', category: 'open', basis: [], bankAnswerId: null,
-          label: 'L', kind: 'text', options: [], required: true,
+          label: 'L', help: '', kind: 'text', options: [], required: true,
         }],
       },
     }, 2000);

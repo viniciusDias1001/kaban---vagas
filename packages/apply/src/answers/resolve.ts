@@ -4,7 +4,7 @@ import {
 } from '@kv/shared';
 import type { ApplyAnswerRow } from '@kv/db';
 import { bankCandidates, exactBankMatch, optionFor, type BankContext } from './bank';
-import { answerByRule, classifyByRule, declineOption, type RuleContext } from './rules';
+import { answerByRule, classifyByRule, declineOption, hasLastNameField, isWorkedHereQuestion, type RuleContext } from './rules';
 
 export interface ResolveDeps {
   classify(questions: Question[]): Promise<Map<string, QuestionCategory>>;
@@ -23,8 +23,13 @@ export interface ResolveInput {
   ctx: RuleContext & BankContext;
   /** Respostas propostas pelo modelo (fatos do perfil e textos escritos): nunca, com aprovação do dono, ou direto. */
   aiAnswers: ApplyAiAnswers;
-  /** Respostas do ensaio: pergunta igual (texto normalizado, tipo e opções) repete a resposta. */
-  previous: AnswerRecord[];
+  /**
+   * As respostas de um ensaio que o dono viu e mandou enviar de verdade ("Enviar de verdade"). O worker passa esta
+   * lista só nesse caminho, e uma lista vazia em todos os outros. É essa aprovação que permite repetir uma resposta
+   * `profile` ou `written` em qualquer modo. Vale para a mesma pergunta: texto normalizado, ajuda, tipo e opções;
+   * uma resposta `bank` só se repete se a resposta salva ainda existe e ainda dá o mesmo valor.
+   */
+  approved: AnswerRecord[];
 }
 
 export interface Resolution { answers: ResolvedAnswer[]; pending: PendingQuestion[]; usedBankIds: number[] }
@@ -37,11 +42,16 @@ const answer = (
   extra: { basis?: string[]; bankAnswerId?: number | null } = {},
 ): ResolvedAnswer => ({ questionId: q.id, value, source, category, basis: extra.basis ?? [], bankAnswerId: extra.bankAnswerId ?? null });
 
-/** A resposta do ensaio para a mesma pergunta, ajustada às opções de agora; null se a pergunta mudou. */
-function rehearsalAnswer(q: Question, previous: AnswerRecord[]): ResolvedAnswer | null {
+/**
+ * A resposta aprovada para a mesma pergunta, ajustada às opções de agora; null se a pergunta mudou ou se a resposta
+ * salva de que ela veio foi apagada ou editada (aí a pergunta é resolvida de novo pelo banco atual).
+ */
+function approvedAnswer(q: Question, approved: AnswerRecord[], bank: ApplyAnswerRow[], ctx: BankContext): ResolvedAnswer | null {
   const label = normalizeQuestionText(q.label);
-  const prev = previous.find(
-    (p) => normalizeQuestionText(p.label) === label && p.kind === q.kind && sameOptionSet(p.options, q.options),
+  const help = normalizeQuestionText(q.help);
+  const prev = approved.find(
+    (p) => normalizeQuestionText(p.label) === label && normalizeQuestionText(p.help ?? '') === help && p.kind === q.kind &&
+      sameOptionSet(p.options, q.options),
   );
   if (!prev) return null;
   if (prev.source === 'blank' && q.required) return null;
@@ -50,6 +60,10 @@ function rehearsalAnswer(q: Question, previous: AnswerRecord[]): ResolvedAnswer 
     const mapped = (Array.isArray(value) ? value : [value]).map((v) => optionFor(v, q.options));
     if (mapped.some((v) => v === null)) return null;
     value = Array.isArray(value) ? (mapped as string[]) : mapped[0]!;
+  }
+  if (prev.source === 'bank') {
+    const row = bank.find((r) => r.id === prev.bankAnswerId);
+    if (!row || exactBankMatch(q, [row], ctx)?.value !== value) return null;
   }
   return { questionId: q.id, value, source: prev.source, category: prev.category, basis: [...prev.basis], bankAnswerId: prev.bankAnswerId };
 }
@@ -60,7 +74,8 @@ function rehearsalAnswer(q: Question, previous: AnswerRecord[]): ResolvedAnswer 
  * o que o modelo propõe só vira resposta no modo `auto`; casamento proposto pelo modelo sempre volta ao dono.
  */
 export async function resolveAnswers(input: ResolveInput, deps: ResolveDeps): Promise<Resolution> {
-  const { questions, bank, ctx, aiAnswers, previous } = input;
+  const { questions, bank, aiAnswers, approved } = input;
+  const ctx = { ...input.ctx, splitName: hasLastNameField(questions) };
   const answers = new Map<string, ResolvedAnswer>();
   const pending = new Map<string, PendingQuestion>();
   const category = new Map<string, QuestionCategory>();
@@ -70,10 +85,10 @@ export async function resolveAnswers(input: ResolveInput, deps: ResolveDeps): Pr
     return hit !== null;
   };
 
-  // 1. Pergunta igual a uma do ensaio: repete a resposta e a origem.
+  // 1. Pergunta igual a uma do ensaio aprovado pelo dono: repete a resposta e a origem.
   const fresh: Question[] = [];
   for (const q of questions) {
-    const repeated = rehearsalAnswer(q, previous);
+    const repeated = approvedAnswer(q, approved, bank, ctx);
     if (repeated) answers.set(q.id, repeated);
     else fresh.push(q);
   }
@@ -97,8 +112,20 @@ export async function resolveAnswers(input: ResolveInput, deps: ResolveDeps): Pr
   const askModel = aiAnswers !== 'off';
   const facts: Question[] = [];
   const opens: Question[] = [];
+  /** Sem resposta, vão direto ao dono: nem resposta salva, nem proposta de casamento. */
+  const ownerDirect = new Set<string>();
   for (const q of fresh) {
-    const cat = category.get(q.id)!;
+    let cat = category.get(q.id)!;
+    // "Já trabalhou na empresa desta vaga?": só a regra (um "não" seguro); se ela não souber, o dono.
+    if (!OWNER_ONLY.has(cat) && isWorkedHereQuestion(q, ctx)) {
+      cat = 'profile_fact';
+      category.set(q.id, cat);
+      const value = answerByRule(q, cat, ctx);
+      if (value !== undefined) answers.set(q.id, answer(q, cat, value, 'rule'));
+      else ownerDirect.add(q.id);
+      continue;
+    }
+    if (cat === 'file') ownerDirect.add(q.id);
     switch (cat) {
       case 'identity': case 'file': case 'origin': case 'consent': {
         const value = answerByRule(q, cat, ctx);
@@ -122,7 +149,10 @@ export async function resolveAnswers(input: ResolveInput, deps: ResolveDeps): Pr
       case 'profile_fact': {
         const value = answerByRule(q, cat, ctx);
         if (value !== undefined) answers.set(q.id, answer(q, cat, value, 'rule'));
-        else if (!bankHit(q, cat) && askModel) facts.push(q);
+        else if (bankHit(q, cat)) break;
+        // Em `review`, campo opcional nunca para a candidatura: fica em branco e o modelo não é chamado.
+        else if (!q.required && aiAnswers === 'review') answers.set(q.id, answer(q, cat, null, 'blank'));
+        else if (askModel) facts.push(q);
         break;
       }
       case 'open':
@@ -139,7 +169,12 @@ export async function resolveAnswers(input: ResolveInput, deps: ResolveDeps): Pr
     const cat = category.get(q.id)!;
     if (OWNER_ONLY.has(cat)) return; // não acontece pela ordem acima; fica como trava
     if (aiAnswers === 'auto') answers.set(q.id, answer(q, cat, value, source, { basis }));
-    else pending.set(q.id, { question: q, category: cat, kind: 'confirm_proposal', proposal: { bankAnswerId: null, bankQuestion: null, value, source, basis: [...basis] } });
+    else if (q.required) {
+      pending.set(q.id, {
+        question: q, category: cat, kind: 'confirm_proposal',
+        proposal: { bankAnswerId: null, bankQuestion: null, bankAnswer: null, value, source, basis: [...basis] },
+      });
+    }
   };
   if (facts.length > 0) {
     const found = await deps.profileFacts(facts);
@@ -156,7 +191,7 @@ export async function resolveAnswers(input: ResolveInput, deps: ResolveDeps): Pr
   // 8. Sem resposta: uma resposta salva que o modelo diz servir volta ao dono para confirmar.
   const open = (): Question[] => fresh.filter((q) => !answers.has(q.id) && !pending.has(q.id));
   const candidates = bankCandidates(bank, ctx);
-  const left = open();
+  const left = open().filter((q) => !ownerDirect.has(q.id));
   if (left.length > 0 && candidates.length > 0) {
     const proposals = await deps.proposeMatches(left, candidates);
     for (const q of left) {
@@ -167,7 +202,7 @@ export async function resolveAnswers(input: ResolveInput, deps: ResolveDeps): Pr
       if (value === null) continue;
       pending.set(q.id, {
         question: q, category: category.get(q.id)!, kind: 'confirm_match',
-        proposal: { bankAnswerId: row.id, bankQuestion: row.question, value, source: 'bank', basis: [] },
+        proposal: { bankAnswerId: row.id, bankQuestion: row.question, bankAnswer: row.answer, value, source: 'bank', basis: [] },
       });
     }
   }

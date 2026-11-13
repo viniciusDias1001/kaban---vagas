@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CandidateProfile, Question } from '@kv/shared';
-import { answerByRule, classifyByRule, declineOption, type RuleContext } from './rules';
+import { answerByRule, classifyByRule, declineOption, hasLastNameField, isWorkedHereQuestion, type RuleContext } from './rules';
 
 let seq = 0;
 const q = (label: string, extra: Partial<Question> = {}): Question => ({
@@ -114,7 +114,7 @@ describe('answerByRule', () => {
   it('answers only what the rules recognize, whatever category the model gave', () => {
     expect(answerByRule(q('Name of the person who referred you'), 'identity', ctx)).toBeUndefined();
     expect(answerByRule(q('Who referred you?'), 'origin', ctx)).toBeUndefined();
-    expect(answerByRule(q('I certify that everything I wrote is true', { kind: 'boolean' }), 'consent', ctx)).toBeUndefined();
+    expect(answerByRule(q('I commit to the on-call rotation', { kind: 'boolean' }), 'consent', ctx)).toBeUndefined();
     expect(answerByRule(q('Years of experience with React'), 'profile_fact', ctx)).toBeUndefined();
   });
 
@@ -164,5 +164,105 @@ describe('declineOption', () => {
     expect(declineOption(['Yes', 'No', 'Decline to self-identify'])).toBe('Decline to self-identify');
     expect(declineOption(['Yes', 'No', "I don't wish to answer"])).toBe("I don't wish to answer");
     expect(declineOption(['Yes', 'No'])).toBeNull();
+  });
+
+  it('also finds the other common wordings of not answering', () => {
+    for (const option of ['I do not want to answer', "I don't wish to answer", 'Prefer not to say', 'Prefer not to disclose',
+      'Decline to self-identify', 'Não desejo informar', 'Prefiro não responder'])
+      expect(declineOption(['Sim', 'Não', option]), option).toBe(option);
+    for (const option of ['No', 'Não', 'Other', 'Not applicable']) expect(declineOption(['Yes', option]), option).toBeNull();
+  });
+});
+
+describe('fix round 1: consent only for privacy, terms and truthfulness', () => {
+  const box = (label: string) => q(label, { kind: 'boolean' });
+  it('an agreement to anything else is personal and never answered by rule', () => {
+    for (const label of ['I agree to work on-site 5 days a week', 'Aceito trabalhar em regime PJ', 'I consent to a drug test',
+      'Concordo em viajar 50% do tempo', 'I agree to travel up to 50%', 'I accept a 6-month probation period',
+      'I acknowledge this role requires on-call shifts', 'Concordo com a jornada de 44 horas semanais', 'Declaro que tenho CNH categoria B',
+      'I agree to receive marketing emails', 'Do you agree to work weekends?', 'Você aceita trabalhar aos sábados?']) {
+      expect(classifyByRule(box(label)), label).toBe('personal');
+      expect(answerByRule(box(label), 'consent', ctx), label).toBeUndefined();
+    }
+  });
+
+  it('the privacy policy, the terms and the truthfulness of the application are consent, in Portuguese and English', () => {
+    for (const label of ['I agree to the privacy policy', 'I have read the Privacy Notice', 'I acknowledge the candidate privacy statement',
+      'Li e concordo com a política de privacidade', 'Estou ciente do aviso de privacidade', 'I accept the terms of use',
+      'I agree to the Terms and Conditions', 'Aceito os termos de uso', 'Concordo com os termos de serviço',
+      'I consent to the processing of my personal data', 'Autorizo o tratamento dos meus dados pessoais conforme a LGPD',
+      'I consent to data processing under the GDPR', 'I certify that the information provided is true and complete',
+      'Declaro que as informações prestadas são verdadeiras']) {
+      expect(classifyByRule(box(label)), label).toBe('consent');
+      expect(answerByRule(box(label), 'consent', ctx), label).toBe(true);
+    }
+  });
+
+  it('a consent with a second commitment joined to it is personal', () => {
+    for (const label of ['I agree to the privacy policy and to work on-site', 'Aceito os termos de uso e a jornada de 44 horas',
+      'I have read the privacy policy and I accept the on-call schedule']) {
+      expect(classifyByRule(box(label)), label).toBe('personal');
+      expect(answerByRule(box(label), 'consent', ctx), label).toBeUndefined();
+    }
+  });
+
+  it('a résumé field whose label says what it accepts is still a file', () => {
+    expect(classifyByRule(q('Resume (accepted formats: PDF, DOCX)', { kind: 'file' }))).toBe('file');
+  });
+});
+
+describe('fix round 1: worked here only about employment at the employer', () => {
+  it('does not fire on work with, for or near something else', () => {
+    for (const label of ['Have you worked with US-based clients?', 'Have you worked for US companies before?',
+      'Você já trabalhou com Java aqui no Brasil?', 'Você já trabalhou remotamente? Conte para nós aqui', 'Have you worked with Acme products before?',
+      'Have you worked at a startup?', 'Have you worked for a company like Acme?', 'Have you previously worked at Acme? If so, when?',
+      'Você já trabalhou com a gente em algum projeto aqui?', 'Have you ever worked in a team that used us-east-1?']) {
+      expect(classifyByRule(q(label)), label).not.toBe('profile_fact');
+      expect(isWorkedHereQuestion(q(label), ctx), label).toBe(false);
+      expect(answerByRule(select(label, ['Yes', 'No']), 'profile_fact', ctx), label).toBeUndefined();
+    }
+  });
+
+  it('fires on past employment at the job company or at "us"', () => {
+    for (const label of ['Have you previously worked at Acme?', 'Have you ever worked for us?', 'Have you ever worked for this company?',
+      'Have you been employed by Acme before?', 'Have you ever worked for our company?', 'Have you consulted for Acme in the past?',
+      'Você já trabalhou na Acme?', 'Você já trabalhou nesta empresa?', 'Você já trabalhou aqui?', 'Já foi funcionário da Acme?',
+      'Já prestou serviço para a Acme?'])
+      expect(isWorkedHereQuestion(q(label), ctx), label).toBe(true);
+  });
+});
+
+describe('fix round 1: sensitive wordings', () => {
+  it('catches eligibility, citizenship, pay, availability, moving, arrests, sex, race, age and pronouns', () => {
+    const personal = ['Are you legally eligible to work in the United States?', 'Are you a US citizen?', 'Do you hold an EU passport?',
+      'Green card holder?', 'Are you a permanent resident?', 'Desired hourly rate', 'Quanto você espera ganhar?', 'Expectativa de ganhos',
+      'Expected annual income', 'Minimum wage you would accept', 'What is your availability to start?', 'How soon could you join?',
+      'Quando você pode começar?', 'Would you be willing to move to Lisbon?', 'Você se mudaria para São Paulo?', 'Aceita mudar para Curitiba?',
+      'Have you ever been arrested?', 'Have you been charged with a crime?', 'Você já foi preso?',
+      // Achados da sondagem própria (fix round 1).
+      'Tell us about your expected rate', 'Have you ever been dismissed from employment?', 'Já foi demitido por justa causa?',
+      'Are you open to travel?', 'Você tem disponibilidade para viagens?', 'Can you commute to our office?',
+      'What is your date of availability?', 'What are your salary expectations in USD?'];
+    const demographic = ['Sexo', 'Ano de nascimento', 'Are you at least 18 years old?', 'How old are you?', 'Você é maior de 18 anos?',
+      'Are you over 18?', 'Você se autodeclara negro ou pardo?', 'Pronouns', 'Pronomes', 'Qual a sua cor ou raça?'];
+    for (const label of personal) expect(classifyByRule(q(label)), label).toBe('personal');
+    for (const label of demographic) expect(classifyByRule(q(label)), label).toBe('demographic');
+  });
+
+  it('does not catch ordinary questions', () => {
+    for (const label of ['Years of experience with React', 'Rate your English from 1 to 5', 'Which programming languages do you know?',
+      'Describe a project you are proud of', 'What is your current job title?', 'Do you have experience with payments systems?',
+      'Link to your GitHub', 'Qual o seu nível de inglês?', 'Você tem experiência com AWS?', 'Por que você quer trabalhar aqui?'])
+      expect(['personal', 'demographic'], label).not.toContain(classifyByRule(q(label)));
+  });
+});
+
+describe('fix round 1: a bare name field', () => {
+  it('is the first name when the step also asks for the last name, the full name otherwise', () => {
+    expect(answerByRule(q('Nome'), 'identity', ctx)).toBe('Maria Exemplo da Silva');
+    expect(answerByRule(q('Name'), 'identity', { ...ctx, splitName: true })).toBe('Maria');
+    expect(hasLastNameField([q('Nome'), q('Sobrenome')])).toBe(true);
+    expect(hasLastNameField([q('Name'), q('Surname')])).toBe(true);
+    expect(hasLastNameField([q('Name'), q('E-mail')])).toBe(false);
   });
 });
