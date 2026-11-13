@@ -135,6 +135,8 @@ export interface ApplySiteStateDto {
 export interface ApplyStatusDto {
   available: boolean; unavailableReason: string | null; enabled: boolean; withinWindow: boolean;
   sites: ApplySiteStateDto[]; totalToday: number; totalCap: number; queued: number; needsHuman: number;
+  /** Candidaturas em `preparing`, `filling`, `waiting_human` ou `submitting`. */
+  running: number;
   /** Há uma espera ao vivo agora (captcha, código, login): a tela avisa o dono. */
   waiting: { applicationId: number; jobId: number; gate: string } | null;
 }

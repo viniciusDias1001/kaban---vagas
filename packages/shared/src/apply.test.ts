@@ -60,4 +60,24 @@ describe('apply schemas', () => {
     expect(ApplyAnswerInputSchema.safeParse({ ...ok, extra: 1 }).success).toBe(false);
     expect(ApplyAnswerInputSchema.safeParse({ ...ok, kind: 'longtext' }).success).toBe(false);
   });
+  it('caps the size of what the browser sends', () => {
+    const item = (over: object) => ({ answers: [{ questionId: 'q', value: 'x', scope: 'always', confirmMatch: false, ...over }] });
+    const pending = (over: object) => PendingAnswersBodySchema.safeParse(item(over)).success;
+    expect(pending({ questionId: 'q'.repeat(200) })).toBe(true);
+    expect(pending({ questionId: 'q'.repeat(201) })).toBe(false);
+    expect(pending({ value: 'x'.repeat(2000) })).toBe(true);
+    expect(pending({ value: 'x'.repeat(2001) })).toBe(false);
+    expect(pending({ value: Array(50).fill('x'.repeat(300)) })).toBe(true);
+    expect(pending({ value: Array(51).fill('x') })).toBe(false);
+    expect(pending({ value: ['x'.repeat(301)] })).toBe(false);
+    const ok = { question: 'q', answer: 'a', kind: 'text', scope: 'job', scopeValue: 's', country: 'BR' };
+    const bank = (over: object) => ApplyAnswerInputSchema.safeParse({ ...ok, ...over }).success;
+    expect(bank({ question: '' })).toBe(false);
+    expect(bank({ question: 'q'.repeat(501) })).toBe(false);
+    expect(bank({ question: 'q'.repeat(500) })).toBe(true);
+    expect(bank({ answer: 'a'.repeat(2001) })).toBe(false);
+    expect(bank({ scopeValue: 's'.repeat(201) })).toBe(false);
+    expect(bank({ country: 'BRA' })).toBe(false);
+    expect(bank({ country: null, scopeValue: null })).toBe(true);
+  });
 });
