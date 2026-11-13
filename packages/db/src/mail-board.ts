@@ -68,23 +68,31 @@ export async function moveCardByEmail(
 export async function undoEmailMove(db: Db, messageId: number, now: number = Date.now()): Promise<boolean> {
   return db.transaction(async (tx) => {
     await lockJobs(tx);
-    const [event] = await tx
-      .select()
-      .from(jobEvents)
-      .where(and(eq(jobEvents.mailMessageId, messageId), eq(jobEvents.actor, 'email')))
-      .orderBy(desc(jobEvents.createdAt), desc(jobEvents.id))
-      .limit(1);
-    if (!event?.fromColumn) return false;
-    const [job] = await tx.select({ column: jobs.column }).from(jobs).where(eq(jobs.id, event.jobId)).for('update');
-    const last = await latestEvent(tx, event.jobId);
-    if (!job || last?.id !== event.id || job.column !== event.toColumn) return false;
-    await putOnTop(tx, event.jobId, job.column, event.fromColumn, 'humano', null, now);
-    // O evento guarda que foi desfeito: a mensagem (e o seu `corrected`) pode ser apagada depois.
-    await tx.update(jobEvents).set({ undone: true }).where(eq(jobEvents.id, event.id));
-    await tx.update(mailMessages).set({ corrected: true }).where(eq(mailMessages.id, messageId));
-    return true;
+    return undoEmailMoveLocked(tx, messageId, now);
   });
 }
+
+/** `undoEmailMove` dentro de uma transação que já tem o lock de `JOBS_WRITE_LOCK`. */
+export async function undoEmailMoveLocked(tx: Db, messageId: number, now: number): Promise<boolean> {
+  const [event] = await tx
+    .select()
+    .from(jobEvents)
+    .where(and(eq(jobEvents.mailMessageId, messageId), eq(jobEvents.actor, 'email')))
+    .orderBy(desc(jobEvents.createdAt), desc(jobEvents.id))
+    .limit(1);
+  if (!event?.fromColumn) return false;
+  const [job] = await tx.select({ column: jobs.column }).from(jobs).where(eq(jobs.id, event.jobId)).for('update');
+  const last = await latestEvent(tx, event.jobId);
+  if (!job || last?.id !== event.id || job.column !== event.toColumn) return false;
+  await putOnTop(tx, event.jobId, job.column, event.fromColumn, 'humano', null, now);
+  // O evento guarda que foi desfeito: a mensagem (e o seu `corrected`) pode ser apagada depois.
+  await tx.update(jobEvents).set({ undone: true }).where(eq(jobEvents.id, event.id));
+  await tx.update(mailMessages).set({ corrected: true }).where(eq(mailMessages.id, messageId));
+  return true;
+}
+
+/** Pega o lock de `JOBS_WRITE_LOCK` na transação dada (o primeiro lock de quem mexe em cards e alertas). */
+export const lockJobsForWrite = lockJobs;
 
 /**
  * Apaga mensagens (com respostas e alertas), ignorados e alertas restantes. A caixa e a credencial ficam. Os eventos dos
