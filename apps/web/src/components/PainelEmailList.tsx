@@ -1,10 +1,10 @@
 import { ArrowDownLeft, ArrowUpRight, Inbox, RotateCw, X } from 'lucide-react';
 import { motion, useReducedMotion } from 'motion/react';
-import { Fragment, useId, useMemo, useState, type KeyboardEvent } from 'react';
+import { Fragment, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import {
   EMAIL_KINDS, EMAIL_KIND_LABELS, periodSince, type DashboardPeriod, type EmailKind, type MailMessageDto, type MailReplyDto,
 } from '@kv/shared/client';
-import { mailActions, replyStateLabel, threadConversation } from '../lib/email';
+import { mailActions, mailListNotice, replyStateLabel, selectedMail, threadConversation } from '../lib/email';
 import { useMediaQuery } from '../lib/hooks';
 import { spring } from '../lib/motion';
 import { CARD, EYEBROW } from '../lib/styles';
@@ -258,7 +258,9 @@ function Loading() {
 export function PainelEmailList({ period, onOpenJob }: { period: DashboardPeriod; onOpenJob: (jobId: number) => void }) {
   const [kind, setKind] = useState<KindFilter>('all');
   const [unmatched, setUnmatched] = useState(false);
-  const [selected, setSelected] = useState<MailMessageDto | null>(null);
+  // O id do e-mail aberto: a conversa lê a linha atual (relida depois de ligar, desfazer, responder), nunca uma cópia antiga.
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const lastSelected = useRef<MailMessageDto | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
   const narrow = useMediaQuery('(max-width: 767px)');
   const reduced = useReducedMotion();
@@ -272,7 +274,16 @@ export function PainelEmailList({ period, onOpenJob }: { period: DashboardPeriod
     ...(since !== null && { since }),
   });
   const rows = useMemo(() => [...(data ?? [])].sort((a, b) => b.sentAt - a.sentAt), [data]);
-  const open = (m: MailMessageDto) => { setSelected(m); setSheetOpen(true); };
+  const selected = selectedMail(rows, selectedId, lastSelected.current);
+  useEffect(() => {
+    if (selected) lastSelected.current = selected;
+  }, [selected]);
+  const open = (m: MailMessageDto) => {
+    lastSelected.current = m;
+    setSelectedId(m.id);
+    setSheetOpen(true);
+  };
+  const capped = data ? mailListNotice(data.length) : null;
 
   return (
     <motion.section
@@ -308,6 +319,7 @@ export function PainelEmailList({ period, onOpenJob }: { period: DashboardPeriod
             <Inbox aria-hidden className="size-4 shrink-0" /> Nenhum e-mail de vaga neste período.
           </p>
         ) : narrow ? <MailCards rows={rows} onOpen={open} /> : <MailTable rows={rows} onOpen={open} />}
+        {!isError && capped && <p data-testid="painel-mail-capped" className="mt-3 text-xs text-muted">{capped}</p>}
       </div>
 
       <MailSheet

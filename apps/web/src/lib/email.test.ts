@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { ALERT_KINDS, type AlertDto, type MailMessageDto } from '@kv/shared/client';
 import {
-  alertAction, alertBody, alertCanLink, alertTitle, alertsToNotify, draftGate, mailActions, mailBadgeLabel, mailPasswordProblem, replyStateLabel, summaryLine,
+  MAIL_LIST_MAX, alertAction, alertBody, alertCanLink, alertTitle, alertsToNotify, draftGate, mailActions, mailBadgeLabel, mailListNotice,
+  mailPasswordProblem, replyStateLabel, selectedMail, summaryLine,
 } from './email';
 
 const alert = (over: Partial<AlertDto> = {}): AlertDto => ({
@@ -167,5 +168,22 @@ describe('draftGate', () => {
 
   it('compares exactly: a trailing space is an unsaved edit', () => {
     expect(draftGate('Olá', 'Olá ').canApprove).toBe(false);
+  });
+});
+
+describe('the Painel mail list', () => {
+  it('says the list was cut only when exactly the API maximum came back', () => {
+    expect(MAIL_LIST_MAX).toBe(500);
+    expect(mailListNotice(500)).toBe('Mostrando os 500 mais recentes.');
+    expect(mailListNotice(499)).toBeNull();
+    expect(mailListNotice(0)).toBeNull();
+  });
+
+  it('reads the open mail from the current rows, and keeps the last one seen when it left the list', () => {
+    const before = message({ id: 7, jobId: null, company: null });
+    const after = message({ id: 7, jobId: 5, company: 'Acme' });
+    expect(selectedMail([message({ id: 1 }), after], 7, before)).toBe(after);
+    expect(selectedMail([message({ id: 1 })], 7, before)).toBe(before);
+    expect(selectedMail([after], null, before)).toBeNull();
   });
 });

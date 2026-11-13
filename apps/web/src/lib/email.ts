@@ -197,6 +197,22 @@ export function replyGoesElsewhere(reply: MailReplyDto, origin: MailMessageDto |
   return from !== undefined && !sameAddress(reply.toAddress, from.fromAddress);
 }
 
+/** Quantos e-mails a lista do Painel recebe no máximo: o mesmo `MAIL_LIST_MAX` de `packages/db/src/mail.ts`. */
+export const MAIL_LIST_MAX = 500;
+
+/** O aviso de lista cortada: só quando veio exatamente o máximo (pode haver mais, mais antigos). */
+export const mailListNotice = (count: number): string | null =>
+  count >= MAIL_LIST_MAX ? `Mostrando os ${MAIL_LIST_MAX} mais recentes.` : null;
+
+/**
+ * O e-mail aberto na conversa do Painel, lido das linhas atuais (que são relidas depois de cada ação); se ele saiu da
+ * lista (o filtro "Sem vaga" depois de ligá-lo a uma vaga, por exemplo), fica o último visto.
+ */
+export function selectedMail(rows: readonly MailMessageDto[], id: number | null, last: MailMessageDto | null): MailMessageDto | null {
+  if (id === null) return null;
+  return rows.find((m) => m.id === id) ?? (last?.id === id ? last : null);
+}
+
 /** O e-mail que moveu o card, numa linha do histórico: "E-mail — Reprovação: Sua candidatura na Acme". */
 export function historyMailLine(mail: { kind: EmailKind | null; subject: string }): string {
   const subject = mail.subject.trim() || '(sem assunto)';
