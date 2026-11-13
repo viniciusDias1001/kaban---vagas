@@ -143,12 +143,22 @@ export async function nextPhoneAlert(db: Db): Promise<AlertDto | null> {
   return row ?? null;
 }
 
-/** Conta uma tentativa de aviso no celular; com `sent`, grava a hora do envio. */
-export async function markPhoneAttempt(db: Db, id: number, sent: boolean, now: number = Date.now()): Promise<void> {
-  await db
+/**
+ * Conta uma tentativa de aviso no celular, antes do envio: assim nenhuma falha (nem a de gravar o sucesso) leva a mais
+ * de 3 envios. Só conta se o alerta ainda não tem aviso enviado e tem menos de 3 tentativas; devolve se contou.
+ */
+export async function markPhoneAttempt(db: Db, id: number): Promise<boolean> {
+  const rows = await db
     .update(alerts)
-    .set({ phoneAttempts: sql`${alerts.phoneAttempts} + 1`, ...(sent ? { phoneSentAt: now } : {}) })
-    .where(eq(alerts.id, id));
+    .set({ phoneAttempts: sql`${alerts.phoneAttempts} + 1` })
+    .where(and(eq(alerts.id, id), isNull(alerts.phoneSentAt), lt(alerts.phoneAttempts, PHONE_MAX_ATTEMPTS)))
+    .returning({ id: alerts.id });
+  return rows.length > 0;
+}
+
+/** Grava a hora do aviso no celular enviado (a tentativa já foi contada por `markPhoneAttempt`). */
+export async function markPhoneSent(db: Db, id: number, now: number = Date.now()): Promise<void> {
+  await db.update(alerts).set({ phoneSentAt: now }).where(eq(alerts.id, id));
 }
 
 const BADGE_PRIORITY: Exclude<JobMailMarks['badge'], null>[] = ['entrevista', 'oferta', 'pedido'];
