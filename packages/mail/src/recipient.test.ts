@@ -30,6 +30,15 @@ describe('chooseRecipient', () => {
   it('has no recipient when the Reply-To itself is no-reply', () => {
     expect(chooseRecipient(rawMail({ replyTo: 'noreply@acme.com' }))).toEqual({ ok: false, why: 'no_reply' });
   });
+
+  it('has no recipient when the chosen address is not exactly one plain address', () => {
+    expect(chooseRecipient(rawMail({ replyTo: 'a@acme.com, b@acme.com' }))).toEqual({ ok: false, why: 'ambiguous' });
+    expect(chooseRecipient(rawMail({ from: { address: '', name: 'Acme' }, replyTo: null }))).toEqual({ ok: false, why: 'ambiguous' });
+    expect(chooseRecipient(rawMail({ replyTo: 'joana@acme@com' }))).toEqual({ ok: false, why: 'ambiguous' });
+    expect(chooseRecipient(rawMail({ replyTo: 'joana acme.com' }))).toEqual({ ok: false, why: 'ambiguous' });
+    // A ordem fica: lista e automático vêm antes.
+    expect(chooseRecipient(rawMail({ listId: true, replyTo: 'a@acme.com, b@acme.com' }))).toEqual({ ok: false, why: 'list' });
+  });
 });
 
 describe('isTrustedRecipient', () => {
@@ -48,6 +57,12 @@ describe('isTrustedRecipient', () => {
     expect(isTrustedRecipient('Joana@ACME.com', ctx)).toBe(true);
     expect(isTrustedRecipient('RH@Parceira.Example', ctx)).toBe(true);
     expect(isTrustedRecipient('x@y.com', { sender: 'X@Y.COM', company: null, threadAddresses: [] })).toBe(true);
+  });
+
+  it('never trusts something that is not exactly one plain address', () => {
+    expect(isTrustedRecipient('a@acme.com, b@acme.com', ctx)).toBe(false);
+    expect(isTrustedRecipient('', { sender: '', company: null, threadAddresses: [''] })).toBe(false);
+    expect(isTrustedRecipient('joana@acme.com joana@acme.com', ctx)).toBe(false);
   });
 
   it('has no company domain to trust when the card has no company', () => {
