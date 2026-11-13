@@ -1,3 +1,4 @@
+import { inspect } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { asc, sql } from 'drizzle-orm';
 import {
@@ -186,10 +187,21 @@ describe('ingestInbox', () => {
     await db.execute(sql.raw(`create or replace function kv_test_fail() returns trigger language plpgsql as $$
       begin raise exception 'falha passageira' using errcode = '${code}'; end $$`));
     await db.execute(sql.raw('create trigger kv_test_fail before insert on mail_messages for each row execute function kv_test_fail()'));
+    const lines: string[] = [];
+    let thrown: unknown = null;
     try {
-      await expect(ingestInbox(deps)).rejects.toThrow();
+      await ingestInbox({ ...deps, log: (m) => lines.push(m) }).catch((e: unknown) => { thrown = e; });
     } finally {
       await db.execute(sql.raw('drop trigger kv_test_fail on mail_messages'));
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    // O que a fila escreve no log ("erro ao ler a caixa: <mensagem>") e o que um logger imprimiria do erro inteiro (com
+    // `cause`): só o UID e o código, nada do remetente, do assunto ou do texto.
+    const printed = [...lines, (thrown as Error).message, inspect(thrown, { depth: 10 })].join('\n');
+    expect((thrown as Error).message).toContain('UID 1');
+    expect((thrown as Error).message).toContain(code);
+    for (const secret of ['careers@acme.com', 'Sua candidatura na Acme', 'Recebemos sua candidatura', 'boa@acme.com']) {
+      expect(printed).not.toContain(secret);
     }
     expect(await getMailAccount(db)).toMatchObject({ lastUid: null });
     expect(await ingestInbox(deps)).toMatchObject({ stored: 1 });
