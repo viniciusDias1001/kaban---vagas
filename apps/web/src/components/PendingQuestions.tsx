@@ -42,7 +42,7 @@ function AnswerField({ id, question, value, onChange, labelledBy, describedBy, i
   if (question.kind === 'multiselect') {
     const picked = Array.isArray(value) ? value : [];
     return (
-      <div role="group" {...common} className="flex flex-wrap gap-1.5">
+      <div role="group" {...common} tabIndex={-1} className="flex flex-wrap gap-1.5 rounded-lg focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-accent/45">
         {question.options.map((o) => (
           <CheckChip
             key={o} label={o} checked={picked.includes(o)}
@@ -63,11 +63,11 @@ function AnswerField({ id, question, value, onChange, labelledBy, describedBy, i
   if (question.kind === 'boolean') {
     const current = value === true ? 'yes' : value === false ? 'no' : '';
     return (
-      <div data-testid={testId} id={id} aria-describedby={describedBy}>
+      <div data-testid={testId} id={id} aria-describedby={describedBy} tabIndex={-1} className="w-44 max-w-full rounded-xl focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-accent/45">
         <Segmented<'yes' | 'no' | ''>
           aria-labelledby={labelledBy} value={current} onValueChange={(v) => onChange(v === 'yes')}
           options={[{ value: 'yes', label: 'Sim' }, { value: 'no', label: 'Não' }]}
-          className={cn('w-44', invalid && 'border-bad/60')}
+          className={cn('w-full', invalid && 'border-bad/60')}
         />
       </div>
     );
@@ -100,7 +100,7 @@ function ScopeChoice({ questionId, value, onChange }: { questionId: string; valu
       <Segmented
         aria-labelledby={labelId} value={value} onValueChange={onChange}
         options={SCOPES.map((s) => ({ value: s, label: SCOPE_LABELS[s] }))}
-        className="p-0.5 [&>button]:h-7 [&>button]:px-2.5 [&>button]:text-xs"
+        className="p-0.5 [&>button]:h-8[&>button]:px-2.5 [&>button]:text-xs"
       />
     </div>
   );
@@ -192,22 +192,21 @@ function PendingItem({ applicationId, pending, draft, onDraft, error }: ItemProp
       )}
 
       {(answering || pending.kind === 'confirm_proposal') && field}
-      {pending.kind === 'confirm_proposal' && proposal && (
-        <p className="text-xs leading-snug text-faint">{proposal.source === 'written' ? PROPOSAL_HINTS.written : PROPOSAL_HINTS.profile}</p>
-      )}
-      {answering && q.kind !== 'file' && <ScopeChoice questionId={q.id} value={draft.scope} onChange={(scope) => onDraft({ ...draft, scope })} />}
-
       <AnimatePresence initial={false}>
         {error && (
           <motion.p
             key="error" id={errorId} role="alert" data-testid={`pending-error-${q.id}`}
             initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={spring}
-            className="text-xs font-medium text-bad"
+            className="-mt-1.5 text-xs font-medium text-bad"
           >
             {error}
           </motion.p>
         )}
       </AnimatePresence>
+      {pending.kind === 'confirm_proposal' && proposal && (
+        <p className="text-xs leading-snug text-faint">{proposal.source === 'written' ? PROPOSAL_HINTS.written : PROPOSAL_HINTS.profile}</p>
+      )}
+      {answering && q.kind !== 'file' && <ScopeChoice questionId={q.id} value={draft.scope} onChange={(scope) => onDraft({ ...draft, scope })} />}
     </div>
   );
 }

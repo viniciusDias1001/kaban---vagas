@@ -55,8 +55,9 @@ export function App() {
     setView('candidaturas');
   }, []);
   // Espera ao vivo (captcha, código, login): um ponto na aba e, com a permissão dada, uma notificação do navegador.
-  const applyWaiting = useApplyStatus().data?.waiting ?? null;
-  useLiveWaitNotification(applyWaiting);
+  const applyState = useApplyStatus().data;
+  const applyWaiting = applyState?.waiting ?? null;
+  useLiveWaitNotification(applyState ? applyWaiting : undefined);
   const catchUp = useRunCatchUp();
   const { data: health, dataUpdatedAt: healthUpdatedAt } = useQuery({
     queryKey: ['health'], queryFn: api.health, refetchInterval: 30_000,

@@ -8,7 +8,7 @@ import {
 } from '@kv/shared/client';
 import { applicationResumeUrl, applicationShotUrl } from '../applyApi';
 import {
-  ANSWER_SOURCE_LABELS, STATUS_LABELS, SHOT_LABELS, answerText, applicationActions, canApplyNow, reasonText,
+  ANSWER_SOURCE_LABELS, STATUS_LABELS, SHOT_LABELS, UNCONFIRMED_TEXT, answerText, applicationActions, canApplyNow, reasonText,
 } from '../lib/apply';
 import { spring } from '../lib/motion';
 import { cn } from '../lib/utils';
@@ -43,9 +43,6 @@ export function ApplicationStatusBadge({ status, size = 'sm' }: { status: Applic
     </Badge>
   );
 }
-
-/** O envio começou e o site não confirmou: o dono confere, e não há "Tentar de novo". */
-export const UNCONFIRMED_TEXT = 'O envio foi iniciado e o site não confirmou. Confira no site ou no seu e-mail se a candidatura chegou.';
 
 export const formatWhen = (ms: number) =>
   new Date(ms).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });

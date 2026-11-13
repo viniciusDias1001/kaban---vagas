@@ -3,12 +3,12 @@ import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useMemo, useState } from 'react';
 import { APPLY_SITE_LABELS, type ApplicationListItemDto } from '@kv/shared/client';
 import {
-  FILTER_LABELS, filterApplications, filterCounts, firstFilterWithItems, reasonText, waitingText, type ApplicationFilter,
+  FILTER_LABELS, UNCONFIRMED_TEXT, filterApplications, filterCounts, firstFilterWithItems, reasonText, waitingText, type ApplicationFilter,
 } from '../lib/apply';
 import { spring } from '../lib/motion';
 import { cn } from '../lib/utils';
 import { useApplications, useApplyActions, useApplyStatus, useJobApplication } from '../useApply';
-import { ApplicationStatusBadge, UNCONFIRMED_TEXT, formatWhen } from './JobApplicationSection';
+import { ApplicationStatusBadge, formatWhen } from './JobApplicationSection';
 import { PendingQuestions } from './PendingQuestions';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
