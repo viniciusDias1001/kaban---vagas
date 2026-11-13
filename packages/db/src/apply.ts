@@ -47,7 +47,7 @@ export interface Transition {
     Pick<
       ApplicationRow,
       | 'mode' | 'gateScore' | 'finishedAt' | 'resumeLang' | 'resumeFileName' | 'resumePdf' | 'answers' | 'pendingQuestions' | 'confirmation'
-      | 'contactEmail' | 'shots' | 'attempts' | 'cancelRequested' | 'waitingGate' | 'runAfter' | 'viewedAt' | 'formOpenedAt'
+      | 'contactEmail' | 'shots' | 'attempts' | 'cancelRequested' | 'waitingGate' | 'runAfter' | 'viewedAt' | 'formOpenedAt' | 'trigger'
     >
   >;
 }
@@ -417,7 +417,7 @@ export type RetryOutcome = 'queued' | 'not_found' | 'sent' | 'in_progress' | 'co
 
 /**
  * Botão "Tentar de novo": `needs_human`, `failed`, `skipped` e `cancelled` voltam a `queued` (sem espera e sem tentativas
- * gastas). Nunca copia nada para `approved_answers`. `submitted` é recusada (`sent`), uma linha em andamento também
+ * gastas; uma pulada pela conferência, `below_min_score` ou `not_eligible`, volta como manual). Nunca copia nada para `approved_answers`. `submitted` é recusada (`sent`), uma linha em andamento também
  * (`in_progress`), e uma parada em `confirm_submission` nunca volta por botão: depois do clique ninguém sabe se o site recebeu.
  */
 export async function retryApplication(db: Db, id: number, now: number = Date.now()): Promise<RetryOutcome> {
@@ -428,11 +428,16 @@ export async function retryApplication(db: Db, id: number, now: number = Date.no
     if ((RUNNING_STATUSES as readonly string[]).includes(row.status)) return 'in_progress';
     if (row.status === 'needs_human' && row.reason === 'confirm_submission') return 'confirm_submission';
     if (!['needs_human', 'failed', 'skipped', 'cancelled'].includes(row.status)) return 'not_retryable';
+    // Tentar de novo uma vaga que a conferência pulou é a mesma decisão de "Aplicar com IA": volta como manual.
+    const gateSkipped = row.status === 'skipped' && (row.reason === 'below_min_score' || row.reason === 'not_eligible');
     await writeTransition(
       tx, row,
       {
         status: 'queued', message: 'O dono pediu para tentar de novo.',
-        set: { runAfter: null, attempts: 0, cancelRequested: false, waitingGate: null, finishedAt: null },
+        set: {
+          runAfter: null, attempts: 0, cancelRequested: false, waitingGate: null, finishedAt: null,
+          ...(gateSkipped ? { trigger: 'manual' as const } : {}),
+        },
       },
       now,
     );

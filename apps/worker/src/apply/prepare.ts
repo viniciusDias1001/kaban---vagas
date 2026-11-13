@@ -113,7 +113,9 @@ export async function prepare(c: PrepareContext, row: ApplicationRow): Promise<P
     }
     if (row.gateScore !== null) {
       // De volta à fila (erro passageiro, pergunta respondida, ensaio aprovado): a conferência já foi paga e passou
-      // (elegível); só a nota é comparada de novo, com o mínimo de agora.
+      // (elegível); só a nota é comparada de novo, com o mínimo de agora. Numa linha AUTOMÁTICA a nota gravada é sempre
+      // de uma vaga que passou: uma pulada pela conferência que o dono manda tentar de novo volta como manual
+      // (`retryApplication`) e nem chega aqui.
       gate = { score: row.gateScore, eligible: true, ineligibleReason: '' };
     } else {
       const profile = await baseProfile(db);

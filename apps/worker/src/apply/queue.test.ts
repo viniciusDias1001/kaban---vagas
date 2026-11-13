@@ -7,7 +7,7 @@ import { desc, eq } from 'drizzle-orm';
 import { createFakeProvider, parseOutput, readBlock, readTask, type AiConfig, type AiProvider } from '@kv/ai';
 import {
   applications, applicationForJob, applyCommands, applyCountsSince, closeDb, createApplication, enqueueApplyCommand, jobEvents, jobs,
-  nextApplyCommand, nextQueuedApplication, recordUsage, requestCancel, saveApplyAnswer, siteState, transitionApplication,
+  nextApplyCommand, nextQueuedApplication, recordUsage, requestCancel, retryApplication, saveApplyAnswer, siteState, transitionApplication,
   updateSiteState, usageByLayer,
   type Db,
 } from '@kv/db';
@@ -790,6 +790,20 @@ describe('a row that comes back to the queue', () => {
     expect(tasks).not.toContain('apply_gate');
     expect(await applicationForJob(db, pass.id)).toMatchObject({ status: 'submitted', gateScore: 80 });
     expect(await applicationForJob(db, fail.id)).toMatchObject({ status: 'skipped', reason: 'below_min_score', gateScore: 72 });
+  });
+
+  it('runs as manual, without the gate, an application the gate skipped and the owner retried', async () => {
+    overrides.apply_gate = () => ({ score: 90, reason: 'boa', eligible: false, ineligibleReason: 'exige cidadania' });
+    const { id: jobId } = await candidate();
+    const q = queue({ mode: 'real' });
+    await runUntilIdle(q);
+    const skipped = (await applicationForJob(db, jobId))!;
+    expect(skipped).toMatchObject({ status: 'skipped', reason: 'not_eligible', trigger: 'auto' });
+    tasks.length = 0;
+    expect(await retryApplication(db, skipped.id)).toBe('queued');
+    await runUntilIdle(q);
+    expect(await applicationForJob(db, jobId)).toMatchObject({ status: 'submitted', trigger: 'manual' });
+    expect(tasks).not.toContain('apply_gate');
   });
 
   it('stops for the owner when the site with login is logged out', async () => {

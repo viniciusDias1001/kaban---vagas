@@ -388,6 +388,24 @@ describe('retryApplication', () => {
   });
 });
 
+describe('retryApplication after the gate', () => {
+  it('brings back as manual an application the gate skipped, and keeps the trigger of every other retry', async () => {
+    const cases = [
+      { status: 'skipped', reason: 'not_eligible', trigger: 'manual' },
+      { status: 'skipped', reason: 'below_min_score', trigger: 'manual' },
+      { status: 'skipped', reason: 'closed', trigger: 'auto' },
+      { status: 'failed', reason: null, trigger: 'auto' },
+      { status: 'needs_human', reason: 'question', trigger: 'auto' },
+    ] as const;
+    for (const c of cases) {
+      const { id, job } = await create('fake', 'auto');
+      await transitionApplication(db, id, { status: c.status, reason: c.reason });
+      expect(await retryApplication(db, id)).toBe('queued');
+      expect(await applicationForJob(db, job.id)).toMatchObject({ status: 'queued', trigger: c.trigger });
+    }
+  });
+});
+
 describe('sendRehearsal / sendAllRehearsals', () => {
   const answer = (id: string, value: string) => ({
     questionId: id, value, source: 'bank' as const, category: 'profile_fact' as const, basis: [], bankAnswerId: null,
