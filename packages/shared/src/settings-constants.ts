@@ -3,6 +3,7 @@
  * `@kv/shared/client`). A validação fica em `settings.ts`.
  */
 
+import type { EmailConfig } from './email-constants';
 import type { ApplyAiAnswers, ApplyMode, ApplyResumeMode, ApplySiteId } from './apply-constants';
 
 export const AI_PROVIDER_IDS = ['anthropic', 'openai', 'gemini'] as const;
@@ -54,6 +55,7 @@ export const SETTING_KEYS = [
   'provider', 'modelFast', 'modelStrong', 'dailyBudgetUsd', 'tier1Enabled', 'tier2Auto', 'greenhouseBoards', 'leverCompanies',
   'applyEnabled', 'applyMinScore', 'applySiteModes', 'applyDailyCaps', 'applyCompanyCap', 'applyWindow', 'applyResumeMode',
   'applyAiAnswers', 'applyBlockedCompanies', 'applyBlockedTerms',
+  'emailEnabled', 'emailMoveMode', 'emailFactsMode', 'emailAiDrafts',
 ] as const;
 export type SettingKey = (typeof SETTING_KEYS)[number];
 
@@ -132,6 +134,12 @@ export interface SettingsDto {
     blockedCompanies: SettingValue<string[]>;
     blockedTerms: SettingValue<string[]>;
   };
+  email: {
+    enabled: SettingValue<EmailConfig['enabled']>;
+    moveMode: SettingValue<EmailConfig['moveMode']>;
+    factsMode: SettingValue<EmailConfig['factsMode']>;
+    aiDrafts: SettingValue<EmailConfig['aiDrafts']>;
+  };
   general: {
     /** Próxima busca horária (hora cheia). O estado do worker vem de GET /runs/health. */
     nextRunAt: number;
@@ -160,6 +168,10 @@ export interface SettingsPatch {
   applyAiAnswers?: ApplyAiAnswers | null;
   applyBlockedCompanies?: string[] | null;
   applyBlockedTerms?: string[] | null;
+  emailEnabled?: EmailConfig['enabled'] | null;
+  emailMoveMode?: EmailConfig['moveMode'] | null;
+  emailFactsMode?: EmailConfig['factsMode'] | null;
+  emailAiDrafts?: EmailConfig['aiDrafts'] | null;
 }
 
 export type TestConnectionOutcome =
