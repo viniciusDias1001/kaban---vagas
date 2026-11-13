@@ -1,5 +1,5 @@
 import {
-  answerProfileFacts, classifyQuestions, dayStartMs, proposeBankMatches, verifyOpenAnswer, verifyProfileFact, writeOpenAnswer,
+  AiError, answerProfileFacts, classifyQuestions, dayStartMs, proposeBankMatches, verifyOpenAnswer, verifyProfileFact, writeOpenAnswer,
   type AiConfig, type AiProvider, type AiTier, type JobForAi, type TaskResult,
 } from '@kv/ai';
 import type { ResolveDeps } from '@kv/apply';
@@ -20,6 +20,8 @@ export class ApplyBudgetError extends Error {
 }
 
 export interface ApplyAi {
+  /** Há IA configurada (provedor e chave)? Sem ela, `ai()` lança `AiError('config')`; qualquer outro erro sobe. */
+  configured(): Promise<boolean>;
   /** O gasto de hoje (no fuso do orçamento) ainda está abaixo do limite diário? */
   mayCall(): Promise<boolean>;
   /** Pergunta `mayCall` e faz a chamada cobrada na camada `apply`. Sem orçamento: `ApplyBudgetError`, sem chamada. */
@@ -48,6 +50,15 @@ export function createApplyAi(deps: {
   }
 
   return {
+    async configured() {
+      try {
+        await load();
+        return true;
+      } catch (e) {
+        if (e instanceof AiError && e.kind === 'config') return false;
+        throw e;
+      }
+    },
     mayCall,
     async call(tier, fn) {
       if (!(await mayCall())) throw new ApplyBudgetError();
@@ -67,7 +78,9 @@ export function createApplyAi(deps: {
 /**
  * As chamadas ao modelo de que `resolveAnswers` precisa, todas cobradas em `apply` e cada uma depois de `mayCall`.
  * `profileFacts` só devolve fatos que passaram por `verifyProfileFact`; `writeOpen` só devolve texto que passou por
- * `verifyOpenAnswer`, com UMA tentativa de correção que leva as violações da primeira; senão null.
+ * `verifyOpenAnswer`, com UMA tentativa de correção que leva as violações da primeira; senão null. Sem IA configurada,
+ * nenhuma chama o modelo e todas devolvem "nada" (sem classificação, sem proposta, sem fato, sem texto): as regras e o
+ * banco de respostas continuam valendo e o resto vai ao dono.
  */
 export function resolveDepsFor(
   ai: ApplyAi,
@@ -76,13 +89,16 @@ export function resolveDepsFor(
   const { profile, job, lang, signal, now } = input;
   return {
     async classify(questions) {
+      if (!(await ai.configured())) return new Map();
       return (await ai.call('fast', (p) => classifyQuestions(p, questions, { signal }))).data;
     },
     async proposeMatches(questions, candidates) {
+      if (!(await ai.configured())) return new Map();
       const offered = candidates.map((c) => ({ id: c.id, question: c.question, answer: c.answer }));
       return (await ai.call('fast', (p) => proposeBankMatches(p, questions, offered, { signal }))).data;
     },
     async profileFacts(questions) {
+      if (!(await ai.configured())) return new Map();
       const found = (await ai.call('fast', (p) => answerProfileFacts(p, profile, questions, { signal }))).data;
       const out = new Map<string, { value: AnswerValue; basis: string[] }>();
       for (const q of questions) {
@@ -94,6 +110,7 @@ export function resolveDepsFor(
       return out;
     },
     async writeOpen(question) {
+      if (!(await ai.configured())) return null;
       const write = async (violations?: ReturnType<typeof verifyOpenAnswer>) =>
         (await ai.call('strong', (p) => writeOpenAnswer(p, { profile, job, question, lang, violations }, { signal }))).data;
       let text = await write();

@@ -7,12 +7,12 @@ import {
 import { gateJob, type JobForAi } from '@kv/ai';
 import { decideGate, isBlocked, siteFor, type ApplySite, type ApplyTarget, type BrowserSession } from '@kv/apply';
 import { MAX_DESCRIPTION_CHARS, type DescriptionFetcher } from '@kv/connectors';
-import { APPLY_DEFAULTS, type ApplyConfig, type CandidateProfile, type ResumeLang } from '@kv/shared';
+import { APPLY_DEFAULTS, APPLY_TIMING, type ApplyConfig, type CandidateProfile, type ResumeLang } from '@kv/shared';
 import type { Billing } from '../ai/billing';
 import type { ApplyAi } from './ai-calls';
 import { moveCardByAi } from './board';
 import { DAY_MS } from './day';
-import { cancelRequested, requeueTomorrow, settle, stopForOwner, BUDGET_DETAIL } from './outcome';
+import { BEFORE_CLICK, cancelRequested, requeueTomorrow, settle, stopForOwner, BUDGET_DETAIL } from './outcome';
 import { applicationResume } from './resume';
 
 export type JobRow = typeof jobs.$inferSelect;
@@ -42,6 +42,9 @@ export interface Prepared {
 }
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+export const NO_AI_DETAIL = 'IA não configurada; configure em Configurações';
+/** Sem IA configurada, a candidatura automática olha de novo depois disto (sem gastar tentativa). */
+const NO_AI_RETRY_MS = APPLY_TIMING.retryMs[1];
 const NO_BILLING: Billing = {
   provider: { id: 'fake', generate: async () => { throw new Error('nenhuma chamada ao modelo era esperada aqui'); } },
   billed: async () => { throw new Error('nenhuma chamada ao modelo era esperada aqui'); },
@@ -129,6 +132,14 @@ export async function prepare(c: PrepareContext, row: ApplicationRow): Promise<P
       // de uma vaga que passou: uma pulada pela conferência que o dono manda tentar de novo volta como manual
       // (`retryApplication`) e nem chega aqui.
       gate = { score: row.gateScore, eligible: true, ineligibleReason: '' };
+    } else if (!(await c.ai.configured())) {
+      // Sem IA não há conferência: a candidatura automática espera (sem gastar tentativa) até o dono configurar a IA.
+      await settle(
+        db, row.id,
+        { status: 'queued', detail: NO_AI_DETAIL, message: NO_AI_DETAIL, from: BEFORE_CLICK, set: { runAfter: c.now() + NO_AI_RETRY_MS } },
+        c.now(),
+      );
+      return null;
     } else {
       const profile = await baseProfile(db);
       if (profile) gate = (await c.ai.call('fast', (p) => gateJob(p, profile.data, jobForAi(job), { signal: c.signal }))).data;

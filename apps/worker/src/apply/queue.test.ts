@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desc, eq } from 'drizzle-orm';
-import { createFakeProvider, parseOutput, readBlock, readTask, type AiConfig, type AiProvider } from '@kv/ai';
+import { AiError, createFakeProvider, parseOutput, readBlock, readTask, type AiConfig, type AiProvider } from '@kv/ai';
 import {
   applications, applicationForJob, applyCommands, applyCountsSince, applyWorkerState, jobAi, lockApplication, closeDb, createApplication, enqueueApplyCommand, jobEvents, jobs,
   nextApplyCommand, nextQueuedApplication, recordUsage, requestCancel, retryApplication, saveApplyAnswer, siteState, transitionApplication,
@@ -495,6 +495,30 @@ describe('the daily AI limit', () => {
     expect(site.calls).toEqual(['open', 'readStep', 'discard']);
     expect(answerTasks()).toEqual([]);
     expect((await siteState(db, 'fake')).consecutiveFailures).toBe(0);
+  });
+});
+
+describe('without AI configured', () => {
+  const noAi = { ai: async () => { throw new AiError('config', 'IA não configurada'); } };
+
+  it('an automatic application that needs the gate waits, with a reason the owner can act on', async () => {
+    const { id: jobId } = await candidate();
+    await runUntilIdle(queue({ mode: 'real', deps: noAi }));
+    expect(await applicationForJob(db, jobId)).toMatchObject({
+      status: 'queued', detail: 'IA não configurada; configure em Configurações', attempts: 0, runAfter: NOON + 30 * MIN,
+    });
+    expect(site.calls).toEqual([]);
+  });
+
+  it('a manual application with the base résumé still runs: rules and saved answers apply, the rest goes to the owner', async () => {
+    site.variants.form = { questions: [...BASIC_QUESTIONS, MOTIVATION] };
+    const { id: jobId } = await candidate({ score: null });
+    await createApplication(db, { jobId, site: 'fake', trigger: 'manual', mode: 'real' }, NOON);
+    await runUntilIdle(queue({ mode: 'real', cfg: { resumeMode: 'base', aiAnswers: 'auto' }, deps: noAi }));
+    const row = (await applicationForJob(db, jobId))!;
+    expect(row).toMatchObject({ status: 'needs_human', reason: 'question', attempts: 0 });
+    expect(row.pendingQuestions.map((p) => p.question.id)).toEqual(['why']);
+    expect(row.answers.find((a) => a.questionId === 'name')).toMatchObject({ source: 'rule' });
   });
 });
 
