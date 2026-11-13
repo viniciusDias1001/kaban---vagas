@@ -14,6 +14,8 @@ import type { AiProvider } from './types';
  * - FAKE_AI_FIXABLE: igual a COMPROMISED, mas só na primeira tentativa: a nova tentativa (com `corrections` nos
  *   dados) vem limpa;
  * - FAKE_AI_EXTRA_FIELD: a camada 3 devolve um campo "company" a mais (quem barra é o schema).
+ * COMPROMISED também vale para a candidatura: a classificação devolve uma categoria inexistente e a resposta aberta
+ * ganha um número e uma empresa inventados.
  *
  * Formato de currículo que a extração falsa entende (o mesmo do arquivo de exemplo de @kv/resume/testing):
  *   linha 1: nome; linha 2: resumo; a linha com "@": contato, separado por " • " (e-mail e, por último, local);
@@ -71,6 +73,24 @@ function respond(task: string, data: Record<string, unknown>, profile: unknown):
       return analyze(data.job as FakeJob, skillNames(profile));
     case 'tier3':
       return tailor(profile as CandidateProfile, JSON.stringify(data), 'corrections' in data);
+    case 'apply_gate':
+      return { score: 80, reason: 'Aderência simulada pelo provedor falso.', eligible: true, ineligibleReason: '' };
+    case 'apply_classify': {
+      // FAKE_AI_COMPROMISED: categoria fora da lista (estrutura válida; quem barra é `classifyQuestions`).
+      const category = JSON.stringify(data).includes('FAKE_AI_COMPROMISED') ? 'astrology' : 'unknown';
+      return { items: (data.questions as { questionId: string }[]).map((qn) => ({ questionId: qn.questionId, category })) };
+    }
+    case 'apply_match':
+      return { items: [] };
+    case 'apply_facts':
+      return {
+        items: (data.questions as { questionId: string }[]).map((qn) => ({ questionId: qn.questionId, answer: '', basis: [], unknown: true })),
+      };
+    case 'apply_open': {
+      // FAKE_AI_COMPROMISED: o texto ganha um número e uma empresa inventados (quem barra é `verifyOpenAnswer`).
+      const summary = (profile as CandidateProfile).summary;
+      return { text: JSON.stringify(data).includes('FAKE_AI_COMPROMISED') ? `${summary} Trabalhei 10 anos na Empresa Inventada.` : summary };
+    }
     default:
       throw new AiError('other', `provedor falso: tarefa desconhecida "${task}"`);
   }

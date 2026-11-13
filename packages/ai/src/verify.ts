@@ -70,7 +70,7 @@ export function profileTexts(p: CandidateProfile): string[] {
  * Textos do perfil de onde um número do resumo pode vir. Ficam de FORA ids, telefone, e-mail, URLs e
  * rótulos de link: os dígitos deles não são fatos do currículo.
  */
-function numericTexts(p: CandidateProfile): string[] {
+export function numericTexts(p: CandidateProfile): string[] {
   return [
     p.summary,
     ...p.experiences.flatMap((e) => [e.company, e.title, e.start, e.end, ...e.achievements.map((a) => a.text)]),
