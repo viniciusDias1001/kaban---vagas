@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { APPLICATION_STATUSES, NEEDS_HUMAN_REASONS, SKIP_REASONS, type AnswerSource, type ApplicationListItemDto, type ApplicationStatus, type ApplyStatusDto, type PendingQuestion, type Question } from '@kv/shared';
 import {
-  AI_ANSWER_LABELS, PENDING_KIND_LABELS, SOURCE_LABELS, STATUS_LABELS, applyErrorMessage, applyPollMs, cardBadge, filterApplications,
+  AI_ANSWER_LABELS, FILTER_LABELS, PENDING_KIND_LABELS, type ApplicationFilter, SOURCE_LABELS, STATUS_LABELS, applyErrorMessage, applyPollMs, cardBadge, filterApplications,
   filterCounts, reasonText, toPendingAnswersBody, validatePendingDrafts, type PendingDraft,
 } from './apply';
 
@@ -23,6 +23,17 @@ describe('filters', () => {
     expect(filterCounts(items)).toEqual({ active: 2, needs_human: 1, rehearsals: 1, submitted: 3, skipped: 2 });
     expect(filterApplications(items, 'needs_human').map((i) => i.status)).toEqual(['needs_human']);
     expect(filterApplications(items, 'active').map((i) => i.id)).toEqual([1, 2]);
+  });
+  it('puts every status in exactly one filter, so "not sent" includes failed and cancelled', () => {
+    const filters = Object.keys(FILTER_LABELS) as ApplicationFilter[];
+    for (const status of APPLICATION_STATUSES) {
+      const hits = filters.filter((f) => filterApplications([item(1, status)], f).length === 1);
+      expect(hits, status).toHaveLength(1);
+    }
+    expect(filterApplications([item(1, 'failed'), item(2, 'cancelled'), item(3, 'skipped')], 'skipped')).toHaveLength(3);
+    expect(FILTER_LABELS).toEqual({
+      active: 'Em andamento', needs_human: 'Precisam de você', rehearsals: 'Ensaios prontos', submitted: 'Enviadas', skipped: 'Não enviadas',
+    });
   });
   it('labels every status', () => {
     for (const s of APPLICATION_STATUSES) expect(STATUS_LABELS[s].length).toBeGreaterThan(0);

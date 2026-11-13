@@ -53,11 +53,12 @@ const FILTER_MATCH: Record<ApplicationFilter, (status: ApplicationStatus) => boo
   needs_human: (s) => s === 'needs_human',
   rehearsals: (s) => s === 'dry_run_ready',
   submitted: (s) => s === 'submitted',
-  skipped: (s) => s === 'skipped',
+  /** "Não enviadas": puladas, falhas e canceladas. */
+  skipped: (s) => s === 'skipped' || s === 'failed' || s === 'cancelled',
 };
 
 export const FILTER_LABELS: Record<ApplicationFilter, string> = {
-  active: 'Em andamento', needs_human: 'Precisam de você', rehearsals: 'Ensaios', submitted: 'Enviadas', skipped: 'Puladas',
+  active: 'Em andamento', needs_human: 'Precisam de você', rehearsals: 'Ensaios prontos', submitted: 'Enviadas', skipped: 'Não enviadas',
 };
 
 export function filterApplications(items: ApplicationListItemDto[], filter: ApplicationFilter): ApplicationListItemDto[] {
