@@ -26,7 +26,10 @@ export interface ApplySite {
   fillStep(page: Page, answers: ResolvedAnswer[], files: { resumePath: string }): Promise<void>;
   /** Avança uma etapa; nunca envia. */
   next(page: Page): Promise<void>;
-  /** Clica no envio final e confirma que o site aceitou. */
+  /**
+   * Clica no envio final e confirma que o site aceitou. Não clica de novo quando a confirmação já está na tela: o
+   * motor chama `submit` outra vez depois de um bloqueio resolvido pelo dono.
+   */
   submit(page: Page): Promise<{ confirmation: string }>;
   humanGate(page: Page): Promise<HumanGate | null>;
   /** Fecha o formulário sem enviar e sem deixar rascunho. */

@@ -180,12 +180,38 @@ describe('runApplication', () => {
     expect(res).toMatchObject({ status: 'needs_human', reason: 'restricted' });
     expect(order.some((c) => c.startsWith('wait:'))).toBe(false);
     expect(order).not.toContain('report:waiting_human');
+    expect(order).toContain('site:discard');
   });
 
   it(`stops waiting after ${MAX_GATE_WAITS} solved waits`, async () => {
     const res = await runApplication(target, deps({ humanGate: async () => 'verification_code' }));
     expect(res).toMatchObject({ status: 'needs_human', reason: 'verification_code' });
     expect(count('wait:verification_code')).toBe(MAX_GATE_WAITS);
+    expect(order).not.toContain('site:submit');
+    expect(order).toContain('site:discard');
+  });
+
+  it('reports filling once when a gate is solved before anything was read', async () => {
+    let opens = 0;
+    const res = await runApplication(target, deps({
+      open: async () => {
+        if (++opens === 1) throw new SiteLayoutError('página de login');
+        return { kind: 'form' };
+      },
+      humanGate: async () => (opens === 1 ? 'login' : null),
+    }));
+    expect(res.status).toBe('submitted');
+    expect(count('site:open')).toBe(2);
+    expect(order.filter((c) => c.startsWith('report:'))).toEqual(['report:waiting_human', 'report:filling', 'report:submitting']);
+  });
+
+  it('discards and rethrows when the gate check right before submitting fails', async () => {
+    const boom = new Error('Target page, context or browser has been closed');
+    await expect(runApplication(target, deps({
+      humanGate: async () => { if (order.includes('site:fillStep')) throw boom; return null; },
+    }))).rejects.toBe(boom);
+    expect(order).toContain('site:discard');
+    expect(order).not.toContain('report:submitting');
     expect(order).not.toContain('site:submit');
   });
 
@@ -237,12 +263,40 @@ describe('runApplication', () => {
     expect(order).not.toContain('site:submit');
   });
 
-  it('turns a silent refusal into needs_human captcha', async () => {
+  it('turns a silent refusal after the click into confirm_submission', async () => {
     const res = await runApplication(target, deps({ submit: async () => { throw new SubmitRejectedError('recusado'); } }));
     expect(res).toMatchObject({
-      status: 'needs_human', reason: 'captcha', detail: 'o site recusou o envio automático; envie por conta própria',
+      status: 'needs_human', reason: 'confirm_submission',
+      detail: 'o site recusou o envio automático depois do clique; confira no site se a candidatura chegou e, se não chegou, envie por conta própria',
     });
     expect(count('site:submit')).toBe(1);
+    expect(order).not.toContain('site:discard');
+  });
+
+  it('turns a restriction page after the click into confirm_submission, without waiting', async () => {
+    let clicked = false;
+    const res = await runApplication(target, deps({
+      submit: async () => { clicked = true; throw new SiteLayoutError('restrição'); },
+      humanGate: async () => (clicked ? 'restricted' : null),
+    }));
+    expect(res).toMatchObject({
+      status: 'needs_human', reason: 'confirm_submission',
+      detail: 'o site mostrou uma página de restrição depois do clique de envio; confira no site se a candidatura chegou',
+    });
+    expect(count('site:submit')).toBe(1);
+    expect(order.some((c) => c.startsWith('wait:'))).toBe(false);
+    expect(order).not.toContain('site:discard');
+  });
+
+  it('keeps only the first line of the error, cut at 200 characters, after the Portuguese sentence', async () => {
+    const long = `page.click: Timeout ${'x'.repeat(300)}\nCall log:\n  - waiting for locator`;
+    const res = await runApplication(target, deps({ submit: async () => { throw new Error(long); } }));
+    expect(res.status).toBe('needs_human');
+    const detail = res.status === 'needs_human' ? res.detail : '';
+    expect(detail.startsWith('o envio foi clicado, mas não deu para confirmar que o site recebeu; confira no site se a candidatura chegou')).toBe(true);
+    expect(detail).toContain(long.split('\n')[0]!.slice(0, 200));
+    expect(detail).not.toContain(long.split('\n')[0]!.slice(0, 201));
+    expect(detail).not.toContain('Call log');
   });
 
   it(`gives up after ${MAX_FORM_STEPS} steps`, async () => {
@@ -275,6 +329,7 @@ describe('runApplication', () => {
   it('asks the owner to confirm when submit fails after the click', async () => {
     const res = await runApplication(target, deps({ mode: 'real', submit: async () => { throw new SiteLayoutError('confira no site'); } }));
     expect(res).toMatchObject({ status: 'needs_human', reason: 'confirm_submission' });
+    expect(res.status === 'needs_human' && res.detail).not.toMatch(/nada foi enviado/);
     expect(order.filter((c) => c === 'site:submit')).toHaveLength(1);
     expect(order).not.toContain('site:discard');
   });
@@ -342,21 +397,27 @@ describe('runApplication', () => {
       submit: async () => { rejected = true; throw new SubmitRejectedError('captcha'); },
       humanGate: async () => (rejected ? 'captcha' : null),
     }));
-    expect(res).toMatchObject({ status: 'needs_human', reason: 'captcha' });
+    expect(res).toMatchObject({
+      status: 'needs_human', reason: 'confirm_submission',
+      detail: `o site pediu uma verificação (captcha) depois do clique de envio, de novo depois de ${MAX_GATE_WAITS} esperas resolvidas; confira no site se a candidatura chegou`,
+    });
     expect(count('wait:captcha')).toBe(MAX_GATE_WAITS);
     expect(count('site:submit')).toBe(MAX_GATE_WAITS + 1);
     expect(order).not.toContain('report:waiting_human');
     expect(order).not.toContain('site:discard');
   });
 
-  it('gives up with the gate reason when the owner does not come on submit', async () => {
+  it('asks the owner to confirm when nobody solves a gate after the click', async () => {
     let rejected = false;
     const res = await runApplication(target, deps({
       submit: async () => { rejected = true; throw new SubmitRejectedError('captcha'); },
       humanGate: async () => (rejected ? 'captcha' : null),
       waitHuman: async () => 'timeout',
     }));
-    expect(res).toMatchObject({ status: 'needs_human', reason: 'captcha' });
+    expect(res).toMatchObject({
+      status: 'needs_human', reason: 'confirm_submission',
+      detail: 'o site pediu uma verificação (captcha) depois do clique de envio e o tempo de espera acabou; confira no site se a candidatura chegou',
+    });
     expect(count('site:submit')).toBe(1);
     expect(order).not.toContain('report:waiting_human');
     expect(order).not.toContain('site:discard');

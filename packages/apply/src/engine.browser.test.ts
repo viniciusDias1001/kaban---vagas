@@ -79,9 +79,9 @@ describe('runApplication on the test site', () => {
     expect(page.url()).toBe('about:blank');
   });
 
-  it('hands a refused submit back to the owner', async () => {
+  it('hands a refused submit back to the owner to confirm on the site', async () => {
     const res = await runApplication(siteFor(fakeJob('rejected'), [site])!.target, realDeps());
-    expect(res).toMatchObject({ status: 'needs_human', reason: 'captcha' });
+    expect(res).toMatchObject({ status: 'needs_human', reason: 'confirm_submission' });
   });
 
   it('turns an unknown page into unsupported_form with a photo', async () => {

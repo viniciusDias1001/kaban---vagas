@@ -43,14 +43,27 @@ export const MAX_FORM_STEPS = 12;
 /** Solved waits per application; a gate that keeps coming back after that goes to the owner. */
 export const MAX_GATE_WAITS = 5;
 
-const SUBMIT_REJECTED_DETAIL = 'o site recusou o envio automático; envie por conta própria';
-const CANCELLED_AFTER_CLICK_DETAIL = 'o envio foi iniciado antes do cancelamento; confira no site se a candidatura chegou';
+/** Before the click: what the page asked for. */
 const GATE_DETAIL: Record<HumanGate, string> = {
   captcha: 'o site pediu uma verificação de que você não é um robô',
   verification_code: 'o site pediu um código de verificação',
   login: 'o site pediu login',
   restricted: 'o site restringiu a conta ou a candidatura; nada foi enviado',
 };
+/**
+ * After the click every stop that is not `submitted` is `confirm_submission`: a click may have reached the site.
+ * No detail here may say that nothing was sent; each ends with the instruction to check.
+ */
+const CHECK = 'confira no site se a candidatura chegou';
+const GATE_AFTER_CLICK: Record<HumanGate, string> = {
+  captcha: 'o site pediu uma verificação (captcha) depois do clique de envio',
+  verification_code: 'o site pediu um código de verificação depois do clique de envio',
+  login: 'o site pediu login depois do clique de envio',
+  restricted: 'o site mostrou uma página de restrição depois do clique de envio',
+};
+const REJECTED_AFTER_CLICK_DETAIL = `o site recusou o envio automático depois do clique; ${CHECK} e, se não chegou, envie por conta própria`;
+const CANCELLED_AFTER_CLICK_DETAIL = `o envio foi iniciado antes do cancelamento; ${CHECK}`;
+const ERROR_EVIDENCE_MAX = 200;
 
 /** Ends the run with a result; thrown from helpers so the sequence reads top to bottom. */
 class Finish {
@@ -96,24 +109,36 @@ export async function runApplication(target: ApplyTarget, deps: EngineDeps): Pro
   const report = async (update: EngineUpdate) => {
     if (!(await deps.report(update))) await finish({ status: 'cancelled' });
   };
+  /** The stored status is `filling`: reported once per run of filling (again only after a wait). */
+  let filling = false;
+  const markFilling = async () => {
+    if (filling) return;
+    await report({ status: 'filling' });
+    filling = true;
+  };
   /**
    * Waits for the owner to solve `gate`; returns only when solved. Before the click the wait is recorded as
    * `waiting_human` and `filling` comes back after it. After the click the stored state stays `submitting` (that is
    * what makes crash recovery confirm with the site instead of re-queueing): no other status is reported, and the
-   * `submitting` report before the next click is only the cancel check; a cancel there cannot promise the first
-   * click was not received, so it goes to the owner as `confirm_submission`.
+   * `submitting` report before the next click is only the cancel check. After the click every way this ends other
+   * than solved is `confirm_submission`, since a click may already have reached the site.
    */
   const waitGate = async (gate: HumanGate) => {
-    if (gate === 'restricted') await finish(needsHuman(gate, GATE_DETAIL[gate]));
+    /** Stops on the gate: before the click with the gate as reason, after it as `confirm_submission`. */
+    const stop = (suffix: string) => finish(clicked
+      ? needsHuman('confirm_submission', `${GATE_AFTER_CLICK[gate]}${suffix}; ${CHECK}`)
+      : needsHuman(gate, `${GATE_DETAIL[gate]}${suffix}`));
+    if (gate === 'restricted') await stop('');
     if (solvedWaits >= MAX_GATE_WAITS) {
-      await finish(needsHuman(gate, `${GATE_DETAIL[gate]} de novo, depois de ${MAX_GATE_WAITS} esperas resolvidas`));
+      await stop(clicked ? `, de novo depois de ${MAX_GATE_WAITS} esperas resolvidas` : ` de novo, depois de ${MAX_GATE_WAITS} esperas resolvidas`);
     }
-    if (!clicked) await report({ status: 'waiting_human', gate });
-    if ((await deps.waitHuman(gate)) === 'timeout') {
-      await finish(needsHuman(gate, `${GATE_DETAIL[gate]} e o tempo de espera acabou`));
+    if (!clicked) {
+      await report({ status: 'waiting_human', gate });
+      filling = false;
     }
+    if ((await deps.waitHuman(gate)) === 'timeout') await stop(' e o tempo de espera acabou');
     solvedWaits += 1;
-    if (!clicked) await report({ status: 'filling' });
+    if (!clicked) await markFilling();
     else if (!(await deps.report({ status: 'submitting', answers: records() }))) {
       await finish(needsHuman('confirm_submission', CANCELLED_AFTER_CLICK_DETAIL));
     }
@@ -122,7 +147,6 @@ export async function runApplication(target: ApplyTarget, deps: EngineDeps): Pro
   // Before the click: open, walk the steps, decide whether to send, record `submitting`.
   try {
     let needOpen = true;
-    let filling = false;
     let readSinceOpen = false;
     let step = 1;
     for (;;) {
@@ -133,10 +157,7 @@ export async function runApplication(target: ApplyTarget, deps: EngineDeps): Pro
           needOpen = false;
           readSinceOpen = false;
           step = 1;
-          if (!filling) {
-            await report({ status: 'filling' });
-            filling = true;
-          }
+          await markFilling();
         }
         const gate = await site.humanGate(page);
         if (gate) {
@@ -214,7 +235,7 @@ export async function runApplication(target: ApplyTarget, deps: EngineDeps): Pro
           await waitGate(gate);
           continue;
         }
-        if (err instanceof SubmitRejectedError) return needsHuman('captcha', SUBMIT_REJECTED_DETAIL);
+        if (err instanceof SubmitRejectedError) return needsHuman('confirm_submission', REJECTED_AFTER_CLICK_DETAIL);
         await photo('blocked');
         return needsHuman('confirm_submission', confirmDetail(err));
       }
@@ -227,7 +248,8 @@ export async function runApplication(target: ApplyTarget, deps: EngineDeps): Pro
   }
 }
 
+/** The Portuguese sentence first; the error's first line, cut short, only as evidence after it. */
 function confirmDetail(err: unknown): string {
-  const why = err instanceof Error && err.message ? ` (${err.message})` : '';
-  return `o envio foi clicado, mas não deu para confirmar que o site recebeu${why}; confira no site antes de enviar de novo`;
+  const line = err instanceof Error ? (err.message.split(/\r?\n/)[0] ?? '').trim().slice(0, ERROR_EVIDENCE_MAX) : '';
+  return `o envio foi clicado, mas não deu para confirmar que o site recebeu; ${CHECK}${line ? ` (erro: ${line})` : ''}`;
 }
