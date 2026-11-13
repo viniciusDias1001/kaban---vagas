@@ -56,10 +56,10 @@ export function companyCore(name: string): string[] {
 /** Todos os textos do perfil, menos os ids: onde um termo pode "existir". */
 export function profileTexts(p: CandidateProfile): string[] {
   return [
-    p.contact.name, p.contact.email, p.contact.phone, p.contact.location, p.summary,
-    ...p.experiences.flatMap((e) => [e.company, e.title, e.start, e.end, e.location, ...e.achievements.map((a) => a.text)]),
+    p.contact.name, p.contact.email, p.contact.phone, p.contact.location, p.summary, p.headline ?? '',
+    ...p.experiences.flatMap((e) => [e.company, e.title, e.start, e.end, e.location, e.note ?? '', ...e.achievements.map((a) => a.text)]),
     ...p.education.flatMap((e) => [e.institution, e.degree, e.start, e.end]),
-    ...p.skills.map((k) => k.name),
+    ...p.skills.flatMap((k) => [k.name, k.group ?? '']),
     ...p.languages.flatMap((l) => [l.name, l.level]),
     ...p.certifications.flatMap((c) => [c.name, c.issuer, c.date]),
     ...p.links.flatMap((l) => [l.label, l.url]),
@@ -72,10 +72,10 @@ export function profileTexts(p: CandidateProfile): string[] {
  */
 function numericTexts(p: CandidateProfile): string[] {
   return [
-    p.summary,
-    ...p.experiences.flatMap((e) => [e.company, e.title, e.start, e.end, ...e.achievements.map((a) => a.text)]),
+    p.summary, p.headline ?? '',
+    ...p.experiences.flatMap((e) => [e.company, e.title, e.start, e.end, e.note ?? '', ...e.achievements.map((a) => a.text)]),
     ...p.education.flatMap((e) => [e.institution, e.degree, e.start, e.end]),
-    ...p.skills.map((k) => k.name),
+    ...p.skills.flatMap((k) => [k.name, k.group ?? '']),
     ...p.languages.flatMap((l) => [l.name, l.level]),
     ...p.certifications.flatMap((c) => [c.name, c.issuer, c.date]),
   ];
@@ -267,6 +267,7 @@ export function resolveTailored(
   const resume: TailoredResume = {
     lang,
     contact: profile.contact,
+    headline: profile.headline ?? '',
     summary: draft.summary,
     experiences,
     education: pick(profile.education, draft.educationIds, 'educationIds', 'formação'),
