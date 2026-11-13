@@ -129,7 +129,10 @@ export function emailAccountRoutes(app: FastifyInstance, db: Db, ctx: AiContext)
     return dto();
   });
 
+  /** Apagar o token só pede host local: sem APP_SECRET ele ainda pode ser apagado (é o jeito de largar um ilegível). */
   app.delete('/email/phone-token', async (_req, reply) => {
+    const { available, reason } = emailAvailability(process.env);
+    if (!available) return reply.code(409).send({ error: 'email_unavailable', message: reason });
     await ctx.settings.deleteSecret('telegram_bot_token');
     return reply.code(204).send();
   });
