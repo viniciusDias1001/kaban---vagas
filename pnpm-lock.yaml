@@ -35,6 +35,9 @@ importers:
       '@kv/ai':
         specifier: workspace:*
         version: link:../../packages/ai
+      '@kv/apply':
+        specifier: workspace:*
+        version: link:../../packages/apply
       '@kv/connectors':
         specifier: workspace:*
         version: link:../../packages/connectors

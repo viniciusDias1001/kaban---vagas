@@ -1,3 +1,4 @@
+import { applyDataDir, applySites, type ApplySite } from '@kv/apply';
 import { createProvider, type AiConfig, type AiProvider } from '@kv/ai';
 import type { Db } from '@kv/db';
 import type { TailoredResume } from '@kv/shared';
@@ -20,6 +21,10 @@ export interface AiContext {
   createProvider: (config: AiConfig) => AiProvider;
   /** Limite de frequência do "Testar conexão". */
   testLimiter: RateLimiter;
+  /** Pasta de dados da candidatura automática (fotos, perfil do navegador). Trocada nos testes. */
+  dataDir: string;
+  /** Sites de candidatura registrados (com `FAKE_APPLY_SITE=1`, só o de teste). Trocados nos testes. */
+  sites: ApplySite[];
   now: () => number;
 }
 
@@ -37,6 +42,8 @@ export function createAiContext(db: Db, over: AiContextOptions = {}): AiContext 
     createProvider: over.createProvider ?? createProvider,
     // No máximo um teste a cada 10 s e cinco a cada 10 min: o botão não vira amplificador de gasto.
     testLimiter: over.testLimiter ?? createRateLimiter({ minIntervalMs: 10_000, max: 5, windowMs: 10 * 60_000, now }),
+    dataDir: over.dataDir ?? applyDataDir(),
+    sites: over.sites ?? applySites(),
     now,
   };
 }

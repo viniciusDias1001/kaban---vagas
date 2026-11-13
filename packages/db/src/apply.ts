@@ -114,6 +114,11 @@ export async function applicationForJob(db: Db, jobId: number): Promise<Applicat
   return row ?? null;
 }
 
+export async function applicationById(db: Db, id: number): Promise<ApplicationRow | null> {
+  const [row] = await db.select().from(applications).where(eq(applications.id, id));
+  return row ?? null;
+}
+
 export async function listApplicationEvents(db: Db, id: number): Promise<ApplicationEventDto[]> {
   const rows = await db
     .select({ status: eventsTable.status, message: eventsTable.message, at: eventsTable.createdAt })
@@ -382,12 +387,13 @@ export async function lockApplication(db: Db, id: number): Promise<ApplicationRo
   return row ?? null;
 }
 
-/** Quantas candidaturas esperam na fila e quantas esperam o dono. */
-export async function applicationQueueCounts(db: Db): Promise<{ queued: number; needsHuman: number }> {
+/** Quantas candidaturas esperam na fila, quantas esperam o dono e quantas estão em andamento. */
+export async function applicationQueueCounts(db: Db): Promise<{ queued: number; needsHuman: number; running: number }> {
   const [row] = await db
     .select({
       queued: sql<number>`count(*) filter (where ${applications.status} = 'queued')::int`.mapWith(Number),
       needsHuman: sql<number>`count(*) filter (where ${applications.status} = 'needs_human')::int`.mapWith(Number),
+      running: sql<number>`count(*) filter (where ${applications.status} in ('preparing', 'filling', 'waiting_human', 'submitting'))::int`.mapWith(Number),
     })
     .from(applications);
   return row;

@@ -331,11 +331,11 @@ describe('queue counts and the live wait', () => {
     const a = await create();
     await create();
     const c = await create();
-    expect(await applicationQueueCounts(db)).toEqual({ queued: 3, needsHuman: 0 });
+    expect(await applicationQueueCounts(db)).toEqual({ queued: 3, needsHuman: 0, running: 0 });
     expect(await waitingApplication(db)).toBeNull();
     await transitionApplication(db, a.id, { status: 'needs_human', reason: 'question' });
     await transitionApplication(db, c.id, { status: 'waiting_human', set: { waitingGate: 'captcha' } });
-    expect(await applicationQueueCounts(db)).toEqual({ queued: 1, needsHuman: 1 });
+    expect(await applicationQueueCounts(db)).toEqual({ queued: 1, needsHuman: 1, running: 1 });
     expect(await waitingApplication(db)).toEqual({ applicationId: c.id, jobId: c.job.id, gate: 'captcha' });
   });
 });
