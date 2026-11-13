@@ -324,7 +324,7 @@ const PHONE_OPTIONS: { value: PhoneAlertChannel; label: string }[] = [
 ];
 const PHONE_HINTS: Record<PhoneAlertChannel, string> = {
   off: 'Convites e ofertas ficam só no sino do app.',
-  telegram: 'Convite de entrevista e oferta também chegam como mensagem do seu bot no Telegram, uma por e-mail.',
+  telegram: 'Convite de entrevista e oferta também chegam como mensagem do seu bot no Telegram, uma por convite ou oferta.',
 };
 const PHONE_STEPS = [
   'No Telegram, fale com o BotFather e crie um bot.',
