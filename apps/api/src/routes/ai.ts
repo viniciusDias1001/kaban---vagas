@@ -1,3 +1,5 @@
+import { rm } from 'node:fs/promises';
+import { join } from 'node:path';
 import { desc, eq, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
@@ -46,6 +48,25 @@ export const toProfileDto = (row: CandidateProfileRow): CandidateProfileDto => (
 function safeFileName(raw: string | undefined, fallback: string): string {
   const name = (raw ?? '').split(/[\\/]/).pop()!.replace(/[\u0000-\u001f\u007f]/g, '').trim();
   return name.slice(0, LIMITS.resumeFileName) || fallback;
+}
+
+/** As pastas da candidatura automática com conteúdo pessoal que "Apagar todos os dados de IA" remove. `browser/` fica. */
+export const APPLY_DATA_FOLDERS = ['shots', 'resumes'] as const;
+
+/**
+ * Remove `<dataDir>/shots` e `<dataDir>/resumes`. Um arquivo em uso (o worker abrindo uma foto, o Windows segurando um
+ * PDF) não derruba o pedido: o que não saiu fica para a limpeza de 90 dias, e o motivo vai para o log.
+ */
+export async function removeApplyFiles(dataDir: string): Promise<void> {
+  for (const folder of APPLY_DATA_FOLDERS) {
+    try {
+      await rm(join(dataDir, folder), { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    } catch (e) {
+      const code = (e as { code?: string } | null)?.code;
+      if (code !== 'EBUSY' && code !== 'EPERM' && code !== 'ENOTEMPTY' && code !== 'EACCES') throw e;
+      console.error(`[api] não deu para apagar ${folder}/ inteira (${code}): um arquivo está em uso`);
+    }
+  }
 }
 
 export function aiRoutes(app: FastifyInstance, db: Db, ctx: AiContext) {
@@ -180,6 +201,8 @@ export function aiRoutes(app: FastifyInstance, db: Db, ctx: AiContext) {
    */
   app.delete('/ai/data', async (_req, reply) => {
     await deleteAllAiData(db);
+    // Depois da transação: as fotos e os currículos enviados que ficaram no disco. Nunca o perfil do navegador.
+    await removeApplyFiles(ctx.dataDir);
     return reply.code(204).send();
   });
 

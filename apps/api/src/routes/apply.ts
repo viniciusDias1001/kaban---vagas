@@ -3,23 +3,23 @@ import { dayStartMs } from '@kv/ai';
 import { withinWindow } from '@kv/apply';
 import {
   applyAnswerExists, applicationQueueCounts, applyCountsSince, deleteApplyAnswer, enqueueApplyCommand, ensureSeedAnswers, listApplyAnswers,
-  removeAlias, saveApplyAnswer, siteState, toApplyAnswerDto, updateSiteState, waitingApplication, type ApplyCommandKind, type Db,
+  removeAlias, requeueQuestionWaits, saveApplyAnswer, siteState, toApplyAnswerDto, updateSiteState, waitingApplication,
+  type ApplyCommandKind, type Db,
 } from '@kv/db';
 import {
-  APPLY_SITE_IDS, APPLY_SITE_LABELS, ApplyAnswerInputSchema, applyAvailability, type ApplyAnswerDto, type ApplySiteId,
+  APPLY_SITE_IDS, APPLY_SITE_LABELS, ApplyAnswerInputSchema, NUMBER_FORMAT_PROBLEM, parseNumberAnswer, type ApplyAnswerDto, type ApplySiteId,
   type ApplySiteStateDto, type ApplyStatusDto,
 } from '@kv/shared';
 import type { AiContext } from '../ai-context';
+import { applyAvailabilityNow, refuseOffLocalHost, refuseUnlessWorkerCanRun } from '../apply-availability';
 import { idParam } from './ids';
-import { NUMBER_ANSWER_MESSAGE, normalizeNumberAnswer } from './number-answer';
-
-const unavailable = (reason: string | null) => ({ error: 'apply_unavailable', message: reason ?? 'a candidatura automática não está disponível' });
 const answerNotFound = { error: 'not_found', message: 'resposta não encontrada' };
 
 /** Status, contas dos sites e banco de respostas da candidatura automática. Nenhuma rota chama modelo de IA. */
 export function applyRoutes(app: FastifyInstance, db: Db, ctx: AiContext) {
   app.get('/apply/status', async () => {
-    const availability = applyAvailability(process.env);
+    // O host da API e o que o worker publicou: um worker sem navegador torna a função indisponível, com o motivo dele.
+    const availability = await applyAvailabilityNow(db);
     const cfg = await ctx.settings.applyConfig();
     const now = ctx.now();
     const counts = await applyCountsSince(db, dayStartMs(now, cfg.timeZone));
@@ -39,6 +39,7 @@ export function applyRoutes(app: FastifyInstance, db: Db, ctx: AiContext) {
       available: availability.available, unavailableReason: availability.reason, enabled: cfg.enabled,
       withinWindow: withinWindow(now, cfg.window, cfg.timeZone), sites, totalToday: counts.total, totalCap: cfg.dailyCaps.total,
       queued: queue.queued, needsHuman: queue.needsHuman, running: queue.running, waiting: await waitingApplication(db),
+      worker: availability.worker,
     };
     return body;
   });
@@ -48,8 +49,7 @@ export function applyRoutes(app: FastifyInstance, db: Db, ctx: AiContext) {
     app.route({
       method, url: path,
       handler: async (req, reply) => {
-        const availability = applyAvailability(process.env);
-        if (!availability.available) return reply.code(409).send(unavailable(availability.reason));
+        if (await refuseUnlessWorkerCanRun(db, reply)) return reply;
         const site = ctx.sites.find((s) => s.id === (req.params as { site: string }).site);
         if (!site) return reply.code(404).send({ error: 'not_found', message: 'site desconhecido' });
         if (!site.needsLogin) return reply.code(400).send({ error: 'no_login', message: 'este site não pede login' });
@@ -64,6 +64,7 @@ export function applyRoutes(app: FastifyInstance, db: Db, ctx: AiContext) {
 
   /** Tira a pausa do site e zera as sequências que a causaram. */
   app.post('/apply/sites/:site/resume', async (req, reply) => {
+    if (await refuseOffLocalHost(reply)) return reply;
     const site = (req.params as { site: string }).site as ApplySiteId;
     if (!APPLY_SITE_IDS.includes(site)) return reply.code(404).send({ error: 'not_found', message: 'site desconhecido' });
     await updateSiteState(db, site, {
@@ -78,19 +79,35 @@ export function applyRoutes(app: FastifyInstance, db: Db, ctx: AiContext) {
     return body;
   });
 
+  /**
+   * Grava uma resposta do banco. Uma gravação que muda o que a resposta diz (ou a pergunta, o alcance ou o país a que ela
+   * vale) devolve à fila as candidaturas que esperavam perguntas: a resposta nova pode servir a elas.
+   */
   const saveAnswer = async (req: FastifyRequest, reply: FastifyReply, id?: number) => {
+    if (await refuseOffLocalHost(reply)) return reply;
     const input = ApplyAnswerInputSchema.parse(req.body);
     if (input.scope !== 'always' && !input.scopeValue?.trim()) {
       return reply.code(400).send({ error: 'validation', message: 'scopeValue: informe a empresa ou a vaga a que a resposta se aplica' });
     }
     let answer = input.answer;
     if (input.kind === 'number' && answer.trim() !== '') {
-      const number = normalizeNumberAnswer(answer);
-      if (number === null) return reply.code(400).send({ error: 'validation', message: NUMBER_ANSWER_MESSAGE });
+      const number = parseNumberAnswer(answer);
+      if (number === null) return reply.code(400).send({ error: 'validation', message: NUMBER_FORMAT_PROBLEM });
       answer = number;
     }
-    if (id !== undefined && !(await applyAnswerExists(db, id))) return reply.code(404).send(answerNotFound);
-    const row = await saveApplyAnswer(db, { ...input, answer, id, scopeValue: input.scopeValue?.trim() || null }, ctx.now());
+    const now = ctx.now();
+    const row = await db.transaction(async (tx) => {
+      const old = id === undefined ? undefined : (await listApplyAnswers(tx)).find((r) => r.id === id);
+      if (id !== undefined && !old) return null;
+      const saved = await saveApplyAnswer(tx, { ...input, answer, id, scopeValue: input.scopeValue?.trim() || null }, now);
+      const changed = saved.answer.trim() !== '' && (
+        !old || old.answer !== saved.answer || old.normalized !== saved.normalized || old.scope !== saved.scope ||
+        old.scopeValue !== saved.scopeValue || old.country !== saved.country
+      );
+      if (changed) await requeueQuestionWaits(tx, 0, now);
+      return saved;
+    });
+    if (!row) return reply.code(404).send(answerNotFound);
     return toApplyAnswerDto(row);
   };
   app.post('/apply/answers', async (req, reply) => saveAnswer(req, reply));
@@ -101,11 +118,13 @@ export function applyRoutes(app: FastifyInstance, db: Db, ctx: AiContext) {
   });
 
   app.delete('/apply/answers/:id', async (req, reply) => {
+    if (await refuseOffLocalHost(reply)) return reply;
     const id = idParam(req);
     if (id === null || !(await deleteApplyAnswer(db, id))) return reply.code(404).send(answerNotFound);
     return reply.code(204).send();
   });
   app.delete('/apply/answers/:id/aliases/:normalized', async (req, reply) => {
+    if (await refuseOffLocalHost(reply)) return reply;
     const id = idParam(req);
     if (id === null || !(await applyAnswerExists(db, id))) return reply.code(404).send(answerNotFound);
     await removeAlias(db, id, (req.params as { normalized: string }).normalized, ctx.now());

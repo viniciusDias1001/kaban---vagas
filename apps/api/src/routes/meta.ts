@@ -9,7 +9,16 @@ const countWhere = (condition?: ReturnType<typeof sql>) =>
   (condition ? sql<number>`(count(*) filter (where ${condition}))::int` : sql<number>`count(*)::int`).mapWith(Number);
 
 export function metaRoutes(app: FastifyInstance, db: Db) {
-  app.get('/sources', (): SourceDto[] => getConnectors().map((c) => ({ id: c.id, name: c.name })));
+  /**
+   * O nome do banco em que esta API está. Só leitura, atrás das mesmas travas de host. O e2e confere por aqui que o
+   * servidor que alcançou é o dele (banco terminado em `_e2e` ou `_test`) antes de gravar qualquer coisa.
+   */
+  app.get('/meta', async (): Promise<{ database: string }> => {
+    const [row] = await db.select({ database: sql<string>`current_database()` }).from(sql`(select 1) as one`);
+    return { database: row.database };
+  });
+
+  app.get('/sources',(): SourceDto[] => getConnectors().map((c) => ({ id: c.id, name: c.name })));
 
   app.get('/stats', async (): Promise<StatsDto> => {
     const [row] = await db

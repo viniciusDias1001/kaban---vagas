@@ -1,8 +1,10 @@
-import { and, asc, eq, getTableColumns, ilike, ne, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, ilike, ne, or, sql, type SQL } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { JOBS_WRITE_LOCK, requestCancel, jobEvents, jobs, type Db } from '@kv/db';
-import { ColumnSchema, JobPatchSchema, LIMITS, hasNul, type Column, type JobListItemDto } from '@kv/shared';
+import { JOBS_WRITE_LOCK, applicationForJob, jobEvents, jobs, listJobItems, requestCancel, settleAppliedByOwner, type Db } from '@kv/db';
+import {
+  ColumnSchema, JobPatchSchema, LIMITS, hasNul, isAppliedOrLater, type Column, type JobDto, type JobListItemDto,
+} from '@kv/shared';
 import type { AiContext } from '../ai-context';
 import { intendedIndex } from '../position';
 import { idParam, parseId } from './ids';
@@ -24,12 +26,6 @@ const JobsQuerySchema = z.object({
   q: queryText(LIMITS.search).optional(),
 });
 
-/**
- * Colunas de um item da lista: tudo o que o card do quadro usa. Ficam de fora a descrição (o campo mais
- * pesado, só lido no detalhe da vaga) e o `dedupHash` (interno do worker).
- */
-const { description: _description, dedupHash: _dedupHash, ...LIST_COLUMNS } = getTableColumns(jobs);
-
 /** `%`, `_` e a barra invertida são curingas/escape do LIKE: escapados, casam literalmente. */
 export const escapeLike = (term: string) => term.replace(/[\\%_]/g, (ch) => `\\${ch}`);
 
@@ -50,7 +46,9 @@ export function jobRoutes(app: FastifyInstance, db: Db, ctx: AiContext) {
       const term = `%${escapeLike(query.q)}%`;
       where.push(or(ilike(jobs.title, term), ilike(jobs.company, term))!);
     }
-    return db.select(LIST_COLUMNS).from(jobs).where(and(...where)).orderBy(asc(jobs.position), asc(jobs.id));
+    // Sem a descrição nem o dedupHash; cada vaga vem com o estado da candidatura dela (null sem candidatura), que o
+    // quadro usa nos selos.
+    return listJobItems(db, and(...where));
   });
 
   app.get('/jobs/:id', async (req, reply) => {
@@ -59,7 +57,9 @@ export function jobRoutes(app: FastifyInstance, db: Db, ctx: AiContext) {
     const [job] = await db.select().from(jobs).where(eq(jobs.id, id));
     if (!job) return reply.code(404).send(notFound);
     const events = await db.select().from(jobEvents).where(eq(jobEvents.jobId, id)).orderBy(asc(jobEvents.id));
-    return { job, events };
+    const application = await applicationForJob(db, id);
+    const dto: JobDto = { ...job, applicationStatus: application?.status ?? null };
+    return { job: dto, events };
   });
 
   app.patch('/jobs/:id', async (req, reply) => {
@@ -86,19 +86,29 @@ export function jobRoutes(app: FastifyInstance, db: Db, ctx: AiContext) {
       if (patch.column && patch.column !== job.column) {
         set.column = patch.column;
         if (patch.column === 'aplicada' && !job.appliedBy) set.appliedBy = 'humano';
-        // O dono mexeu no card: a candidatura automática para (ou é cancelada) e a marca de "precisa de você" sai.
+        // O dono mexeu no card: a candidatura automática para (ou é cancelada) e a marca de "precisa de você" sai. Para
+        // Aplicada ou depois o dono já se candidatou: a candidatura parada termina como "aplicada por você" (`skipped` /
+        // `already_applied`), não como cancelada, e nunca é tentada de novo.
         set.needsHuman = false;
         set.needsHumanReason = null;
-        await requestCancel(tx, id);
+        if (isAppliedOrLater(patch.column)) await settleAppliedByOwner(tx, id);
+        else await requestCancel(tx, id);
         await tx
           .insert(jobEvents)
           .values({ jobId: id, fromColumn: job.column, toColumn: patch.column, actor: 'humano', createdAt: Date.now() });
+      } else if (patch.column && isAppliedOrLater(patch.column)) {
+        // "Já apliquei por conta própria" com o card já em Aplicada (ou depois): o card não muda de coluna, mas a
+        // candidatura parada é encerrada do mesmo jeito.
+        if (patch.column === 'aplicada' && !job.appliedBy) set.appliedBy = 'humano';
+        await settleAppliedByOwner(tx, id);
       }
       if (Object.keys(set).length === 0) return job;
       const [row] = await tx.update(jobs).set(set).where(eq(jobs.id, id)).returning();
       return row;
     });
     if (!updated) return reply.code(404).send(notFound);
+    const application = await applicationForJob(db, id);
+    const dto: JobDto = { ...updated, applicationStatus: application?.status ?? null };
     // Mover para Selecionadas pede a análise da vaga (camadas 1 e 2). É idempotente, e uma falha aqui
     // não desfaz o movimento do card.
     if (patch.column === 'selecionadas') {
@@ -106,7 +116,7 @@ export function jobRoutes(app: FastifyInstance, db: Db, ctx: AiContext) {
         console.error(`[api] análise da vaga ${id} não enfileirada: ${e instanceof Error ? e.message : String(e)}`),
       );
     }
-    return updated;
+    return dto;
   });
 }
 

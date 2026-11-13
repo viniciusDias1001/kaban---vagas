@@ -5,7 +5,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { eq } from 'drizzle-orm';
 import { createFakeSite, exactBankMatch } from '@kv/apply';
 import {
-  applicationForJob, applications, applyAnswers, closeDb, createApplication, jobs, listApplyAnswers, transitionApplication, type Db,
+  applicationForJob, applications, applyAnswers, closeDb, createApplication, jobs, listApplyAnswers, saveApplyWorkerState, transitionApplication,
+  type Db,
 } from '@kv/db';
 import { createTestDb, resetTestDb } from '@kv/db/testing';
 import type { AnswerValue, PendingQuestion, Question } from '@kv/shared';
@@ -89,19 +90,91 @@ describe('POST /jobs/:id/application', () => {
   });
 });
 
-describe('reading applications', () => {
-  it('never returns the PDF bytes in JSON; null for a job without an application, 404 only for a missing job', async () => {
+describe('a job the owner already applied to', () => {
+  it('refuses a new application with 409 already_applied, by column or by applied_by', async () => {
+    await enable();
+    for (const over of [{ column: 'aplicada' as const }, { column: 'entrevista' as const }, { column: 'arquivada' as const }, { appliedBy: 'humano' as const }]) {
+      const job = await fakeJob(over);
+      const res = await post(`/jobs/${job.id}/application`);
+      expect(res.statusCode, JSON.stringify(over)).toBe(409);
+      expect(res.json()).toMatchObject({ error: 'already_applied' });
+      expect(await applicationForJob(db, job.id)).toBeNull();
+    }
+  });
+
+  it('refuses retry, send and send-all with 409 already_applied', async () => {
+    const seed = async (status: 'failed' | 'cancelled' | 'dry_run_ready') => {
+      const job = await fakeJob();
+      const id = (await createApplication(db, { jobId: job.id, site: 'fake', trigger: 'auto', mode: 'dry_run' }))!;
+      await transitionApplication(db, id, { status });
+      await db.update(jobs).set({ column: 'aplicada', appliedBy: 'humano' }).where(eq(jobs.id, job.id));
+      return { job, id };
+    };
+    for (const status of ['failed', 'cancelled'] as const) {
+      const a = await seed(status);
+      const res = await post(`/applications/${a.id}/retry`);
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ error: 'already_applied' });
+      expect((await applicationForJob(db, a.job.id))!.status).toBe(status);
+    }
+    const rehearsal = await seed('dry_run_ready');
+    const send = await post(`/applications/${rehearsal.id}/send`);
+    expect(send.statusCode).toBe(409);
+    expect(send.json()).toMatchObject({ error: 'already_applied' });
+    const all = await post('/applications/send-rehearsals', { ids: [rehearsal.id] });
+    expect(all.statusCode).toBe(409);
+    expect(all.json()).toMatchObject({ error: 'already_applied' });
+    expect((await applicationForJob(db, rehearsal.job.id))!.status).toBe('dry_run_ready');
+  });
+});
+
+describe('GET /jobs/:id/application', () => {
+  const read = async (id: number) => {
+    const res = await app.inject(`/jobs/${id}/application`);
+    expect(res.statusCode).toBe(200);
+    return res.json();
+  };
+
+  it('says the button can appear only when every check of the POST route passes, naming the first that fails', async () => {
     const job = await fakeJob();
-    // Toda vaga aberta no painel pergunta pela candidatura: "não tem" é resposta normal (200 null), não um 404 que o
+    expect(await read(job.id)).toEqual({ application: null, site: 'fake', canApply: false, cannotApplyReason: 'apply_disabled' });
+    await enable({ applyBlockedCompanies: ['Globex'] });
+    expect(await read(job.id)).toEqual({ application: null, site: 'fake', canApply: true, cannotApplyReason: null });
+    const remotive = await seedJob(db, { source: 'remotive' });
+    expect(await read(remotive.id)).toEqual({ application: null, site: null, canApply: false, cannotApplyReason: 'unsupported_site' });
+    const applied = await fakeJob({ column: 'oferta' });
+    expect(await read(applied.id)).toMatchObject({ site: 'fake', canApply: false, cannotApplyReason: 'already_applied' });
+    const byHand = await fakeJob({ appliedBy: 'humano' });
+    expect(await read(byHand.id)).toMatchObject({ canApply: false, cannotApplyReason: 'already_applied' });
+    const blocked = await fakeJob({ company: 'Globex' });
+    expect(await read(blocked.id)).toMatchObject({ canApply: false, cannotApplyReason: 'blocked' });
+    vi.stubEnv('HOST', '0.0.0.0');
+    expect(await read(job.id)).toMatchObject({ canApply: false, cannotApplyReason: 'apply_unavailable' });
+    vi.unstubAllEnvs();
+    await saveApplyWorkerState(db, { available: false, reason: 'Navegador não encontrado.' });
+    expect(await read(job.id)).toMatchObject({ canApply: false, cannotApplyReason: 'apply_unavailable' });
+    await saveApplyWorkerState(db, { available: true, reason: null });
+    // Com candidatura: ela vem junto, e o botão não aparece.
+    expect((await post(`/jobs/${job.id}/application`)).statusCode).toBe(202);
+    expect(await read(job.id)).toMatchObject({
+      application: { jobId: job.id, status: 'queued', cancelRequested: false }, site: 'fake', canApply: false, cannotApplyReason: 'already_exists',
+    });
+  });
+});
+
+describe('reading applications', () => {
+  it('never returns the PDF bytes in JSON; application null for a job without one, 404 only for a missing job', async () => {
+    const job = await fakeJob();
+    // Toda vaga aberta no painel pergunta pela candidatura: "não tem" é resposta normal (200), não um 404 que o
     // navegador registra como erro no console.
     const none = await app.inject(`/jobs/${job.id}/application`);
     expect(none.statusCode).toBe(200);
-    expect(none.json()).toBeNull();
+    expect(none.json()).toMatchObject({ application: null });
     expect((await app.inject('/jobs/99999/application')).statusCode).toBe(404);
     await createApplication(db, { jobId: job.id, site: 'fake', trigger: 'auto', mode: 'dry_run' });
     await db.update(applications).set({ resumePdf: Buffer.from('%PDF-1.4 segredo'), approvedAnswers: [] });
     const body = (await app.inject(`/jobs/${job.id}/application`)).body;
-    expect(JSON.parse(body)).toMatchObject({ hasResume: true, status: 'queued', events: [{ status: 'queued' }] });
+    expect(JSON.parse(body).application).toMatchObject({ hasResume: true, status: 'queued', events: [{ status: 'queued' }] });
     expect(body).not.toContain('resumePdf');
     expect(body).not.toContain('approvedAnswers');
     expect(body).not.toContain('segredo');
@@ -113,9 +186,16 @@ describe('reading applications', () => {
     await createApplication(db, { jobId: a.id, site: 'fake', trigger: 'auto', mode: 'dry_run' });
     const idB = (await createApplication(db, { jobId: b.id, site: 'fake', trigger: 'auto', mode: 'dry_run' }))!;
     await transitionApplication(db, idB, { status: 'failed' });
-    expect((await app.inject('/applications')).json()).toHaveLength(2);
-    expect((await app.inject('/applications?status=failed&site=fake')).json()).toMatchObject([{ id: idB, jobTitle: 'Dev React' }]);
+    const counts = { active: 1, needs_human: 0, rehearsals: 0, submitted: 0, skipped: 1 };
+    const all = (await app.inject('/applications')).json();
+    expect(all.items).toHaveLength(2);
+    expect(all.counts).toEqual(counts);
+    expect((await app.inject('/applications?status=failed&site=fake')).json().items).toMatchObject([{ id: idB, jobTitle: 'Dev React' }]);
+    // O filtro da aba: as linhas desse filtro, e as contagens de todos, sempre sobre todas as linhas.
+    expect((await app.inject('/applications?filter=skipped')).json()).toMatchObject({ items: [{ id: idB, status: 'failed' }], counts });
+    expect((await app.inject('/applications?filter=rehearsals')).json()).toEqual({ items: [], counts });
     expect((await app.inject('/applications?status=nope')).statusCode).toBe(400);
+    expect((await app.inject('/applications?filter=nope')).statusCode).toBe(400);
   });
 
   it('serves the sent PDF and the photos, and nothing outside the data folder', async () => {
@@ -153,7 +233,8 @@ describe('PUT /applications/:id/answers', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ status: 'queued', pendingQuestions: [] });
     const bank = await listApplyAnswers(db);
-    expect(bank).toMatchObject([{ question: 'Pretensão salarial', answer: '20000', kind: 'number', scope: 'always', country: 'BR' }]);
+    // Pergunta não classificada como pessoal: vale em qualquer país.
+    expect(bank).toMatchObject([{ question: 'Pretensão salarial', answer: '20000', kind: 'number', scope: 'always', country: null }]);
     expect(await jobRow(job.id)).toMatchObject({ needsHuman: false, needsHumanReason: null });
   });
 
@@ -168,7 +249,7 @@ describe('PUT /applications/:id/answers', () => {
   });
 
   it('updates the saved row of the same question instead of duplicating it', async () => {
-    await db.insert(applyAnswers).values({ question: 'Pergunta a', normalized: 'pergunta a', kind: 'text', country: 'BR', createdAt: 1, updatedAt: 1 });
+    await db.insert(applyAnswers).values({ question: 'Pergunta a', normalized: 'pergunta a', kind: 'text', createdAt: 1, updatedAt: 1 });
     const { id } = await seedPending([unanswered(question('a'))]);
     await put(`/applications/${id}/answers`, { answers: [item('a', 'novo')] });
     expect(await listApplyAnswers(db)).toMatchObject([{ answer: 'novo' }]);
@@ -411,16 +492,27 @@ describe('send, retry and cancel', () => {
     expect((await post('/applications/9999/send')).statusCode).toBe(404);
   });
 
-  it('sends every rehearsal at once', async () => {
+  it('sends exactly the listed rehearsals and says how many were left out', async () => {
     const one = await seedApp('dry_run_ready', undefined, { answers });
     const two = await seedApp('dry_run_ready', undefined, { answers });
+    const unlisted = await seedApp('dry_run_ready', undefined, { answers });
     const failed = await seedApp('failed');
-    const res = await post('/applications/send-rehearsals');
+    const res = await post('/applications/send-rehearsals', { ids: [one.id, two.id, failed.id, 9999] });
     expect(res.statusCode).toBe(202);
-    expect(res.json()).toEqual({ queued: 2 });
+    expect(res.json()).toEqual({ queued: 2, skipped: 2 });
     expect((await applicationForJob(db, one.job.id))!.approvedAnswers).toEqual(answers);
     expect(await applicationForJob(db, two.job.id)).toMatchObject({ status: 'queued', mode: 'real' });
+    expect(await applicationForJob(db, unlisted.job.id)).toMatchObject({ status: 'dry_run_ready', mode: 'dry_run' });
     expect(await applicationForJob(db, failed.job.id)).toMatchObject({ status: 'failed', approvedAnswers: [] });
+    // Nada listado que ainda seja ensaio: 202 com nada enviado.
+    expect((await post('/applications/send-rehearsals', { ids: [failed.id] })).json()).toEqual({ queued: 0, skipped: 1 });
+  });
+
+  it('validates the send-all body: 1 to 200 ids', async () => {
+    for (const payload of [undefined, {}, { ids: [] }, { ids: ['1'] }, { ids: [0] }, { ids: Array.from({ length: 201 }, (_, i) => i + 1) }, { ids: [1], x: 1 }]) {
+      const res = await post('/applications/send-rehearsals', payload);
+      expect(res.statusCode, JSON.stringify(payload)?.slice(0, 40)).toBe(400);
+    }
   });
 
   it('clears finished_at when a finished application is retried', async () => {
