@@ -115,15 +115,6 @@ const SCAFFOLD_WORDS = new Set(
   ).split(' '),
 );
 
-/** Palavras de formação: um "não" a uma pergunta com uma delas é recusado enquanto o perfil tiver algum item de formação. */
-const EDUCATION_WORDS = new Set(
-  (
-    'graduacao superior ensino bacharel bacharelado licenciatura tecnologo faculdade universidade formacao formado formada ' +
-    'diploma especializacao mestrado doutorado mba degree bachelor college university graduate graduated graduation master ' +
-    'masters phd'
-  ).split(' ').map((w) => foldWord(w)),
-);
-
 const NEGATION = /\b(nao|not|never|nunca|nenhum|nenhuma|none|without|sem|nem|nor|neither|jamais|nada|nothing)\b|n't\b/;
 /** Opção que é exatamente um "não" simples ou zero: é uma negação. */
 const NEGATIVE_OPTION = /^(0|nao|no|nenhum|nenhuma|none|never|nunca)$/;
@@ -155,7 +146,7 @@ function foldWord(word: string): string {
 type Token = { raw: string; parts: string[] };
 
 function tokenize(text: string): Token[] {
-  const folded = foldText(text.replace(/[‐-―−]/g, '-')); // travessões e menos viram hífen: "3–5" = "3-5"
+  const folded = foldText(text.replace(/[\u2010-\u2015\u2212]/g, '-')); // travessões e menos viram hífen: "3–5" = "3-5"
   return (folded.match(/[a-z0-9+#]+(?:[-/][a-z0-9+#]+)*/g) ?? []).map((raw) => ({ raw, parts: raw.split(/[-/]/).map(foldWord) }));
 }
 
@@ -184,15 +175,6 @@ function profileItems(profile: CandidateProfile): Item[] {
   ];
 }
 
-/** Todo o texto do perfil que um "não" poderia contradizer: os itens e mais local, resumo e rótulos de link. */
-function denialFields(profile: CandidateProfile, items: Item[]): Token[][] {
-  return [
-    ...items.flatMap((i) => i.fields),
-    ...[profile.summary, profile.contact.location, ...profile.experiences.map((e) => e.location), ...profile.links.map((l) => l.label)]
-      .map(tokenize),
-  ];
-}
-
 const sameParts = (a: string[], b: string[]) => a.length === b.length && a.every((p, i) => p === b[i]);
 
 /**
@@ -204,14 +186,6 @@ function fieldHas(field: Token[], token: Token): boolean {
   const n = token.parts.length;
   return field.some((t, i) => sameParts(t.parts, token.parts) ||
     (n > 1 && i + n <= field.length && token.parts.every((p, k) => sameParts(field[i + k].parts, [p]))));
-}
-
-/** O campo menciona o token em qualquer forma, inclusive como parte de composto ("React/Redux" menciona "Redux"). */
-function fieldMentions(field: Token[], token: Token): boolean {
-  const parts = field.flatMap((t) => t.parts);
-  const n = token.parts.length;
-  for (let i = 0; i + n <= parts.length; i++) if (token.parts.every((p, k) => parts[i + k] === p)) return true;
-  return false;
 }
 
 const itemHasAll = (item: Item, tokens: Token[]) => tokens.every((t) => item.fields.some((f) => fieldHas(f, t)));
@@ -233,11 +207,10 @@ const fail = (why: string): Checked => ({ ok: false, why });
  *   UM item citado contém todos os radicais da pergunta e da opção (sem números, faixas, "+" e palavras de ano). Opção com
  *   anos: o limite de baixo não passa dos anos da regra de números. "Completo/concluído/formado" só com item de formação
  *   ou experiência terminado (fim legível e passado).
- * - Negação (`false`; opção "0", "não", "nenhum"...): a pergunta tem radicais e não afirma anos; NENHUM texto do perfil
- *   (itens, resumo, locais, rótulos de link) menciona algum radical da pergunta, nem como parte de composto; e, se a
- *   pergunta fala de formação, o perfil não tem formação. Um "não" errado diminui o dono.
+ * - Negação (`false`; opção "0", "não", "nenhum"...; número 0): sempre recusada. Um "não" errado tira o dono de uma vaga
+ *   que lhe serve, e nenhuma conferência de palavras o garante: o dono responde uma vez e o banco de respostas guarda.
  * - Número: só pergunta de anos de experiência; inteiro n entre 0 e `yearsCovered` das experiências citadas que contêm
- *   todos os radicais da pergunta (sem radicais, todas as citadas); n = 0 só sob a regra da negação.
+ *   todos os radicais da pergunta (sem radicais, todas as citadas); n = 0 é uma negação.
  * - Texto: `basis` não vazio; UM item citado contém todas as palavras da resposta (só as funcionais saem) e todos os seus
  *   números; cabe em `maxLength`.
  */
@@ -261,21 +234,12 @@ export function verifyProfileFact(
   if (NEGATION.test(foldedQuestion)) return fail('pergunta com negação: sim e não ficam ambíguos');
   const subject = contentTokens(questionText);
   const answer = fact.answer.trim();
-  /** A pergunta afirma uma quantidade de anos ("5 anos", "cinco years"): nem um sim nem um não a ela é conferido. */
+  /** A pergunta afirma uma quantidade de anos ("5 anos", "cinco years"): um sim a ela não é conferido. */
   const statesYears = YEAR_WORD.test(foldedQuestion) && (/\d/.test(foldedQuestion) || NUMBER_WORD.test(foldedQuestion));
 
-  /** Um "não" só passa se nada no perfil menciona o assunto da pergunta. */
-  const deny = <T extends AnswerValue>(value: T): Checked => {
-    if (subject.length === 0) return fail('a pergunta não diz sobre o que é: um "não" não pode ser conferido');
-    if (statesYears) return fail('a pergunta afirma uma quantidade de anos: um "não" não pode ser conferido');
-    const fields = denialFields(profile, items);
-    const mentioned = subject.find((t) => fields.some((f) => fieldMentions(f, t)));
-    if (mentioned) return fail(`o perfil menciona "${mentioned.raw}": um "não" diminuiria o dono`);
-    if (profile.education.length > 0 && subject.some((t) => t.parts.some((p) => EDUCATION_WORDS.has(p)))) {
-      return fail('a pergunta é sobre formação e o perfil tem formação: um "não" diminuiria o dono');
-    }
-    return { ok: true, value };
-  };
+  /** Resposta negativa: nunca enviada sem o dono. */
+  const deny = (): Checked =>
+    fail('uma resposta negativa precisa do dono: ele responde uma vez e o banco de respostas guarda a resposta');
 
   /** Anos da regra de números: experiências citadas cujo próprio texto contém todos os radicais da pergunta. */
   const subjectYears = (): number => {
@@ -310,7 +274,7 @@ export function verifyProfileFact(
       if (!/^\d{1,3}$/.test(answer)) return fail('a resposta não é um número inteiro simples');
       if (!YEARS_OF_EXPERIENCE.test(foldedQuestion)) return fail('só pergunta de anos de experiência recebe número');
       const value = Number(answer);
-      if (value === 0) return deny('0');
+      if (value === 0) return deny();
       const years = subjectYears();
       return value <= years
         ? { ok: true, value: String(value) }
@@ -318,7 +282,7 @@ export function verifyProfileFact(
     }
     case 'boolean': {
       const flag = answer.toLowerCase();
-      if (flag === 'false') return deny(false);
+      if (flag === 'false') return deny();
       if (flag !== 'true') return fail('a resposta não é true nem false');
       const why = affirm([], COMPLETION.test(foldedQuestion));
       return why === null ? { ok: true, value: true } : fail(why);
@@ -328,7 +292,7 @@ export function verifyProfileFact(
       if (matches.length !== 1) return fail('a resposta não é uma das opções, ou a opção é ambígua');
       const option = matches[0];
       const key = foldText(option).replace(/\s+/g, ' ').trim();
-      if (NEGATIVE_OPTION.test(key)) return deny(option);
+      if (NEGATIVE_OPTION.test(key)) return deny();
       const optionTokens = YES_OPTION.test(key) ? [] : contentTokens(option);
       const numbers = optionTokens.filter((t) => NUMBER_TOKEN.test(t.raw));
       const words = optionTokens.filter((t) => !NUMBER_TOKEN.test(t.raw));

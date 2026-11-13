@@ -80,9 +80,9 @@ describe('verifyProfileFact', () => {
     expect(verifyProfileFact(profile, number('Anos de experiência com React'), { answer: '1', basis: ['skill_1a2b3c4d'] }, now).ok).toBe(false);
   });
 
-  it('refuses a number about a technology that the profile does not list', () => {
+  it('refuses a number about a technology that the profile does not list, and refuses 0 (a denial needs the owner)', () => {
     expect(verifyProfileFact(profile, number('Anos de experiência com Python'), { answer: '2', basis: [exp1, exp2] }, now).ok).toBe(false);
-    expect(verifyProfileFact(profile, number('Anos de experiência com Python'), { answer: '0', basis: [exp1] }, now).ok).toBe(true);
+    expect(verifyProfileFact(profile, number('Anos de experiência com Python'), { answer: '0', basis: [exp1] }, now).ok).toBe(false);
   });
 
   it('rejects a fact that cites an unknown item', () => {
@@ -100,7 +100,7 @@ describe('verifyProfileFact', () => {
   it('requires a basis to affirm', () => {
     expect(verifyProfileFact(profile, bool('Tem experiência com Go?'), { answer: 'true', basis: [] }, now).ok).toBe(false);
     expect(verifyProfileFact(profile, bool('Tem experiência com React?'), { answer: 'true', basis: ['skill_1a2b3c4d'] }, now)).toEqual({ ok: true, value: true });
-    expect(verifyProfileFact(profile, bool('Tem experiência com Go?'), { answer: 'false', basis: [] }, now)).toEqual({ ok: true, value: false });
+    expect(verifyProfileFact(profile, bool('Tem experiência com Go?'), { answer: 'false', basis: [] }, now).ok).toBe(false); // ruling: denials need the owner
     expect(verifyProfileFact(profile, bool('Tem experiência com React?'), { answer: 'Sim', basis: ['skill_1a2b3c4d'] }, now).ok).toBe(false);
   });
 
@@ -157,9 +157,9 @@ describe('verifyProfileFact: review round 1', () => {
     expect(ok(sel('Possui graduação completa?', ['Sim', 'Não']), 'Sim', [])).toBe(false);
     expect(ok(sel('Possui graduação completa?', ['Sim', 'Não']), 'Sim', [degree])).toBe(false); // no cited text says "graduação" and "completa"
     expect(ok(sel('Possui graduação completa?', ['Sim', 'Não']), 'Sim', [exp1])).toBe(false);
-    // Round 3: a "no" about a degree is refused while the profile lists any education item.
+    // Ruling after round 3: a denial is never sent without the owner.
     expect(ok(sel('Possui graduação completa?', ['Sim', 'Não']), 'Não', [])).toBe(false);
-    expect(ok(sel('Possui certificação PMP?', ['Sim', 'Não']), 'Não', [])).toBe(true);
+    expect(ok(sel('Possui certificação PMP?', ['Sim', 'Não']), 'Não', [])).toBe(false);
     expect(ok(sel('Nível de inglês', ['Básico', 'Avançado', 'Fluente']), 'Fluente', [english])).toBe(false);
     expect(ok(sel('Nível de inglês', ['Básico', 'Avançado', 'Fluente']), 'Avançado', [english])).toBe(true);
     expect(ok(sel('Nível de inglês', ['Básico', 'Avançado', 'Fluente']), 'Avançado', [])).toBe(false);
@@ -272,9 +272,9 @@ describe('verifyProfileFact: review round 2, every claim covered by the cited it
   it('B. a year range option needs a basis unless the whole option is zero or a plain negative', () => {
     const range = sel('Experiência com Kubernetes', ['0-2 anos', '3-5 anos']);
     expect(ok(profile, range, '0-2 anos', [])).toBe(false);
-    // Round 3: a plain negative is a denial, refused when the profile has the subject.
-    expect(ok(profile, sel('Experiência com Rust', ['0', '3-5 anos']), '0', [])).toBe(true);
-    expect(ok(profile, sel('Experiência com Rust', ['Nenhum', '3-5 anos']), 'Nenhum', [])).toBe(true);
+    // Ruling after round 3: a plain negative is a denial, always refused, even for a subject the profile lacks.
+    expect(ok(profile, sel('Experiência com Rust', ['0', '3-5 anos']), '0', [])).toBe(false);
+    expect(ok(profile, sel('Experiência com Rust', ['Nenhum', '3-5 anos']), 'Nenhum', [])).toBe(false);
     expect(ok(profile, sel('Experiência com React', ['0', '3-5 anos']), '0', [])).toBe(false);
     expect(ok(profile, sel('Experiência com React', ['Nenhum', '3-5 anos']), 'Nenhum', [])).toBe(false);
     expect(ok(profile, sel('Experiência com React', ['0-2 anos', '3-5 anos']), '0-2 anos', [])).toBe(false);
@@ -334,9 +334,10 @@ describe('verifyProfileFact: review round 3, the complete rule set', () => {
     expect(ok(plain, number('Anos de experiência com TypeScript'), '1', [exp1, exp2])).toBe(false);
     expect(ok(profile, bool('Tem experiência com React?'), 'true', [react])).toBe(true);
     expect(ok(profile, sel('Nível de inglês', ['Básico', 'Intermediário', 'Avançado']), 'Avançado', [english])).toBe(true);
-    expect(ok(profile, bool('Tem experiência com Rust?'), 'false', [])).toBe(true);
+    // Ruling after round 3: denials are refused even when nothing in the profile mentions the subject.
+    expect(ok(profile, bool('Tem experiência com Rust?'), 'false', [])).toBe(false);
     expect(ok(withSkill('Rust'), bool('Tem experiência com Rust?'), 'false', [])).toBe(false);
-    expect(ok(profile, number('Anos de experiência com Rust'), '0', [])).toBe(true);
+    expect(ok(profile, number('Anos de experiência com Rust'), '0', [])).toBe(false);
     expect(ok(withSkill('Rust'), number('Anos de experiência com Rust'), '0', [])).toBe(false);
   });
 
@@ -384,7 +385,7 @@ describe('verifyProfileFact: review round 3, the complete rule set', () => {
       expect(ok(profile, sel('Experiência com Vite', ['1+ anos', '3+ anos']), '3+ anos', [exp1, exp2])).toBe(false); // Vite only in exp1: 1 year
     });
 
-    it('denials of something the profile has are refused', () => {
+    it('denials are refused, whether or not the profile has the subject', () => {
       expect(ok(profile, bool('Tem experiência com Vite?'), 'false', [])).toBe(false); // in an achievement
       expect(ok(profile, bool('Fala inglês?'), 'false', [])).toBe(false);
       expect(ok(profile, bool('Possui ensino superior?'), 'false', [])).toBe(false); // education exists
@@ -392,7 +393,9 @@ describe('verifyProfileFact: review round 3, the complete rule set', () => {
       expect(ok(profile, bool('Tem experiência com React em produção?'), 'false', [])).toBe(false); // React is there
       expect(ok(profile, sel('Nível de inglês', ['Nenhum', 'Básico']), 'Nenhum', [])).toBe(false);
       expect(ok(profile, bool('Já trabalhou na Outra Fictícia?'), 'false', [])).toBe(false);
-      expect(ok(profile, bool('Tem 5 anos de experiência?'), 'false', [])).toBe(false); // a "no" to a number of years is never checked
+      expect(ok(profile, bool('Tem 5 anos de experiência?'), 'false', [])).toBe(false);
+      expect(ok(profile, bool('Tem experiência com Elixir?'), 'false', [exp1])).toBe(false); // nothing mentions Elixir, still refused
+      expect(ok(profile, sel('Experiência com Elixir', ['Nenhuma', '1+ anos']), 'Nenhuma', [])).toBe(false);
       expect(ok(profile, sel('Tem cinco anos de experiência?', ['Sim', 'Não']), 'Não', [])).toBe(false);
     });
 
