@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { SettingsPatchSchema, type AiKeyMetaDto, type SettingsDto } from '@kv/shared';
 import {
-  OUTCOME_TONE, apiKeyProblem, changeProvider, collectCompanies, formFromSettings, isDirty, keyView, maskedKey, parseBudget,
+  OUTCOME_TONE, apiKeyProblem, changeProvider, collectBlockItems, collectCompanies, formFromSettings, isDirty, keyView, maskedKey, parseBudget,
   toSettingsPatch, validateSettings,
 } from './settingsForm';
 
@@ -124,5 +124,52 @@ describe('api key block', () => {
     expect(OUTCOME_TONE).toEqual({
       ok: 'ok', rate_limited: 'warn', network: 'warn', invalid_key: 'bad', model_not_found: 'bad', no_credit: 'bad', refused: 'bad', other: 'bad',
     });
+  });
+});
+
+describe('apply settings', () => {
+  it('sends only the apply settings that changed', () => {
+    const form = formFromSettings(dto);
+    expect(form).toMatchObject({ applyEnabled: false, applyMinScore: '70', applyWindowStart: '08:00', applyAiAnswers: 'review', applyDailyCaps: { total: '30' } });
+    expect(toSettingsPatch(form, dto)).toEqual({});
+    expect(toSettingsPatch({ ...form, applyMinScore: '75' }, dto)).toEqual({ applyMinScore: 75 });
+    expect(toSettingsPatch({ ...form, applyEnabled: true, applyAiAnswers: 'auto', applyResumeMode: 'base', applyCompanyCap: '3' }, dto))
+      .toEqual({ applyEnabled: true, applyAiAnswers: 'auto', applyResumeMode: 'base', applyCompanyCap: 3 });
+  });
+
+  it('sends only the sites and the caps that changed, and the window as a whole', () => {
+    const form = formFromSettings(dto);
+    const patch = toSettingsPatch({
+      ...form, applySiteModes: { ...form.applySiteModes, greenhouse: 'real' },
+      applyDailyCaps: { ...form.applyDailyCaps, linkedin: '5', total: '40' }, applyWindowEnd: '20:00',
+    }, dto);
+    expect(patch).toEqual({ applySiteModes: { greenhouse: 'real' }, applyDailyCaps: { linkedin: 5, total: 40 }, applyWindow: { start: '08:00', end: '20:00' } });
+    expect(SettingsPatchSchema.safeParse(patch).success).toBe(true);
+  });
+
+  it('collects block lists, keeping spaces inside a term and counting the draft', () => {
+    const form = { ...formFromSettings(dto), applyBlockedCompanies: ['Acme'], applyBlockedCompaniesDraft: 'acme, Globex\nInitech ', applyBlockedTermsDraft: 'vaga presencial' };
+    expect(collectBlockItems(form.applyBlockedCompanies, form.applyBlockedCompaniesDraft)).toEqual(['Acme', 'Globex', 'Initech']);
+    const patch = toSettingsPatch(form, dto);
+    expect(patch).toEqual({ applyBlockedCompanies: ['Acme', 'Globex', 'Initech'], applyBlockedTerms: ['vaga presencial'] });
+    expect(SettingsPatchSchema.safeParse(patch).success).toBe(true);
+  });
+
+  it('refuses a minimum score above 100 and a window that ends before it starts', () => {
+    const form = formFromSettings(dto);
+    expect(validateSettings(form)).toEqual({});
+    const errors = validateSettings({ ...form, applyMinScore: '101', applyWindowStart: '21:00', applyWindowEnd: '08:00' });
+    expect(Object.keys(errors).sort()).toEqual(['applyMinScore', 'applyWindow']);
+    expect(validateSettings({ ...form, applyMinScore: 'abc' }).applyMinScore).toBeDefined();
+    expect(validateSettings({ ...form, applyWindowEnd: '8h' }).applyWindow).toBeDefined();
+  });
+
+  it('refuses caps outside the limits, with a smaller maximum for the per-company cap', () => {
+    const form = formFromSettings(dto);
+    expect(validateSettings({ ...form, applyDailyCaps: { ...form.applyDailyCaps, lever: '201' } }).applyDailyCaps).toBeDefined();
+    expect(validateSettings({ ...form, applyDailyCaps: { ...form.applyDailyCaps, lever: '0' } })).toEqual({});
+    expect(validateSettings({ ...form, applyCompanyCap: '21' }).applyCompanyCap).toBeDefined();
+    expect(validateSettings({ ...form, applyCompanyCap: '0' }).applyCompanyCap).toBeDefined();
+    expect(validateSettings({ ...form, applyBlockedTermsDraft: 'x'.repeat(81) }).applyBlockedTerms).toBeDefined();
   });
 });

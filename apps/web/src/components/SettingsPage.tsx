@@ -21,7 +21,8 @@ import { TagInput } from './ui/tag-input';
  */
 let keptForm: SettingsForm | null = null;
 
-const ERROR_ORDER: (keyof SettingsFormErrors)[] = ['modelFast', 'modelStrong', 'dailyBudget', 'greenhouseBoards', 'leverCompanies'];
+// Só os campos que esta tela já desenha; os de candidatura ganham campo (e posição aqui) na tela de candidatura.
+const ERROR_ORDER: (keyof SettingsFormErrors & keyof SettingsFieldIds)[] = ['modelFast', 'modelStrong', 'dailyBudget', 'greenhouseBoards', 'leverCompanies'];
 const time = (ms: number) => new Date(ms).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 
 function PageShell({ children, footer }: { children: ReactNode; footer?: ReactNode }) {
