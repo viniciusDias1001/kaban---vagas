@@ -31,6 +31,13 @@ const dto: SettingsDto = {
     greenhouseBoards: { value: ['gitlab', 'stripe'], source: 'default' },
     leverCompanies: { value: ['spotify'], source: 'env' },
   },
+  apply: {
+    enabled: { value: false, source: 'default' }, minScore: { value: 70, source: 'default' },
+    siteModes: { value: { linkedin: 'dry_run', greenhouse: 'dry_run', lever: 'dry_run', fake: 'dry_run' }, source: 'default' },
+    dailyCaps: { value: { linkedin: 10, greenhouse: 15, lever: 15, fake: 15, total: 30, linkedinViews: 30 }, source: 'default' },
+    companyCap: { value: 2, source: 'default' }, window: { value: { start: '08:00', end: '21:00' }, source: 'default' }, resumeMode: { value: 'tailored', source: 'default' },
+    openAnswers: { value: true, source: 'default' }, blockedCompanies: { value: [], source: 'default' }, blockedTerms: { value: [], source: 'default' },
+  },
   general: { nextRunAt: 0 },
 };
 

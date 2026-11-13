@@ -35,6 +35,7 @@ describe('precedence: screen > environment > code default', () => {
       tier2Auto: { value: false, source: 'default' },
       greenhouseBoards: { value: ['gitlab', 'stripe', 'cloudflare', 'figma'], source: 'default' },
       leverCompanies: { value: ['palantir', 'spotify'], source: 'default' },
+      apply: expect.any(Object),
       budgetTimeZone: 'America/Sao_Paulo',
     });
   });
@@ -241,5 +242,43 @@ describe('dto', () => {
     expect(dto.general).toEqual({ nextRunAt: 123 });
     expect(JSON.stringify(dto)).not.toMatch(/sk-ant-env-7777|7777/);
     expect((await service({ AI_ALLOW_FAKE: '1' }).dto(0)).ai.providers).toContain('fake');
+  });
+});
+
+describe('automatic application settings', () => {
+  it('starts with automatic applications off and every site in rehearsal', async () => {
+    expect(await service().applyConfig()).toMatchObject({
+      enabled: false, minScore: 70, resumeMode: 'tailored', openAnswers: true, companyCap: 2,
+      siteModes: { linkedin: 'dry_run', greenhouse: 'dry_run', lever: 'dry_run', fake: 'dry_run' },
+      dailyCaps: { linkedin: 10, greenhouse: 15, lever: 15, total: 30, linkedinViews: 30 },
+      window: { start: '08:00', end: '21:00' }, blockedCompanies: [], blockedTerms: [],
+      timeZone: 'America/Sao_Paulo',
+    });
+  });
+
+  it('applies a saved value at once and merges partial site modes with the defaults', async () => {
+    const svc = service();
+    await svc.applyConfig();
+    await svc.update({ applyEnabled: true, applySiteModes: { linkedin: 'real' }, applyDailyCaps: { total: 5 } });
+    expect(await svc.applyConfig()).toMatchObject({
+      enabled: true, siteModes: { linkedin: 'real', greenhouse: 'dry_run' }, dailyCaps: { total: 5, linkedin: 10 },
+    });
+  });
+
+  it('goes back to the default when a key is cleared', async () => {
+    const svc = service();
+    await svc.update({ applyMinScore: 90, applyBlockedTerms: ['estágio'] });
+    expect((await svc.applyConfig()).minScore).toBe(90);
+    await svc.update({ applyMinScore: null });
+    expect((await svc.applyConfig()).minScore).toBe(70);
+    expect((await svc.applyConfig()).blockedTerms).toEqual(['estágio']);
+  });
+
+  it('uses the budget time zone and reports the apply values in the DTO', async () => {
+    const svc = service({ AI_BUDGET_TZ: 'UTC' });
+    expect((await svc.applyConfig()).timeZone).toBe('UTC');
+    const dto = await svc.dto(0);
+    expect(dto.apply.enabled).toEqual({ value: false, source: 'default' });
+    expect(dto.apply.minScore).toEqual({ value: 70, source: 'default' });
   });
 });

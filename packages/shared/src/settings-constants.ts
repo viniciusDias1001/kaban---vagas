@@ -3,6 +3,8 @@
  * `@kv/shared/client`). A validação fica em `settings.ts`.
  */
 
+import type { ApplyMode, ApplyResumeMode, ApplySiteId } from './apply-constants';
+
 export const AI_PROVIDER_IDS = ['anthropic', 'openai', 'gemini'] as const;
 export type AiProviderId = (typeof AI_PROVIDER_IDS)[number];
 
@@ -50,6 +52,8 @@ export const APP_SECRET_COMMAND = `node -e "console.log(require('node:crypto').r
 /** Campos que a tela pode gravar. `null` em um campo do PATCH apaga o valor gravado (volta ao ambiente/padrão). */
 export const SETTING_KEYS = [
   'provider', 'modelFast', 'modelStrong', 'dailyBudgetUsd', 'tier1Enabled', 'tier2Auto', 'greenhouseBoards', 'leverCompanies',
+  'applyEnabled', 'applyMinScore', 'applySiteModes', 'applyDailyCaps', 'applyCompanyCap', 'applyWindow', 'applyResumeMode',
+  'applyOpenAnswers', 'applyBlockedCompanies', 'applyBlockedTerms',
 ] as const;
 export type SettingKey = (typeof SETTING_KEYS)[number];
 
@@ -58,6 +62,20 @@ export type SettingSource = 'ui' | 'env' | 'default';
 export interface SettingValue<T> {
   value: T;
   source: SettingSource;
+}
+
+/** Limites das configurações de candidatura automática. */
+export const APPLY_SETTINGS_LIMITS = { maxCap: 200, maxCompanyCap: 20, listItems: 100, listItemLength: 80 } as const;
+
+export interface ApplyDailyCaps { linkedin: number; greenhouse: number; lever: number; fake: number; total: number; linkedinViews: number }
+export interface ApplyWindow { start: string; end: string } // 'HH:MM'
+/** As configurações de candidatura em vigor, como API e worker as leem. */
+export interface ApplyConfig {
+  enabled: boolean; minScore: number; siteModes: Record<ApplySiteId, ApplyMode>; dailyCaps: ApplyDailyCaps;
+  companyCap: number; window: ApplyWindow; resumeMode: ApplyResumeMode; openAnswers: boolean;
+  blockedCompanies: string[]; blockedTerms: string[];
+  /** O fuso do "dia" e do horário: o mesmo de AI_BUDGET_TZ. */
+  timeZone: string;
 }
 
 export interface AiKeyMetaDto {
@@ -102,6 +120,18 @@ export interface SettingsDto {
     greenhouseBoards: SettingValue<string[]>;
     leverCompanies: SettingValue<string[]>;
   };
+  apply: {
+    enabled: SettingValue<boolean>;
+    minScore: SettingValue<number>;
+    siteModes: SettingValue<Record<ApplySiteId, ApplyMode>>;
+    dailyCaps: SettingValue<ApplyDailyCaps>;
+    companyCap: SettingValue<number>;
+    window: SettingValue<ApplyWindow>;
+    resumeMode: SettingValue<ApplyResumeMode>;
+    openAnswers: SettingValue<boolean>;
+    blockedCompanies: SettingValue<string[]>;
+    blockedTerms: SettingValue<string[]>;
+  };
   general: {
     /** Próxima busca horária (hora cheia). O estado do worker vem de GET /runs/health. */
     nextRunAt: number;
@@ -118,6 +148,18 @@ export interface SettingsPatch {
   tier2Auto?: boolean | null;
   greenhouseBoards?: string[] | null;
   leverCompanies?: string[] | null;
+  applyEnabled?: boolean | null;
+  applyMinScore?: number | null;
+  /** Parcial: o que faltar vale o padrão (`dry_run`). */
+  applySiteModes?: Partial<Record<ApplySiteId, ApplyMode>> | null;
+  /** Parcial: o que faltar vale o padrão. */
+  applyDailyCaps?: Partial<ApplyDailyCaps> | null;
+  applyCompanyCap?: number | null;
+  applyWindow?: ApplyWindow | null;
+  applyResumeMode?: ApplyResumeMode | null;
+  applyOpenAnswers?: boolean | null;
+  applyBlockedCompanies?: string[] | null;
+  applyBlockedTerms?: string[] | null;
 }
 
 export type TestConnectionOutcome =
