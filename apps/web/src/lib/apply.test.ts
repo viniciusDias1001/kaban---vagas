@@ -3,7 +3,7 @@ import { APPLICATION_STATUSES, type ApplyAnswerDto, NEEDS_HUMAN_REASONS, SKIP_RE
 import {
   AI_ANSWER_LABELS, FILTER_LABELS, PENDING_KIND_LABELS, type ApplicationFilter, ANSWER_SOURCE_LABELS, STATUS_LABELS, applyErrorMessage, applyPollMs, cardBadge, filterApplications,
   ANSWER_LIMITS, EMPTY_NEW_ANSWER, accountFeedback, answerField, answerInput, answerProblem, answerToStore, booleanAnswer, booleanChoice, counterVisible,
-  countryLabel, kindHint, newAnswerInput, numberProblem, saveStateLabel, scopeLabel, splitAnswers, usedLabel, validateNewAnswer, filterCounts, reasonText, toPendingAnswersBody, validatePendingDrafts, type AccountAction, type AccountMutationView, type PendingDraft,
+  countryLabel, kindHint, newAnswerInput, numberProblem, saveStateLabel, scopeLabel, splitAnswers, usedLabel, validateNewAnswer, filterCounts, reasonText, toPendingAnswersBody, validatePendingDrafts, NUMBER_FORMAT_PROBLEM, decideCommit, createKeyedQueue, type AccountAction, type AccountMutationView, type PendingDraft,
 } from './apply';
 
 const item = (id: number, status: ApplicationStatus): ApplicationListItemDto => ({
@@ -180,10 +180,10 @@ describe('answer bank rows', () => {
   });
   it('refuses a number with a thousands separator or letters, accepts a plain or decimal one', () => {
     for (const ok of ['', '  ', '20000', '8000,50', '8000.5', '0']) expect(numberProblem(ok)).toBeNull();
-    for (const bad of ['20.000', '20,000', '1.234,56', '0.125']) expect(numberProblem(bad)).toMatch(/milhar/);
+    for (const bad of ['20.000', '20,000', '1.234,56', '0.125', '8000.500']) expect(numberProblem(bad)).toBe(NUMBER_FORMAT_PROBLEM);
     for (const bad of ['abc', '12a', '-5', '1,2,3']) expect(numberProblem(bad)).toMatch(/só números/);
     expect(answerProblem('text', '20.000')).toBeNull();
-    expect(answerProblem('number', '20.000')).toMatch(/milhar/);
+    expect(answerProblem('number', '20.000')).toBe(NUMBER_FORMAT_PROBLEM);
   });
   it('stores what was typed in the shape the bank expects', () => {
     expect(answerToStore('number', ' 8000,5 ')).toBe('8000.5');
@@ -227,7 +227,46 @@ describe('answer bank rows', () => {
     expect(newAnswerInput({ ...draft, company: ' Acme ' })).toEqual({
       question: 'Visto?', answer: 'Não', kind: 'boolean', scope: 'company', scopeValue: 'Acme', country: 'BR',
     });
-    expect(validateNewAnswer({ ...EMPTY_NEW_ANSWER, question: 'x', answer: '20.000', kind: 'number' }).answer).toMatch(/milhar/);
+    expect(validateNewAnswer({ ...EMPTY_NEW_ANSWER, question: 'x', answer: '20.000', kind: 'number' }).answer).toBe(NUMBER_FORMAT_PROBLEM);
+    expect(NUMBER_FORMAT_PROBLEM).toBe('Use só dígitos, com no máximo duas casas decimais e sem separador de milhar (ex.: 20000 ou 1234,56).');
     expect(newAnswerInput({ ...EMPTY_NEW_ANSWER, question: 'x', answer: 'y' })).toMatchObject({ scope: 'always', scopeValue: null, country: null });
+  });
+});
+
+describe('decideCommit', () => {
+  it('sends nothing when nothing was typed, even if the stored text is not in canonical form', () => {
+    expect(decideCommit('number', null, '8000.50 ')).toEqual({ action: 'nothing' });
+    expect(decideCommit('number', null, '20.000')).toEqual({ action: 'nothing' });
+    expect(decideCommit('choice', null, 'A\n\nB')).toEqual({ action: 'nothing' });
+  });
+  it('refuses a bad number, skips an unchanged one and sends a changed one in stored form', () => {
+    expect(decideCommit('number', '20.000', '5')).toEqual({ action: 'invalid', problem: NUMBER_FORMAT_PROBLEM });
+    expect(decideCommit('number', ' 5 ', '5')).toEqual({ action: 'unchanged' });
+    expect(decideCommit('number', '8000,5', '5')).toEqual({ action: 'send', stored: '8000.5' });
+    expect(decideCommit('text', ' oi ', '')).toEqual({ action: 'send', stored: 'oi' });
+  });
+});
+
+describe('createKeyedQueue', () => {
+  it('runs the tasks of one key one after another, and other keys at the same time', async () => {
+    const run = createKeyedQueue<number>();
+    const log: string[] = [];
+    const gate = () => { let open!: () => void; const p = new Promise<void>((r) => { open = r; }); return { p, open }; };
+    const a1 = gate();
+    const first = run(1, async () => { log.push('a1 start'); await a1.p; log.push('a1 end'); return 'a1'; });
+    const second = run(1, async () => { log.push('a2 start'); return 'a2'; });
+    const other = run(2, async () => { log.push('b start'); return 'b'; });
+    await other;
+    expect(log).toEqual(['a1 start', 'b start']);
+    a1.open();
+    expect(await Promise.all([first, second])).toEqual(['a1', 'a2']);
+    expect(log).toEqual(['a1 start', 'b start', 'a1 end', 'a2 start']);
+  });
+  it('keeps going after a task fails', async () => {
+    const run = createKeyedQueue<number>();
+    const failed = run(1, async () => { throw new Error('boom'); });
+    const next = run(1, async () => 'ok');
+    await expect(failed).rejects.toThrow('boom');
+    expect(await next).toBe('ok');
   });
 });

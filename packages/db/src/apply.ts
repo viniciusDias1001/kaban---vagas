@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNotNull, sql } from 'drizzle-orm';
 import type {
   ApplicationDto, ApplicationEventDto, ApplicationListItemDto, ApplicationReason, ApplicationStatus, ApplyMode, ApplySiteId,
   ApplyTrigger,
@@ -47,7 +47,7 @@ export interface Transition {
     Pick<
       ApplicationRow,
       | 'mode' | 'gateScore' | 'finishedAt' | 'resumeLang' | 'resumeFileName' | 'resumePdf' | 'answers' | 'pendingQuestions' | 'confirmation'
-      | 'contactEmail' | 'shots' | 'attempts' | 'cancelRequested' | 'waitingGate' | 'runAfter' | 'viewedAt' | 'formOpenedAt'
+      | 'contactEmail' | 'shots' | 'attempts' | 'cancelRequested' | 'waitingGate' | 'runAfter' | 'viewedAt' | 'formOpenedAt' | 'trigger'
     >
   >;
 }
@@ -70,8 +70,8 @@ async function writeTransition(tx: Db, row: ApplicationRow, t: Transition, now: 
 }
 
 /**
- * Grava o estado e um evento na mesma transação. Preenche `started_at` na primeira saída de `queued`,
- * `submitted_at` em `submitted` e `finished_at` em estado final. Devolve false, sem gravar, se a linha está em `submitted`
+ * Grava o estado e um evento na mesma transação. Preenche `started_at` na primeira entrada num estado em execução
+ * (`preparing`, `filling`, `waiting_human`, `submitting`), se ainda estiver vazio, `submitted_at` em `submitted` e `finished_at` em estado final. Devolve false, sem gravar, se a linha está em `submitted`
  * (ou não existe).
  */
 export async function transitionApplication(db: Db, id: number, t: Transition, now: number = Date.now()): Promise<boolean> {
@@ -269,7 +269,7 @@ export async function recoverApplications(db: Db, now: number = Date.now()): Pro
     } else {
       const ok = await transitionApplication(
         db, id,
-        { status: 'queued', set: { waitingGate: null, runAfter: null }, message: 'O app foi reiniciado: voltou para a fila.' },
+        { status: 'queued', set: { waitingGate: null, runAfter: null, cancelRequested: false }, message: 'O app foi reiniciado: voltou para a fila.' },
         now,
       );
       if (ok) requeued += 1;
@@ -399,12 +399,15 @@ export async function applicationQueueCounts(db: Db): Promise<{ queued: number; 
   return row;
 }
 
-/** A candidatura parada numa espera ao vivo (captcha, código, login), se houver. */
+/**
+ * A candidatura parada numa espera ao vivo (captcha, código, login), se houver: `waiting_gate` preenchido com o estado
+ * `waiting_human` (antes do clique de envio) ou `submitting` (depois dele, o estado gravado não muda durante a espera).
+ */
 export async function waitingApplication(db: Db): Promise<{ applicationId: number; jobId: number; gate: string } | null> {
   const [row] = await db
     .select({ applicationId: applications.id, jobId: applications.jobId, gate: applications.waitingGate })
     .from(applications)
-    .where(eq(applications.status, 'waiting_human'))
+    .where(and(isNotNull(applications.waitingGate), inArray(applications.status, ['waiting_human', 'submitting'])))
     .orderBy(asc(applications.id))
     .limit(1);
   return row ? { ...row, gate: row.gate ?? 'unknown' } : null;
@@ -414,7 +417,7 @@ export type RetryOutcome = 'queued' | 'not_found' | 'sent' | 'in_progress' | 'co
 
 /**
  * Botão "Tentar de novo": `needs_human`, `failed`, `skipped` e `cancelled` voltam a `queued` (sem espera e sem tentativas
- * gastas). Nunca copia nada para `approved_answers`. `submitted` é recusada (`sent`), uma linha em andamento também
+ * gastas; uma pulada pela conferência, `below_min_score` ou `not_eligible`, volta como manual). Nunca copia nada para `approved_answers`. `submitted` é recusada (`sent`), uma linha em andamento também
  * (`in_progress`), e uma parada em `confirm_submission` nunca volta por botão: depois do clique ninguém sabe se o site recebeu.
  */
 export async function retryApplication(db: Db, id: number, now: number = Date.now()): Promise<RetryOutcome> {
@@ -425,11 +428,16 @@ export async function retryApplication(db: Db, id: number, now: number = Date.no
     if ((RUNNING_STATUSES as readonly string[]).includes(row.status)) return 'in_progress';
     if (row.status === 'needs_human' && row.reason === 'confirm_submission') return 'confirm_submission';
     if (!['needs_human', 'failed', 'skipped', 'cancelled'].includes(row.status)) return 'not_retryable';
+    // Tentar de novo uma vaga que a conferência pulou é a mesma decisão de "Aplicar com IA": volta como manual.
+    const gateSkipped = row.status === 'skipped' && (row.reason === 'below_min_score' || row.reason === 'not_eligible');
     await writeTransition(
       tx, row,
       {
         status: 'queued', message: 'O dono pediu para tentar de novo.',
-        set: { runAfter: null, attempts: 0, cancelRequested: false, waitingGate: null, finishedAt: null },
+        set: {
+          runAfter: null, attempts: 0, cancelRequested: false, waitingGate: null, finishedAt: null,
+          ...(gateSkipped ? { trigger: 'manual' as const } : {}),
+        },
       },
       now,
     );
@@ -490,7 +498,7 @@ export async function requeueQuestionWaits(db: Db, exceptId: number, now: number
     // Uma linha que outro PUT de respostas já travou é recolocada na fila por ele: pular evita o impasse entre os dois.
     .for('update', { skipLocked: true });
   for (const row of rows) {
-    await writeTransition(db, row, { status: 'queued', message: 'Uma resposta nova foi salva: voltou para a fila.', set: { runAfter: null } }, now);
+    await writeTransition(db, row, { status: 'queued', message: 'Uma resposta nova foi salva: voltou para a fila.', set: { runAfter: null, cancelRequested: false } }, now);
   }
   if (rows.length > 0) {
     await db
@@ -518,7 +526,7 @@ export async function settlePendingQuestions(
   }
   await writeTransition(
     db, row,
-    { status: 'queued', message: 'O dono respondeu as perguntas.', set: { pendingQuestions: [], runAfter: null } },
+    { status: 'queued', message: 'O dono respondeu as perguntas.', set: { pendingQuestions: [], runAfter: null, cancelRequested: false } },
     now,
   );
   await db.update(jobs).set({ needsHuman: false, needsHumanReason: null }).where(eq(jobs.id, row.jobId));

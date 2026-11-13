@@ -1,10 +1,9 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import type { ApplySiteId } from '@kv/shared/client';
-import { applyApi, type ApplyAnswerInput, type PendingAnswersBody } from './applyApi';
-import { applyPollMs } from './lib/apply';
 import { useEffect, useRef } from 'react';
-import type { ApplicationListItemDto, ApplyStatusDto } from '@kv/shared/client';
-import { waitingText } from './lib/apply';
+import type { ApplicationDto, ApplicationListItemDto, ApplyStatusDto } from '@kv/shared/client';
+import { applyApi, type ApplyAnswerInput, type PendingAnswersBody } from './applyApi';
+import { afterSend, applyPollMs, waitNotice, waitingText } from './lib/apply';
 
 /** Chaves do React Query das telas de candidatura automática. */
 export const APPLY_KEYS = {
@@ -73,7 +72,15 @@ export function useApplyActions() {
     apply: useMutation({ ...applyOpts, mutationFn: (jobId: number) => applyApi.apply(jobId) }),
     retry: useMutation({ ...applyOpts, mutationFn: (id: number) => applyApi.retry(id) }),
     cancel: useMutation({ ...applyOpts, mutationFn: (id: number) => applyApi.cancel(id) }),
-    send: useMutation({ ...applyOpts, mutationFn: (id: number) => applyApi.send(id) }),
+    send: useMutation({
+      ...applyOpts,
+      mutationFn: (id: number) => applyApi.send(id),
+      // O estado em cache ainda é "ensaio pronto" até a releitura: sem isto o botão voltaria a ligar nesse intervalo.
+      onSuccess: (_, id) => {
+        qc.setQueriesData<ApplicationDto | null>({ queryKey: ['application'] }, (old) => (old && old.id === id ? afterSend(old) : old));
+        refresh();
+      },
+    }),
     sendAll: useMutation({ ...applyOpts, mutationFn: () => applyApi.sendAll() }),
     answer: useMutation({
       ...applyOpts,
@@ -106,15 +113,14 @@ export function useApplyActions() {
  */
 export function useLiveWaitNotification(waiting: ApplyStatusDto['waiting'] | undefined) {
   const qc = useQueryClient();
-  const notified = useRef<string | null>(null);
+  /** `undefined` até a primeira leitura do estado: uma espera que já existia ao abrir a página não avisa. */
+  const seen = useRef<string | null | undefined>(undefined);
   const key = waiting ? `${waiting.applicationId}:${waiting.gate}` : null;
   useEffect(() => {
-    if (!waiting || key === null) {
-      notified.current = null;
-      return;
-    }
-    if (notified.current === key) return;
-    notified.current = key;
+    if (waiting === undefined) return; // o estado ainda não chegou: não é "sem espera"
+    const next = waitNotice(seen.current, key);
+    seen.current = next.seen;
+    if (!next.notify || !waiting) return;
     if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
     const item = qc.getQueryData<ApplicationListItemDto[]>(APPLY_KEYS.applications)?.find((a) => a.id === waiting.applicationId);
     try {

@@ -15,6 +15,7 @@ import {
 import { z } from 'zod';
 import type { AiContext } from '../ai-context';
 import { idParam } from './ids';
+import { NUMBER_ANSWER_MESSAGE, normalizeNumberAnswer } from './number-answer';
 
 const jobNotFound = { error: 'not_found', message: 'vaga não encontrada' };
 const appNotFound = { error: 'not_found', message: 'candidatura não encontrada' };
@@ -43,7 +44,7 @@ const BOOLEAN_OPTIONS = { true: ['sim', 'yes'], false: ['nao', 'no'] } as const;
  * verdade, número normalizado (ponto decimal). `bankText` o transforma no texto do banco.
  * Lança `AnswerRejected` se não serve: opção fora da lista, número que não é número, texto acima do limite etc.
  */
-function checkedValue(q: Question, value: AnswerValue): AnswerValue {
+function checkedValue(q: Question, value: AnswerValue, opts: { free?: boolean } = {}): AnswerValue {
   const bad = (why: string) => new AnswerRejected(`${q.label}: ${why}`);
   if (q.kind === 'file') throw bad('arquivos não são respondidos por aqui');
   if (isEmpty(value)) throw bad('informe a resposta');
@@ -70,11 +71,11 @@ function checkedValue(q: Question, value: AnswerValue): AnswerValue {
     if (!option) throw bad('a resposta não é uma das opções da pergunta');
     return option;
   }
+  if (opts.free) return text; // proposta aceita de uma pergunta sem opções: guardada como veio, sem conferir número nem tamanho
   if (q.kind === 'number') {
-    // 20.000 é vinte mil no Brasil e vinte fora dele: não dá para adivinhar, o dono escreve sem separador de milhar.
-    if (/[.,]\d{3}$/.test(text)) throw bad('escreva o número sem separador de milhar (por exemplo 20000)');
-    if (!/^-?\d+([.,]\d{1,2})?$/.test(text)) throw bad('informe um número, com no máximo duas casas decimais');
-    return text.replace(',', '.');
+    const number = normalizeNumberAnswer(text);
+    if (number === null) throw bad(NUMBER_ANSWER_MESSAGE);
+    return number;
   }
   if (q.maxLength !== null && text.length > q.maxLength) throw bad(`a resposta passa de ${q.maxLength} caracteres`);
   return text;
@@ -95,7 +96,7 @@ function planAnswers(pending: PendingQuestion[], items: PendingItem[]): { writes
       const proposed = p.proposal.value;
       if (p.kind === 'confirm_match') {
         if (p.proposal.bankAnswerId === null) throw new AnswerRejected(`${q.label}: a proposta não aponta para uma resposta salva`);
-        const value = bankText(checkedValue(q, proposed));
+        const value = bankText(checkedValue(q, proposed, { free: true }));
         writes.push({
           type: 'alias', bankAnswerId: p.proposal.bankAnswerId,
           alias: { normalized: normalizeQuestionText(q.label), options: [...q.options], value },

@@ -1,9 +1,9 @@
 import {
   ACTIVE_APPLICATION_STATUSES,
   type AnswerScope, type AnswerSource, type AnswerValue, type ApplicationListItemDto, type ApplicationReason, type ApplicationStatus,
-  type ApplyAiAnswers, type ApplyAnswerDto, type ApplyStatusDto, type PendingQuestion, bankBoolean, bankList, bankText,
+  type ApplicationDto, type ApplyAiAnswers, type ApplyAnswerDto, type ApplyStatusDto, type PendingQuestion, type Question,
+  type ShotKind, bankBoolean, bankList, bankText,
 } from '@kv/shared/client';
-import type { Question, ShotKind } from '@kv/shared/client';
 import { errorMessage } from '../apiError';
 import type { ApplyAnswerInput } from '../applyApi';
 
@@ -23,6 +23,9 @@ export const STATUS_LABELS: Record<ApplicationStatus, string> = {
   cancelled: 'Cancelada',
 };
 
+/** O envio começou e o site não confirmou: o dono confere, e não há "Tentar de novo". */
+export const UNCONFIRMED_TEXT = 'O envio foi iniciado e o site não confirmou. Confira no site ou no seu e-mail se a candidatura chegou.';
+
 const REASON_TEXT: Record<ApplicationReason, string> = {
   question: 'Há perguntas do formulário que só você pode responder.',
   captcha: 'O site pediu para resolver um captcha.',
@@ -31,7 +34,7 @@ const REASON_TEXT: Record<ApplicationReason, string> = {
   restricted: 'O site restringiu a conta; a candidatura automática foi pausada.',
   unsupported_form: 'O formulário tem um campo que a automação não sabe preencher.',
   resume_blocked: 'O currículo adaptado não passou na conferência.',
-  confirm_submission: 'Não deu para confirmar se o envio foi concluído; confira no site antes de tentar de novo.',
+  confirm_submission: UNCONFIRMED_TEXT,
   below_min_score: 'A nota da vaga ficou abaixo do mínimo configurado.',
   not_eligible: 'A vaga exige algo que o seu perfil não atende.',
   blocked: 'A empresa ou a vaga está na sua lista de bloqueio.',
@@ -347,11 +350,14 @@ export function booleanChoice(answer: string): BooleanChoice {
 /** O texto que se salva para a escolha: `Sim`, `Não` ou vazio. */
 export const booleanAnswer = (choice: BooleanChoice): string => (choice === 'none' ? '' : bankText(choice === 'yes'));
 
+/** Recusa de um número com três casas depois do separador (a API faz o mesmo): vale para milhar e para decimais longos. */
+export const NUMBER_FORMAT_PROBLEM = 'Use só dígitos, com no máximo duas casas decimais e sem separador de milhar (ex.: 20000 ou 1234,56).';
+
 /** Problema do número digitado, em pt-BR; null quando está vazio ou serve. Mesma regra da API: sem separador de milhar. */
 export function numberProblem(text: string): string | null {
   const value = text.trim();
   if (value === '') return null;
-  if (/\d[.,]\d{3}(\D|$)/.test(value)) return 'Escreva o número sem separador de milhar (por exemplo 20000).';
+  if (/\d[.,]\d{3}(\D|$)/.test(value)) return NUMBER_FORMAT_PROBLEM;
   if (!/^\d+([.,]\d+)?$/.test(value)) return 'Use só números, com vírgula ou ponto para os decimais (por exemplo 8000 ou 8000,50).';
   return null;
 }
@@ -431,4 +437,44 @@ export function kindHint(kind: ApplyAnswerDto['kind']): string {
   if (kind === 'number') return 'Número, sem separador de milhar (por exemplo 8000).';
   if (kind === 'choice') return 'Uma opção por linha.';
   return '';
+}
+
+/** O que fazer ao sair do campo de uma resposta guardada: `draft` é o que foi digitado (`null` = nada foi digitado). */
+export type CommitDecision =
+  | { action: 'nothing' } | { action: 'unchanged' } | { action: 'invalid'; problem: string } | { action: 'send'; stored: string };
+
+export function decideCommit(kind: ApplyAnswerDto['kind'], draft: string | null, saved: string): CommitDecision {
+  // Nada digitado, nada enviado: o texto guardado pode não estar na forma canônica, e sair do campo não o muda.
+  if (draft === null) return { action: 'nothing' };
+  const problem = answerProblem(kind, draft);
+  if (problem) return { action: 'invalid', problem };
+  const stored = answerToStore(kind, draft);
+  return stored === saved ? { action: 'unchanged' } : { action: 'send', stored };
+}
+
+/** Uma fila por chave: a próxima tarefa da chave espera a anterior terminar (com sucesso ou erro); chaves diferentes não esperam. */
+export function createKeyedQueue<K>() {
+  const tails = new Map<K, Promise<unknown>>();
+  return function run<T>(key: K, task: () => Promise<T>): Promise<T> {
+    const result = (tails.get(key) ?? Promise.resolve()).then(task, task);
+    const tail = result.catch(() => undefined);
+    tails.set(key, tail);
+    void tail.then(() => {
+      if (tails.get(key) === tail) tails.delete(key);
+    });
+    return result;
+  };
+}
+
+/**
+ * Uma notificação por espera ao vivo NOVA: a primeira observação (`seen` indefinido) só registra a chave, para uma
+ * espera que já existia ao abrir a página não avisar de novo. `seen` e `key` são `applicationId:gate` ou null.
+ */
+export function waitNotice(seen: string | null | undefined, key: string | null): { notify: boolean; seen: string | null } {
+  return { notify: seen !== undefined && key !== null && key !== seen, seen: key };
+}
+
+/** A candidatura logo depois de "Enviar de verdade" dar certo: na fila, para valer até a releitura chegar. */
+export function afterSend(application: ApplicationDto): ApplicationDto {
+  return { ...application, status: 'queued', mode: 'real', reason: null, detail: null };
 }

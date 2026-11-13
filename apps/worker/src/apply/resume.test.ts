@@ -1,4 +1,5 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { TailoredResume } from '@kv/shared';
 import { createFakeProvider, fullDraftOf, resolveTailored, type AiConfig, type AiProvider } from '@kv/ai';
 import { SAMPLE_PROFILE } from '@kv/ai/testing';
 import { eq } from 'drizzle-orm';
@@ -14,6 +15,12 @@ const config: AiConfig = {
 const NOW = Date.UTC(2026, 10, 11, 15, 0, 0);
 const signal = new AbortController().signal;
 
+const rendered: TailoredResume[] = [];
+vi.mock('@kv/resume', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@kv/resume')>();
+  return { ...real, renderResumePdf: (r: TailoredResume) => (rendered.push(r), real.renderResumePdf(r)) };
+});
+
 let db: Db;
 let calls: number;
 let provider: AiProvider;
@@ -28,6 +35,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   await resetTestDb(db);
   calls = 0;
+  rendered.length = 0;
   const fake = createFakeProvider();
   onCall = async () => {};
   provider = { id: fake.id, generate: async (req) => (calls++, await onCall(), fake.generate(req)) };
@@ -142,11 +150,12 @@ describe('applicationResume', () => {
     expect(await db.select().from(tailoredResumes)).toHaveLength(0);
   });
 
-  it('sends the base résumé, without the model and without storing, when the job has no description', async () => {
+  it('sends the base résumé, without the model and without storing, when the job has no description and no stored one', async () => {
     const job = await seedJob({ description: '   ' });
     const res = await applicationResume(deps(), job, 'tailored', signal);
     expect(res).toMatchObject({ ok: true, lang: 'pt-BR' });
     expect(calls).toBe(0);
+    expect(rendered).toEqual([baseResume(SAMPLE_PROFILE, 'pt-BR')]);
     expect(await db.select().from(tailoredResumes)).toHaveLength(0);
   });
 
@@ -175,6 +184,30 @@ describe('applicationResume', () => {
       expect(await applicationResume(deps(), job, 'tailored', signal)).toMatchObject({ ok: true });
       expect(calls).toBe(0);
       expect(await row()).toMatchObject({ editedAt: 5, createdAt: 1 });
+    });
+
+    it('is used, with no model call, when the job has an empty description', async () => {
+      const version = (await profileFor(db, 'pt-BR'))!.version;
+      const content = { ...base(), summary: 'Resumo escrito à mão pelo dono.' };
+      const store2 = async (description: string) => {
+        const job = await seedJob({ description });
+        await db.insert(tailoredResumes).values({ jobId: job.id, lang: 'pt-BR', content, profileVersion: version, createdAt: 1, editedAt: 5 });
+        return job;
+      };
+      expect(await applicationResume(deps(), await store2(''), 'tailored', signal)).toMatchObject({ ok: true });
+      expect(calls).toBe(0);
+      expect(rendered.map((r) => r.summary)).toEqual([content.summary]);
+    });
+
+    it('is reported for review, not replaced by the base résumé, when the job has an empty description', async () => {
+      const job = await store((await profileFor(db, 'pt-BR'))!.version, (r) => ({
+        ...r, skills: [...r.skills, { id: 'skill_zzzzzzz9', name: 'Inventada', group: '' }],
+      }));
+      await db.update(jobs).set({ description: '' }).where(eq(jobs.id, job.id));
+      await saveProfile(db, 'pt-BR', SAMPLE_PROFILE, 'editado');
+      const res = await applicationResume(deps(), { ...job, description: '' }, 'tailored', signal);
+      expect(res).toMatchObject({ ok: false, reason: 'resume_blocked' });
+      expect(calls).toBe(0);
     });
 
     it('is used, and left untouched, when the profile changed but it still resolves', async () => {

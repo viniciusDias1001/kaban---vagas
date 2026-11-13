@@ -328,6 +328,45 @@ describe('answers are read back from the bank in the own type of the question', 
     expect(exactBankMatch(bool, bank, ctxOf(job.id))?.value).toBe(true);
   });
 
+  it('an accepted saved-answer match on a question without options keeps the proposal as it is', async () => {
+    const saved = (await db.insert(applyAnswers).values({
+      question: 'Pretensão', normalized: 'pretensao', kind: 'text', answer: 'a combinar, depende da vaga', createdAt: 1, updatedAt: 1,
+    }).returning())[0];
+    const match = (q: Question, value: AnswerValue): PendingQuestion => ({
+      question: q, category: 'personal', kind: 'confirm_match',
+      proposal: { bankAnswerId: saved.id, bankQuestion: saved.question, bankAnswer: saved.answer, value, source: 'bank', basis: [] },
+    });
+    const num = question('n', { label: 'Salary expectation', kind: 'number' });
+    const short = question('s', { label: 'Expected pay', maxLength: 5 });
+    const { id } = await seedPending([match(num, 'a combinar'), match(short, 'a combinar, depende')]);
+    const res = await put(`/applications/${id}/answers`, {
+      answers: [item('n', null, { confirmMatch: true }), item('s', null, { confirmMatch: true })],
+    });
+    expect(res.statusCode).toBe(200);
+    expect((await listApplyAnswers(db))[0].aliases.map((a) => a.value)).toEqual(['a combinar', 'a combinar, depende']);
+  });
+
+  it('an accepted saved-answer match still has to be one of the options', async () => {
+    const saved = (await db.insert(applyAnswers).values({
+      question: 'Visto', normalized: 'visto', kind: 'choice', answer: 'Talvez', createdAt: 1, updatedAt: 1,
+    }).returning())[0];
+    const q = question('v', { label: 'Sponsorship?', kind: 'select', options: ['Yes', 'No'] });
+    const { id } = await seedPending([{
+      question: q, category: 'personal', kind: 'confirm_match',
+      proposal: { bankAnswerId: saved.id, bankQuestion: saved.question, bankAnswer: 'Talvez', value: 'Talvez', source: 'bank', basis: [] },
+    }]);
+    expect((await put(`/applications/${id}/answers`, { answers: [item('v', null, { confirmMatch: true })] })).statusCode).toBe(400);
+  });
+
+  it('an accepted proposal keeps the full checks', async () => {
+    const q = question('n', { label: 'Anos', kind: 'number' });
+    const { id } = await seedPending([{
+      question: q, category: 'profile_fact', kind: 'confirm_proposal',
+      proposal: { bankAnswerId: null, bankQuestion: null, bankAnswer: null, value: 'muitos', source: 'profile', basis: [] },
+    }]);
+    expect((await put(`/applications/${id}/answers`, { answers: [item('n', null, { confirmMatch: true })] })).statusCode).toBe(400);
+  });
+
   it('an accepted proposal whose value is a boolean', async () => {
     const q = question('p', { label: 'Aceita mudança?', kind: 'boolean' });
     const { id, job } = await seedPending([{

@@ -121,21 +121,24 @@ const CONSENT_OBJECTS: readonly RegExp[] = [
   /\b(termos de (uso|servico|utilizacao)|terms of (use|service))\b/g,
   /\b(termos (e )?condicoes( de uso)?|terms (and )?conditions( of (use|service))?)\b(?! (of|for|de|do|da|dos|das|para)\b)/g,
 ];
-/** Veracidade: o que foi informado (substantivo) seguido de "verdadeiro", "correto"... dentro de um mesmo trecho. */
-const INFO_NOUN = '(information|informacoes|informacao|answers|respostas|details|statements|declaracoes|dados|data)';
-const TRUTH_NOUN = `(${INFO_NOUN.slice(1, -1)}|application|candidatura)`;
-const TRUTH_ADJ = '(true|accurate|complete|correct|truthful|verdadeir[ao]s?|veridic[ao]s?|corret[ao]s?|complet[ao]s?|exat[ao]s?)';
-const TRUTH = new RegExp(`\\b${TRUTH_NOUN}\\b.*\\b${TRUTH_ADJ}\\b`);
-const TRUTH_WORDS = new RegExp(`\\b(${TRUTH_NOUN}|${TRUTH_ADJ})\\b`, 'g');
-const TRUTH_ADJ_ONLY = new RegExp(`^${TRUTH_ADJ}$`);
 /**
- * R7: "all"/"todas" só logo antes do substantivo da própria frase de veracidade ("all (of) (the) information ... true",
- * "todas as informações ... verdadeiras"): nenhum outro substantivo de informação entre ele e o adjetivo.
+ * Veracidade: só a frase contígua sai, e nada mais do trecho (polish, item 1). A frase é: o seu sintagma nominal
+ * ("all"/"todas" como R7 permite, "the"/"my"/"as"..., o substantivo, "provided"/"prestadas", "in this application"/"desta
+ * candidatura"), o verbo de ligação e os seus adjetivos unidos por "and"/"e" (a vírgula é fronteira: os trechos seguintes
+ * que só somam adjetivos continuam a frase).
  */
-const ALL_INFO = new RegExp(`\\b(all|todas|todos)( of)?( the| my| as| os| minhas| meus)? ${INFO_NOUN}\\b`
-  + `(?!.*\\b${INFO_NOUN}\\b.*\\b${TRUTH_ADJ}\\b)(?=.*\\b${TRUTH_ADJ}\\b)`, 'g');
-/** "provided"/"prestadas" só dentro de uma frase de veracidade (fora dela apontam para um conteúdo não dito). */
-const TRUTH_PROVIDED = /\b((i )?(have )?provided|fornecid[ao]s?|prestad[ao]s?)\b/g;
+const TRUTH_NOUN = '(?:information|informacoes|informacao|answers|respostas|details|statements|declaracoes|dados|data|application'
+  + '|candidatura)';
+const TRUTH_ADJ = '(?:true|accurate|complete|correct|truthful|verdadeir[ao]s?|veridic[ao]s?|corret[ao]s?|complet[ao]s?|exat[ao]s?)';
+const TRUTH_ADJ_ONLY = new RegExp(`^${TRUTH_ADJ}$`);
+/** R7: "all"/"todas" só como começo do sintagma da própria frase de veracidade. */
+const TRUTH_DETERMINER = '(?:(?:all|todas|todos)(?: of)? )?(?:(?:the|my|as|os|a|o|minhas|meus|minha|meu) )?';
+/** "provided"/"prestadas" só dentro da frase ("that I have provided": o "that" já virou `~` em R10). */
+const TRUTH_PROVIDED = '(?:(?:~ )?(?:i )?(?:have )?provided|fornecid[ao]s?|prestad[ao]s?)';
+const TRUTH_PLACE = '(?:(?:in|on) (?:this|the|my) (?:job application|application|form)'
+  + '|(?:desta|nesta|da|na|da minha|na minha) (?:candidatura|inscricao)|(?:deste|neste|do|no|do meu|no meu) formulario)';
+const TRUTH_PHRASE = new RegExp(`\\b${TRUTH_DETERMINER}${TRUTH_NOUN}(?: ${TRUTH_PROVIDED})?(?: ${TRUTH_PLACE})?`
+  + ` (?:is|are|e|sao|esta|estao) ${TRUTH_ADJ}(?: (?:and|e) ${TRUTH_ADJ})*(?= |$)`, 'g');
 
 /**
  * R3: as frases da candidatura que um demonstrativo pode determinar. "process", "processo", "selection", "seleção" e
@@ -157,6 +160,8 @@ const POINTING = new Set([
   'anexo', 'anexa', 'anexos', 'anexas', 'mesmo', 'mesma', 'mesmos', 'mesmas', 'tal', 'tais', 'referido', 'referida', 'referidos',
   'referidas', 'supracitado', 'supracitada', 'supracitados', 'supracitadas', 'isso', 'isto', 'aquilo', 'aqui', 'ali', 'disso', 'disto',
   'nisso', 'nisto', 'daquilo', 'naquilo', 'aquele', 'aquela', 'aqueles', 'aquelas',
+  // Polish, item 3. Em português, "que" depois de "o", "aquilo" ou "tudo" ("o que", "tudo o que") sobra (R10).
+  'what', 'whatever', 'anything', 'everything',
 ]);
 
 /**
@@ -200,16 +205,22 @@ const ACT_PHRASES: readonly RegExp[] = [
   /\bao enviar( esta| minha| a)? (candidatura|inscricao)\b/g,
   /\bao enviar( este| meu| o)? formulario\b/g,
   /\bao me candidatar\b/g,
+  // Polish, item 5: o preâmbulo da caixa de seleção. "by clicking here" ou "the boxes below" não casam e sobram.
+  /\bby (checking|ticking|selecting|clicking) (this|the) (box|checkbox)\b/g,
+  /\bao (marcar|selecionar|clicar) (esta|nesta|a|na) (caixa de selecao|caixa|opcao)\b/g,
   /\b(please (read|review)|(por favor )?leia)( the| our| a| o| os| as| nossa| nosso| nossos| nossas)? (?=#( |$))/g,
   // ... ou logo antes de "and"/"e" mais uma expressão de concordância: "please review and acknowledge …", "leia e aceite …".
   new RegExp(`\\b(please (read|review)|(por favor )?leia) (and|e) (?=(?:${AGREEMENT_SOURCE}))`, 'g'),
   /\b(in accordance with|according to|conforme)( the| our| a| o| os| as)? (?=#( |$))/g,
 ];
-/** R10: "that"/"que" abrem oração só antes destas palavras ou do começo de uma expressão de concordância. */
+/**
+ * R10: "that"/"que" abrem oração só antes destas palavras ou do começo de uma expressão de concordância; nunca "que"
+ * depois de `QUE_POINTING` ("o que", "aquilo que", "tudo o que": apontam, polish item 3).
+ */
+const QUE_POINTING = new Set(['o', 'aquilo', 'tudo']);
 const CLAUSE_START = new Set(['the', 'a', 'an', 'my', 'i', 'all', 'any', 'this', 'these', 'o', 'os', 'as', 'meu', 'minha', 'meus',
   'minhas', 'eu', 'todas', 'todos', 'este', 'esta', 'estes', 'estas', 'li', 'estou']);
 const AGREEMENT_AT_START = new RegExp(`^(?:${AGREEMENT_SOURCE})`);
-const NOT_A_CLAUSE = new Set(['and', 'or', 'e', 'ou']);
 /** R6: formas societárias que podem vir no fim do nome da empresa, no rótulo ou no cadastro da vaga. */
 const LEGAL_SUFFIX = ['inc', 'llc', 'ltd', 'ltda', 's a', 'sa', 'gmbh', 'corp', 'corporation', 'co', 'plc', 'eireli', 'me'];
 
@@ -244,9 +255,13 @@ function consentTokens(text: string): string {
     .trim();
 }
 
-/** R6: o nome inteiro da empresa, em ordem e sem fronteira, com forma societária e "s" do possessivo opcionais. */
+/**
+ * R6: o nome inteiro da empresa, em ordem e sem fronteira, com forma societária e "s" do possessivo opcionais. O nome passa
+ * pela mesma normalização do rótulo ("Johnson & Johnson" vira "johnson and johnson", polish item 4); a pontuação dele
+ * ("S.A.", "Inc.") só separa palavras.
+ */
 function companyPattern(company: string): RegExp | null {
-  const tokens = normalizeQuestionText(company).split(' ').filter((w) => w !== '');
+  const tokens = consentTokens(company).split(' ').filter((w) => w !== '' && w !== BOUNDARY);
   for (;;) {
     const tail = tokens.slice(-2).join(' ');
     if (tokens.length > 2 && tail === 's a') tokens.splice(-2);
@@ -257,19 +272,32 @@ function companyPattern(company: string): RegExp | null {
   return new RegExp(`\\b${tokens.join(' ')}( (${LEGAL_SUFFIX.join('|')}))*( s)?\\b`, 'g');
 }
 
-/** Veracidade, trecho a trecho: um trecho com substantivo e adjetivo, e os trechos seguintes que só somam adjetivos. */
+/**
+ * A frase de veracidade só começa no começo do trecho, depois de "and"/"e", de um "that"/"que" que abriu oração (`~`) ou
+ * de um verbo de declaração. Assim "your answers are true" e "Acme's statements are accurate" não são do dono e sobram.
+ */
+const TRUTH_LEAD = new Set(['', USED, 'and', 'e', 'confirm', 'certify', 'declare', 'attest', 'affirm', 'acknowledge', 'agree',
+  'understand', 'declaro', 'confirmo', 'certifico', 'atesto', 'afirmo']);
+const TRUTH_CONTINUATION = new Set(['and', 'e']);
+
+/**
+ * Veracidade, trecho a trecho: só a frase contígua vira objeto; o resto do trecho fica como está. Um trecho seguinte que
+ * só soma adjetivos (e "and"/"e") continua a frase quando ela fechou o trecho anterior ("true, accurate and complete").
+ */
 function markTruth(text: string): string {
   let open = false;
   return text.split(BOUNDARY).map((segment) => {
-    if (TRUTH.test(segment)) {
-      open = true;
-      return segment.replace(ALL_INFO, ` ${OBJ} `).replace(TRUTH_PROVIDED, ` ${OBJ} `).replace(TRUTH_WORDS, ` ${OBJ} `);
-    }
     const words = segment.split(' ').filter((w) => w !== '');
-    if (open && words.length > 0 && words.every((w) => TRUTH_ADJ_ONLY.test(w) || NOT_A_CLAUSE.has(w)))
-      return segment.replace(TRUTH_WORDS, ` ${OBJ} `);
+    if (open && words.some((w) => TRUTH_ADJ_ONLY.test(w)) && words.every((w) => TRUTH_ADJ_ONLY.test(w) || TRUTH_CONTINUATION.has(w)))
+      return ` ${OBJ} `;
     open = false;
-    return segment;
+    const marked = segment.replace(TRUTH_PHRASE, (match: string, offset: number, all: string) => {
+      const lead = all.slice(0, offset).trim().split(' ').at(-1) ?? '';
+      if (!TRUTH_LEAD.has(lead)) return match;
+      if (all.slice(offset + match.length).trim() === '') open = true;
+      return ` ${OBJ} `;
+    });
+    return marked;
   }).join(BOUNDARY);
 }
 
@@ -287,13 +315,16 @@ function remainder(text: string, company: string, filler: ReadonlySet<string>): 
   if (withAgreement) {
     rest = rest.replace(/\b(that|que)(?= )/g, (match: string, _w: string, offset: number, all: string) => {
       const after = all.slice(offset + match.length + 1);
+      if (match === 'que' && QUE_POINTING.has(all.slice(0, offset).trim().split(' ').at(-1) ?? '')) return match;
       return CLAUSE_START.has(after.split(' ')[0]!) || AGREEMENT_AT_START.test(after) ? USED : match;
     });
   }
   if (pattern) rest = rest.replace(pattern, ` ${COMPANY} `);
   rest = rest.replace(PURPOSE_OR_ACT, ` ${USED} `);
   for (const object of CONSENT_OBJECTS) rest = rest.replace(object, ` ${OBJ} `);
-  rest = markTruth(rest).replace(/\s+/g, ' ');
+  // Sem concordância, só o nome do objeto: a veracidade é uma afirmação e não é marcada.
+  if (withAgreement) rest = markTruth(rest);
+  rest = rest.replace(/\s+/g, ' ');
   const object = rest.includes(OBJ);
   // R6b: a empresa sai só logo antes de um objeto ou logo depois de uma preposição; em outro lugar, `%` sobra.
   rest = rest.replace(new RegExp(`${COMPANY} (?=${OBJ}( |$))`, 'g'), `${USED} `);
