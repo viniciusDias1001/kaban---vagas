@@ -32,7 +32,7 @@ function Sheet({ open, onOpenChange, children }: { open: boolean; onOpenChange: 
   );
 }
 
-function SheetContent({ className, children, ...props }: ComponentProps<typeof DialogPrimitive.Content>) {
+function SheetContent({ className, children, onCloseAutoFocus, ...props }: ComponentProps<typeof DialogPrimitive.Content>) {
   // Sem um Dialog.Trigger o Radix não sabe para onde devolver o foco: guarda quem estava focado ao abrir.
   const opener = useRef<HTMLElement | null>(null);
   return (
@@ -42,6 +42,9 @@ function SheetContent({ className, children, ...props }: ComponentProps<typeof D
         opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       }}
       onCloseAutoFocus={(e) => {
+        // Quem usa o painel pode pôr o foco em outro lugar (chamando `preventDefault`); senão ele volta para quem abriu.
+        onCloseAutoFocus?.(e);
+        if (e.defaultPrevented) return;
         e.preventDefault();
         if (opener.current?.isConnected) opener.current.focus();
       }}

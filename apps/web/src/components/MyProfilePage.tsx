@@ -394,11 +394,14 @@ function Loaded({ overview, onOpenSettings }: { overview: ProfileOverviewDto; on
               <li>os currículos enviados (arquivos e texto lido) e os perfis estruturados dos dois idiomas;</li>
               <li>todos os currículos adaptados;</li>
               <li>as notas, os títulos traduzidos e as análises de todas as vagas;</li>
-              <li>a fila de tarefas da IA, inclusive o que está em andamento.</li>
+              <li>a fila de tarefas da IA, inclusive o que está em andamento;</li>
+              <li>as respostas para candidaturas que você salvou e as respostas guardadas nas candidaturas;</li>
+              <li>os e-mails de vaga guardados, as respostas preparadas para eles, a lista de e-mails ignorados e os alertas do sino.</li>
             </ul>
             <p>
               Ficam: as vagas e as suas anotações, o histórico de gasto estimado (sem conteúdo pessoal), as configurações e as chaves de API
-              (para removê-las, use a aba Configurações). O que já foi enviado ao provedor de IA não é apagado por aqui.
+              (para removê-las, use a aba Configurações), e a caixa de e-mail conectada (para desconectá-la, use Configurações &gt; E-mail).
+              O que já foi enviado ao provedor de IA ou às empresas não é apagado por aqui.
             </p>
           </ConfirmDialog>
 

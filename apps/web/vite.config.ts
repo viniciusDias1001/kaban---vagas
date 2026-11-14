@@ -28,7 +28,8 @@ export default defineConfig({
     },
   },
   server: {
-    port: 5173,
+    // WEB_PORT só para o e2e rodar ao lado de um `pnpm dev` (o playwright.config a define); o padrão é a 5173.
+    port: Number(process.env.WEB_PORT || 5173),
     strictPort: true,
     proxy: {
       '/api': {

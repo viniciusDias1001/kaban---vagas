@@ -118,9 +118,11 @@ describe('tier 1', () => {
     expect(await usageLayers()).toEqual(['tier1:fake-fast']);
   });
 
-  it('the sweep only queues jobs without a result, skips archived ones and needs a profile', async () => {
+  it('the sweep only queues jobs without a result, skips archived, lost and discarded ones and needs a profile', async () => {
     const scored = await seedJob();
     await seedJob({ column: 'arquivada' });
+    await seedJob({ column: 'perdida' });
+    await seedJob({ column: 'descartada' });
     const fresh = await seedJob();
     expect(await enqueueTier1ForNewJobs(db)).toBe(0);
     await saveProfile(db, 'en', SAMPLE_PROFILE, 'extraido');

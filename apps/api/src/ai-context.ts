@@ -1,6 +1,7 @@
 import { applyDataDir, applySites, type ApplySite } from '@kv/apply';
 import { createProvider, type AiConfig, type AiProvider } from '@kv/ai';
 import type { Db } from '@kv/db';
+import { findPhoneChatFor, mailboxFor, phoneNotifierFor, type Mailbox, type PhoneNotifier } from '@kv/mail';
 import type { TailoredResume } from '@kv/shared';
 import { extractInWorker, renderResumePdf, type ExtractResult, type ResumeKind } from '@kv/resume';
 import { createSettingsService, type SettingsService } from '@kv/settings';
@@ -23,6 +24,16 @@ export interface AiContext {
   testLimiter: RateLimiter;
   /** Pasta de dados da candidatura automática (fotos, perfil do navegador). Trocada nos testes. */
   dataDir: string;
+  /** Abre a caixa do dono com as credenciais dadas. Produção: `mailboxFor` (Gmail, ou a falsa com `FAKE_MAIL=1`). Trocada nos testes. */
+  mailbox: (creds: { address: string; password: string }) => Mailbox;
+  /** Limite de frequência do "Testar e conectar" da caixa. */
+  connectLimiter: RateLimiter;
+  /** Monta o aviso no celular com o token e o chat dados. Produção: `phoneNotifierFor` (Telegram, ou o falso com `FAKE_MAIL=1`). Trocado nos testes. */
+  phoneNotifier: (opts: { token: string; chatId: string }) => PhoneNotifier;
+  /** "Achar meu chat": o chat privado mais recente do bot. Produção: `findPhoneChatFor` (com `FAKE_MAIL=1`, um id fixo, sem rede). Trocado nos testes. */
+  findPhoneChat: (token: string) => Promise<string | null>;
+  /** Limite de frequência do "Achar meu chat" e do "Enviar teste" (juntos). */
+  phoneLimiter: RateLimiter;
   /** Sites de candidatura registrados (com `FAKE_APPLY_SITE=1`, só o de teste). Trocados nos testes. */
   sites: ApplySite[];
   now: () => number;
@@ -35,6 +46,7 @@ export interface AiContextOptions extends Partial<AiContext> {
 
 export function createAiContext(db: Db, over: AiContextOptions = {}): AiContext {
   const now = over.now ?? Date.now;
+  const dataDir = over.dataDir ?? applyDataDir();
   return {
     settings: over.settings ?? createSettingsService(db, { env: over.env, now }),
     extractResume: over.extractResume ?? ((buf, kind) => extractInWorker(buf, kind)),
@@ -42,7 +54,14 @@ export function createAiContext(db: Db, over: AiContextOptions = {}): AiContext 
     createProvider: over.createProvider ?? createProvider,
     // No máximo um teste a cada 10 s e cinco a cada 10 min: o botão não vira amplificador de gasto.
     testLimiter: over.testLimiter ?? createRateLimiter({ minIntervalMs: 10_000, max: 5, windowMs: 10 * 60_000, now }),
-    dataDir: over.dataDir ?? applyDataDir(),
+    // Cada teste de login abre uma sessão no Gmail: o mesmo limite do "Testar conexão" (um a cada 10 s, cinco a cada 10 min).
+    connectLimiter: over.connectLimiter ?? createRateLimiter({ minIntervalMs: 10_000, max: 5, windowMs: 10 * 60_000, now }),
+    dataDir,
+    mailbox: over.mailbox ?? ((creds) => mailboxFor(process.env, dataDir, creds)),
+    phoneNotifier: over.phoneNotifier ?? ((opts) => phoneNotifierFor(process.env, dataDir, opts)),
+    findPhoneChat: over.findPhoneChat ?? ((token) => findPhoneChatFor(process.env, token)),
+    // Cada chamada vai ao Telegram: um a cada 5 s e dez a cada 10 min.
+    phoneLimiter: over.phoneLimiter ?? createRateLimiter({ minIntervalMs: 5_000, max: 10, windowMs: 10 * 60_000, now }),
     sites: over.sites ?? applySites(),
     now,
   };

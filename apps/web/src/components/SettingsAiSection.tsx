@@ -24,12 +24,13 @@ export const ERROR = 'text-xs leading-snug text-bad';
 export { CARD, EYEBROW };
 
 const NONE = 'none';
-const LAYER_LABELS: Record<AiLayer, string> = {
+export const LAYER_LABELS: Record<AiLayer, string> = {
   profile: 'Perfil',
   tier1: 'Camada 1: notas',
   tier2: 'Camada 2: análises',
   tier3: 'Camada 3: currículos',
   apply: 'Candidatura',
+  email: 'E-mail',
   test: 'Testes de conexão',
 };
 const providerLabel = (id: string) => AI_PROVIDER_LABELS[id as keyof typeof AI_PROVIDER_LABELS] ?? id;

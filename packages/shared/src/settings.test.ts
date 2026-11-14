@@ -5,6 +5,14 @@ import { SETTING_KEYS, SETTINGS_LIMITS } from './settings-constants';
 const ok = (patch: unknown) => SettingsPatchSchema.safeParse(patch).success;
 
 describe('SettingsPatchSchema', () => {
+  it('validates the e-mail settings', () => {
+    expect(SettingsPatchSchema.safeParse({ emailFactsMode: 'sempre' }).success).toBe(false);
+    expect(SettingsPatchSchema.safeParse({ emailMoveMode: 'talvez' }).success).toBe(false);
+    expect(SettingsPatchSchema.safeParse({ emailEnabled: 'sim' }).success).toBe(false);
+    expect(SettingsPatchSchema.parse({ emailAiDrafts: false, emailEnabled: null })).toEqual({ emailAiDrafts: false, emailEnabled: null });
+    expect(SettingsPatchSchema.parse({ emailMoveMode: 'confirm', emailFactsMode: 'approve' })).toEqual({ emailMoveMode: 'confirm', emailFactsMode: 'approve' });
+  });
+
   it('accepts any subset of fields, and null to clear a stored value', () => {
     expect(ok({})).toBe(true);
     expect(ok({ provider: 'openai', modelFast: 'gpt-6-luna', modelStrong: 'gpt-6.1-sol', dailyBudgetUsd: 2.5 })).toBe(true);

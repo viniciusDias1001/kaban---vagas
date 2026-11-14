@@ -1,0 +1,360 @@
+import { ArrowDownLeft, ArrowUpRight, Inbox, RotateCw, X } from 'lucide-react';
+import { motion, useReducedMotion } from 'motion/react';
+import { Fragment, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import {
+  EMAIL_KINDS, EMAIL_KIND_LABELS, periodSince, type DashboardPeriod, type EmailKind, type MailMessageDto, type MailReplyDto,
+} from '@kv/shared/client';
+import {
+  MAIL_LINKED_TOAST, afterMailLinked, mailActions, mailListNotice, replyStateLabel, selectedMail, threadConversation,
+} from '../lib/email';
+import { useMediaQuery } from '../lib/hooks';
+import { spring } from '../lib/motion';
+import { CARD, EYEBROW } from '../lib/styles';
+import { cn } from '../lib/utils';
+import { showToast } from '../toast';
+import { useJobEmails, useMailMessages } from '../useEmail';
+import { Badge } from './ui/badge';
+import { Button } from './ui/button';
+import { LinkMailToJob } from './LinkToJob';
+import { CheckChip } from './ui/check-chip';
+import { Notice } from './ui/notice';
+import { Segmented } from './ui/segmented';
+import { Sheet, SheetClose, SheetContent, SheetTitle } from './ui/sheet';
+import { Skeleton } from './ui/skeleton';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
+
+type KindFilter = 'all' | EmailKind;
+
+const KIND_OPTIONS: { value: KindFilter; label: string }[] = [
+  { value: 'all', label: 'Todos' },
+  ...EMAIL_KINDS.map((k) => ({ value: k, label: EMAIL_KIND_LABELS[k] })),
+];
+
+const KIND_TONE: Record<EmailKind, 'neutral' | 'accent' | 'ok' | 'warn' | 'bad'> = {
+  recebimento: 'neutral', reprovacao: 'bad', entrevista: 'accent', oferta: 'ok', pedido: 'warn', outro: 'neutral',
+};
+
+const dayFmt = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit' });
+const dayYearFmt = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' });
+/** "13/11"; com o ano ("13/11/25") quando o e-mail não é do ano corrente. */
+const dateFmt = { format: (ms: number) => ((new Date(ms).getFullYear() === new Date().getFullYear() ? dayFmt : dayYearFmt).format(ms)) };
+const dateTimeFmt = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+
+/** O que a linha mostra como texto: o resumo; nos enviados (e sem resumo), o assunto. */
+const lineText = (m: MailMessageDto): string => (m.direction === 'in' && m.summary?.trim()) || m.subject.trim() || '(sem assunto)';
+
+function KindBadge({ m }: { m: MailMessageDto }) {
+  if (m.direction === 'out') return <Badge tone="outline">Enviado</Badge>;
+  return m.kind ? <Badge tone={KIND_TONE[m.kind]}>{EMAIL_KIND_LABELS[m.kind]}</Badge> : <Badge tone="outline">Sem tipo</Badge>;
+}
+
+/** Na conversa, o bloco da resposta já diz o estado dela (a enviada aparece como e-mail do fio, sem dizer quem a aprovou): a linha do app fica só com o resto. */
+const REPLY_ACTIONS = new Set(['rascunho esperando você', 'resposta descartada', 'envio falhou']);
+const sheetActions = (m: MailMessageDto): string[] => mailActions(m).filter((a) => !REPLY_ACTIONS.has(a));
+
+function Actions({ m, only }: { m: MailMessageDto; only?: string[] }) {
+  const actions = only ?? mailActions(m);
+  if (actions.length === 0) return <span aria-label="Nada" className="text-faint">-</span>;
+  return (
+    <ul className="space-y-0.5 text-[13px] text-ink-2">
+      {actions.map((a) => <li key={a}>{a}</li>)}
+    </ul>
+  );
+}
+
+function Who({ m }: { m: MailMessageDto }) {
+  if (m.jobId === null) return <span className="text-muted">Sem vaga</span>;
+  return (
+    <span className="text-ink">
+      {m.company}{m.jobTitle ? <span className="text-muted"> · {m.jobTitle}</span> : null}
+    </span>
+  );
+}
+
+function rowKeys(open: () => void) {
+  return {
+    tabIndex: 0,
+    onClick: open,
+    onKeyDown: (e: KeyboardEvent) => {
+      if (e.target !== e.currentTarget) return;
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
+    },
+  };
+}
+
+const FOCUS = 'cursor-pointer focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-accent/45 focus-visible:ring-inset';
+
+function MailTable({ rows, onOpen }: { rows: MailMessageDto[]; onOpen: (m: MailMessageDto) => void }) {
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow className="border-t-0 hover:bg-transparent">
+          <TableHead className="px-3">Data</TableHead>
+          <TableHead className="px-3">Vaga</TableHead>
+          <TableHead className="px-3">Tipo</TableHead>
+          <TableHead className="px-3">Resumo</TableHead>
+          <TableHead className="px-3">O que o app fez</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {rows.map((m) => (
+          <TableRow key={m.id} data-testid={`painel-mail-row-${m.id}`} className={FOCUS} {...rowKeys(() => onOpen(m))}>
+            <TableCell className="whitespace-nowrap px-3 align-top tabular-nums text-muted">{dateFmt.format(m.sentAt)}</TableCell>
+            <TableCell className="px-3 align-top text-[13px] leading-snug"><Who m={m} /></TableCell>
+            <TableCell className="px-3 align-top"><KindBadge m={m} /></TableCell>
+            <TableCell className="max-w-[30rem] px-3 align-top text-[13px] leading-snug text-ink-2">{lineText(m)}</TableCell>
+            <TableCell className="px-3 align-top"><Actions m={m} /></TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  );
+}
+
+function MailCards({ rows, onOpen }: { rows: MailMessageDto[]; onOpen: (m: MailMessageDto) => void }) {
+  return (
+    <ul className="space-y-2.5">
+      {rows.map((m) => (
+        <li key={m.id}>
+          <div
+            role="button" data-testid={`painel-mail-row-${m.id}`}
+            className={cn(FOCUS, 'block w-full rounded-2xl border border-line bg-surface-2/50 p-3.5 text-left transition-colors hover:bg-surface-2/80')}
+            {...rowKeys(() => onOpen(m))}
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <KindBadge m={m} />
+              <span className="text-xs tabular-nums text-muted">{dateFmt.format(m.sentAt)}</span>
+            </div>
+            <p className="mt-2 break-words text-[13px] leading-snug"><Who m={m} /></p>
+            <p className="mt-1 break-words text-[13px] leading-snug text-ink-2">{lineText(m)}</p>
+            {mailActions(m).length > 0 && <div className="mt-2 border-t border-line pt-2"><Actions m={m} /></div>}
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function Bubble({ m }: { m: MailMessageDto }) {
+  const out = m.direction === 'out';
+  const Icon = out ? ArrowUpRight : ArrowDownLeft;
+  const body = m.body.trim() || m.summary?.trim() || '';
+  return (
+    <article
+      data-testid={`painel-mail-message-${m.id}`}
+      className={cn('rounded-2xl border p-4', out ? 'border-accent/25 bg-accent/7' : 'border-line bg-surface-2/50')}
+    >
+      <header className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+        <p className="flex min-w-0 items-center gap-1.5 text-[13px] font-medium text-ink">
+          <Icon aria-hidden className="size-3.5 shrink-0 text-muted" />
+          <span className="min-w-0 break-words">{out ? 'Você' : m.fromName || m.fromAddress}</span>
+        </p>
+        <span className="text-xs tabular-nums text-muted">{dateTimeFmt.format(m.sentAt)}</span>
+      </header>
+      {body && <p className="mt-3 whitespace-pre-wrap break-words text-[13.5px] leading-relaxed text-ink-2">{body}</p>}
+    </article>
+  );
+}
+
+function ReplyBox({ r }: { r: MailReplyDto }) {
+  return (
+    <article className="rounded-2xl border border-dashed border-line-strong p-4">
+      <header className="flex flex-wrap items-center justify-between gap-2">
+        <p className={EYEBROW}>Resposta preparada</p>
+        <Badge tone={r.state === 'falhou' ? 'bad' : 'neutral'}>{replyStateLabel(r.state)}</Badge>
+      </header>
+      <p className="mt-2 whitespace-pre-wrap break-words text-[13.5px] leading-relaxed text-ink-2">{r.body}</p>
+      {r.note && <p className="mt-2 text-xs text-muted">{r.note}</p>}
+    </article>
+  );
+}
+
+/**
+ * O fio de uma vaga, como no painel da vaga: as mensagens do mesmo fio em ordem, cada resposta sob o e-mail a que responde
+ * (a enviada também, até a cópia dela ser guardada; aí ela aparece como o e-mail enviado).
+ */
+function JobThread({ mail, jobId }: { mail: MailMessageDto; jobId: number }) {
+  const job = useJobEmails(jobId);
+  if (job.isError) {
+    return (
+      <Notice
+        tone="bad" role="alert" title="Não foi possível carregar a conversa"
+        action={<Button size="sm" disabled={job.isFetching} onClick={() => void job.refetch()}><RotateCw aria-hidden /> Tentar de novo</Button>}
+      >
+        <p>{job.error.message}</p>
+      </Notice>
+    );
+  }
+  if (!job.data) return <div aria-hidden className="space-y-3"><Skeleton className="h-24 rounded-2xl" /><Skeleton className="h-24 rounded-2xl" /></div>;
+  const thread = threadConversation(job.data, mail.threadKey);
+  return (
+    <div className="space-y-3" data-testid="painel-mail-thread">
+      {thread.length === 0 && <Bubble m={mail} />}
+      {thread.map(({ message, reply }) => (
+        <Fragment key={message.id}>
+          <Bubble m={message} />
+          {reply && <ReplyBox r={reply} />}
+        </Fragment>
+      ))}
+    </div>
+  );
+}
+
+function MailSheet({ mail, open, onClose, onOpenJob, onLinked, onCloseAutoFocus }: {
+  mail: MailMessageDto | null; open: boolean; onClose: () => void; onOpenJob: (jobId: number) => void;
+  /** O e-mail sem vaga foi ligado a uma vaga pela conversa. */
+  onLinked: (mailId: number) => void;
+  onCloseAutoFocus: (e: Event) => void;
+}) {
+  return (
+    <Sheet open={open} onOpenChange={(o) => !o && onClose()}>
+      {mail && (
+        <SheetContent onCloseAutoFocus={onCloseAutoFocus}>
+          <div className="flex h-full flex-col">
+            <header className="flex items-start justify-between gap-4 border-b border-line p-5">
+              <div className="min-w-0">
+                <SheetTitle className="break-words text-[17px] font-semibold leading-snug text-ink">{mail.subject.trim() || '(sem assunto)'}</SheetTitle>
+                <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px]">
+                  <KindBadge m={mail} />
+                  <Who m={mail} />
+                </p>
+              </div>
+              <SheetClose asChild>
+                <Button type="button" variant="ghost" size="icon" aria-label="Fechar a conversa"><X aria-hidden /></Button>
+              </SheetClose>
+            </header>
+            <div className="flex-1 space-y-4 overflow-y-auto p-5">
+              {sheetActions(mail).length > 0 && (
+                <div>
+                  <p className={EYEBROW}>O que o app fez</p>
+                  <div className="mt-1.5"><Actions m={mail} only={sheetActions(mail)} /></div>
+                </div>
+              )}
+              {mail.jobId === null ? (
+                <div className="space-y-3">
+                  <Bubble m={mail} />
+                  {/* Sem card: liga o e-mail (e o fio dele) a uma vaga daqui, como no alerta do sino. */}
+                  {mail.direction === 'in' && (
+                    <LinkMailToJob key={mail.id} messageId={mail.id} testIdPrefix="painel-mail-link" onLinked={() => onLinked(mail.id)} />
+                  )}
+                </div>
+              ) : <JobThread mail={mail} jobId={mail.jobId} />}
+            </div>
+            {mail.jobId !== null && (
+              <footer className="border-t border-line p-4">
+                <Button data-testid="painel-mail-open-job" className="w-full" onClick={() => onOpenJob(mail.jobId as number)}>
+                  Abrir a vaga
+                </Button>
+              </footer>
+            )}
+          </div>
+        </SheetContent>
+      )}
+    </Sheet>
+  );
+}
+
+function Loading() {
+  return (
+    <div aria-hidden className="space-y-2">
+      {[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-11 rounded-xl" />)}
+    </div>
+  );
+}
+
+/** A lista dos e-mails de vaga do período, recebidos e enviados, do mais novo ao mais antigo; clicar abre a conversa. */
+export function PainelEmailList({ period, onOpenJob }: { period: DashboardPeriod; onOpenJob: (jobId: number) => void }) {
+  const [kind, setKind] = useState<KindFilter>('all');
+  const [unmatched, setUnmatched] = useState(false);
+  // O id do e-mail aberto: a conversa lê a linha atual (relida depois de ligar, desfazer, responder), nunca uma cópia antiga.
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const lastSelected = useRef<MailMessageDto | null>(null);
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const narrow = useMediaQuery('(max-width: 767px)');
+  const reduced = useReducedMotion();
+  const titleId = useId();
+  const kindLabelId = useId();
+  // O início do período muda só com a escolha do período: a chave da consulta não pode mudar a cada renderização.
+  const since = useMemo(() => periodSince(period, Date.now()), [period]);
+  const { data, isError, error, isFetching, isPlaceholderData, refetch } = useMailMessages({
+    ...(kind !== 'all' && { kind }),
+    ...(unmatched && { unmatched: true }),
+    ...(since !== null && { since }),
+  });
+  const rows = useMemo(() => [...(data ?? [])].sort((a, b) => b.sentAt - a.sentAt), [data]);
+  const selected = selectedMail(rows, selectedId, lastSelected.current);
+  useEffect(() => {
+    if (selected) lastSelected.current = selected;
+  }, [selected]);
+  const open = (m: MailMessageDto) => {
+    lastSelected.current = m;
+    setSelectedId(m.id);
+    setSheetOpen(true);
+  };
+  // Para onde vai o foco quando a conversa fecha depois de ligar um e-mail sob "Sem vaga": a linha que toma o lugar dele
+  // (id) ou o filtro (null). `undefined`: o de sempre, de volta à linha que abriu a conversa.
+  const sectionRef = useRef<HTMLElement>(null);
+  const focusOnClose = useRef<number | null | undefined>(undefined);
+  const linked = (mailId: number) => {
+    showToast(MAIL_LINKED_TOAST, 'info');
+    const next = afterMailLinked(rows.map((m) => m.id), mailId, unmatched);
+    if (!next.close) return;
+    focusOnClose.current = next.focusRowId;
+    setSheetOpen(false);
+  };
+  const closeFocus = (e: Event) => {
+    const target = focusOnClose.current;
+    focusOnClose.current = undefined;
+    if (target === undefined) return;
+    e.preventDefault();
+    const section = sectionRef.current;
+    const row = target === null ? null : section?.querySelector<HTMLElement>(`[data-testid="painel-mail-row-${target}"]`);
+    (row ?? section?.querySelector<HTMLElement>('[data-testid="painel-mail-filter-unmatched"]'))?.focus();
+  };
+  const capped = data ? mailListNotice(data.length) : null;
+
+  return (
+    <motion.section
+      ref={sectionRef} data-testid="painel-mail-list" aria-labelledby={titleId}
+      initial={reduced ? false : { opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={spring}
+      className={cn(CARD, 'min-w-0 p-5 sm:p-6')}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
+        <h3 id={titleId} className="text-[15px] font-semibold leading-tight text-ink">Mensagens do período</h3>
+        <CheckChip label="Sem vaga" checked={unmatched} onCheckedChange={setUnmatched} testId="painel-mail-filter-unmatched" />
+      </div>
+      <div data-testid="painel-mail-filter-kind" className="mt-4 max-w-full">
+        <span id={kindLabelId} className="sr-only">Tipo</span>
+        <Segmented
+          aria-labelledby={kindLabelId} value={kind} onValueChange={setKind} options={KIND_OPTIONS}
+          className="flex flex-wrap [&>button]:whitespace-nowrap [&>button]:px-3"
+        />
+      </div>
+
+      <div
+        className={cn('mt-5 transition-opacity duration-200 ease-out-soft', isPlaceholderData && 'pointer-events-none opacity-45')}
+        aria-busy={isFetching || undefined}
+      >
+        {isError ? (
+          <Notice
+            tone="bad" role="alert" title="Não foi possível carregar os e-mails"
+            action={<Button size="sm" disabled={isFetching} onClick={() => void refetch()}><RotateCw aria-hidden /> Tentar de novo</Button>}
+          >
+            <p>{error.message}</p>
+          </Notice>
+        ) : !data ? <Loading /> : rows.length === 0 ? (
+          <p data-testid="painel-mail-empty" className="flex items-center gap-2 text-[13px] leading-relaxed text-muted">
+            <Inbox aria-hidden className="size-4 shrink-0" /> Nenhum e-mail de vaga neste período.
+          </p>
+        ) : narrow ? <MailCards rows={rows} onOpen={open} /> : <MailTable rows={rows} onOpen={open} />}
+        {!isError && capped && <p data-testid="painel-mail-capped" className="mt-3 text-xs text-muted">{capped}</p>}
+      </div>
+
+      <MailSheet
+        mail={selected} open={sheetOpen} onClose={() => setSheetOpen(false)}
+        onOpenJob={(id) => { setSheetOpen(false); onOpenJob(id); }}
+        onLinked={linked} onCloseAutoFocus={closeFocus}
+      />
+    </motion.section>
+  );
+}

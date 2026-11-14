@@ -1,11 +1,13 @@
 import { useQuery } from '@tanstack/react-query';
-import { Activity, CircleAlert, CircleCheck, Columns3, Send, Settings, SlidersHorizontal, TriangleAlert, UserRound } from 'lucide-react';
+import { Activity, ChartColumn, CircleAlert, CircleCheck, Columns3, Send, Settings, SlidersHorizontal, TriangleAlert, UserRound } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Suspense, lazy, useCallback, useEffect, useState } from 'react';
-import type { ApplicationFilter } from '@kv/shared/client';
+import type { ApplicationFilter, DashboardPeriod } from '@kv/shared/client';
 import { api } from './api';
+import { AlertBell } from './components/AlertBell';
 import { Board } from './components/Board';
 import { Tooltip } from './components/ui/tooltip';
+import { FIRST_READ_PERIOD } from './lib/dashboard';
 import { useMediaQuery } from './lib/hooks';
 import { spring, springSnap } from './lib/motion';
 import { cn } from './lib/utils';
@@ -22,24 +24,33 @@ const HealthPanel = lazy(() => import('./components/HealthPanel').then((m) => ({
 const MyProfilePage = lazy(() => import('./components/MyProfilePage').then((m) => ({ default: m.MyProfilePage })));
 const SettingsPage = lazy(() => import('./components/SettingsPage').then((m) => ({ default: m.SettingsPage })));
 const ApplicationsPage = lazy(() => import('./components/ApplicationsPage').then((m) => ({ default: m.ApplicationsPage })));
+const PainelPage = lazy(() => import('./components/PainelPage'));
 
-type View = 'quadro' | 'candidaturas' | 'perfis' | 'fontes' | 'perfil' | 'config';
+type View = 'quadro' | 'candidaturas' | 'painel' | 'perfis' | 'fontes' | 'perfil' | 'config';
 const VIEWS: { id: View; label: string; icon: typeof Columns3 }[] = [
   { id: 'quadro', label: 'Quadro', icon: Columns3 },
   { id: 'candidaturas', label: 'Candidaturas', icon: Send },
+  { id: 'painel', label: 'Painel', icon: ChartColumn },
   { id: 'perfis', label: 'Perfis de busca', icon: SlidersHorizontal },
   { id: 'fontes', label: 'Saúde das fontes', icon: Activity },
   { id: 'perfil', label: 'Meu perfil', icon: UserRound },
   { id: 'config', label: 'Configurações', icon: Settings },
 ];
 /**
- * Abaixo desta largura as seis seções não cabem com o rótulo inteiro: as não ativas mostram só o ícone. O
+ * Abaixo desta largura as sete seções (e o sino) não cabem com o rótulo inteiro: as não ativas mostram só o ícone. O
  * rótulo continua no botão (escondido só da vista), então o nome acessível não muda, e aparece na dica.
- * O mesmo limite está nas classes `max-[1151px]:` dos botões abaixo.
+ * O mesmo limite está nas classes `max-[1240px]:` dos botões abaixo (no Tailwind 4 elas valem para `width < 1240px`).
+ * Medido com o sino: os rótulos inteiros pedem cerca de 1190 px; 1240 deixa folga (em 1366 cabem com 200 px de sobra).
  */
-const COMPACT_NAV = '(max-width: 1151px)';
+const COMPACT_NAV = '(width < 1240px)';
 /** De quanto em quanto tempo o aviso do worker é recalculado numa aba parada. */
 const STALE_CHECK_MS = 60_000;
+/** O bloco "Respostas para candidaturas" de Meu perfil, aberto por um alerta de dado que falta. */
+const ANSWERS_SECTION = '[data-testid="apply-answers-section"]';
+/** A lista "Mensagens do período" do Painel, aberta pelo alerta de resumo da primeira leitura. */
+const MAIL_LIST_SECTION = '[data-testid="painel-mail-list"]';
+/** Por quanto tempo esperar o bloco aparecer (a página é baixada à parte) antes de desistir de rolar até ele. */
+const ANSWERS_WAIT_MS = 3_000;
 
 export function App() {
   const [view, setView] = useState<View>('quadro');
@@ -48,6 +59,39 @@ export function App() {
   const bottomBar = useBottomBarHeight();
   const compactNav = useMediaQuery(COMPACT_NAV);
   const openSettings = useCallback(() => setView('config'), []);
+  // "Abrir Respostas para candidaturas" (alerta de dado que falta): vai a Meu perfil e rola até o bloco quando ele aparece.
+  // "Abrir a lista" (alerta de resumo da primeira leitura): vai ao Painel e rola até a lista de e-mails, do mesmo jeito.
+  const [scrollTarget, setScrollTarget] = useState<{ view: View; selector: string } | null>(null);
+  const openAnswers = useCallback(() => {
+    setScrollTarget({ view: 'perfil', selector: ANSWERS_SECTION });
+    setView('perfil');
+  }, []);
+  // O Painel abre no período pedido pela navegação, como a aba Candidaturas abre no filtro pedido: o resumo conta os
+  // e-mails dos últimos 30 dias, então "Abrir a lista" abre a lista nesse período. `at` remonta o Painel se ele já está aberto.
+  const [painelRequest, setPainelRequest] = useState<{ period: DashboardPeriod; at: number } | undefined>(undefined);
+  const openPainel = useCallback(() => {
+    setPainelRequest({ period: FIRST_READ_PERIOD, at: Date.now() });
+    setScrollTarget({ view: 'painel', selector: MAIL_LIST_SECTION });
+    setView('painel');
+  }, []);
+  useEffect(() => {
+    if (!scrollTarget || view !== scrollTarget.view) return;
+    const until = Date.now() + ANSWERS_WAIT_MS;
+    let frame = 0;
+    const look = () => {
+      const el = document.querySelector<HTMLElement>(scrollTarget.selector);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        setScrollTarget(null);
+      } else if (Date.now() < until) {
+        frame = requestAnimationFrame(look);
+      } else {
+        setScrollTarget(null);
+      }
+    };
+    frame = requestAnimationFrame(look);
+    return () => cancelAnimationFrame(frame);
+  }, [scrollTarget, view]);
   // A aba Candidaturas abre no filtro pedido (o contador do quadro pede "Precisam de você"); pela navegação, no padrão dela.
   const [applicationsFilter, setApplicationsFilter] = useState<ApplicationFilter | undefined>(undefined);
   const showNeedsHuman = useCallback(() => {
@@ -99,12 +143,13 @@ export function App() {
                   key={v.id}
                   onClick={() => {
                     setApplicationsFilter(undefined);
+                    setPainelRequest(undefined);
                     setView(v.id);
                   }}
                   aria-current={active ? 'page' : undefined}
                   className={cn(
                     'relative flex h-8 cursor-pointer items-center gap-1.5 rounded-full px-3.5 text-[13px] font-medium transition-colors duration-150 active:scale-[0.97]',
-                    active ? 'text-ink' : 'text-muted hover:text-ink max-[1151px]:px-2.5',
+                    active ? 'text-ink' : 'text-muted hover:text-ink max-[1240px]:px-2.5',
                   )}
                 >
                   {active && (
@@ -114,8 +159,8 @@ export function App() {
                       className="absolute inset-0 rounded-full bg-accent/18 shadow-[inset_0_1px_0_rgb(255_255_255/0.08)] ring-1 ring-inset ring-accent/35"
                     />
                   )}
-                  <v.icon aria-hidden className={cn('relative transition-colors', active ? 'size-3.5 text-accent' : 'size-3.5 text-faint max-[1151px]:size-4')} />
-                  <span className={cn('relative whitespace-nowrap', !active && 'max-[1151px]:sr-only')}>{v.label}</span>
+                  <v.icon aria-hidden className={cn('relative transition-colors', active ? 'size-3.5 text-accent' : 'size-3.5 text-faint max-[1240px]:size-4')} />
+                  <span className={cn('relative whitespace-nowrap', !active && 'max-[1240px]:sr-only')}>{v.label}</span>
                   {v.id === 'candidaturas' && applyWaiting && (
                     <span data-testid="nav-applications-waiting" className="absolute right-1 top-1 flex size-2">
                       <span aria-hidden className="absolute inset-0 animate-pulse-dot rounded-full bg-warn" />
@@ -128,6 +173,9 @@ export function App() {
               return compactNav && !active ? <Tooltip key={v.id} label={v.label}>{button}</Tooltip> : button;
             })}
           </nav>
+          <div className="ml-auto flex shrink-0 items-center">
+            <AlertBell onOpenJob={setOpenJob} onOpenSettings={openSettings} onOpenAnswers={openAnswers} onOpenPainel={openPainel} />
+          </div>
         </div>
       </header>
 
@@ -161,6 +209,9 @@ export function App() {
           {view === 'quadro' && <Board onOpen={setOpenJob} onShowNeedsHuman={showNeedsHuman} />}
           <Suspense fallback={null}>
             {view === 'candidaturas' && <ApplicationsPage initialFilter={applicationsFilter} onOpenJob={setOpenJob} />}
+            {view === 'painel' && (
+              <PainelPage key={painelRequest?.at ?? 'nav'} initialPeriod={painelRequest?.period} onOpenJob={setOpenJob} />
+            )}
             {view === 'perfis' && <ProfilesPage onRunQueued={catchUp} />}
             {view === 'fontes' && <HealthPanel />}
             {view === 'perfil' && <MyProfilePage onOpenSettings={openSettings} />}

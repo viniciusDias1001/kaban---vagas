@@ -50,6 +50,47 @@ function scripted(reply: () => unknown) {
 }
 
 describe('GET /settings and PATCH /settings', () => {
+  it('off a local host, refuses a patch with an e-mail or phone setting and still saves the others', async () => {
+    build({ APP_SECRET: TEST_SECRET });
+    vi.stubEnv('HOST', '0.0.0.0');
+    try {
+      for (const body of [{ emailFactsMode: 'auto' }, { emailEnabled: true }, { phoneAlertChannel: 'telegram' }, { telegramChatId: '7' }, { applyMinScore: 80, emailAiDrafts: false }]) {
+        const res = await patch(body);
+        expect(res.statusCode, JSON.stringify(body)).toBe(409);
+        expect(res.json()).toMatchObject({ error: 'email_unavailable' });
+      }
+      expect((await get()).email.factsMode).toEqual({ value: 'auto', source: 'default' });
+      expect((await patch({ applyMinScore: 80 })).statusCode).toBe(200);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('shows and saves the e-mail settings', async () => {
+    build({ APP_SECRET: TEST_SECRET });
+    expect((await get()).email).toEqual({
+      enabled: { value: true, source: 'default' }, moveMode: { value: 'auto', source: 'default' },
+      factsMode: { value: 'auto', source: 'default' }, aiDrafts: { value: true, source: 'default' },
+      phoneAlertChannel: { value: 'off', source: 'default' }, telegramChatId: { value: null, source: 'default' },
+    });
+    const res = await patch({ emailMoveMode: 'confirm' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().email.moveMode).toEqual({ value: 'confirm', source: 'ui' });
+    expect((await patch({ emailMoveMode: 'x' })).statusCode).toBe(400);
+  });
+
+  it('saves the phone alert channel and chat, and refuses anything else', async () => {
+    build({ APP_SECRET: TEST_SECRET });
+    const res = await patch({ phoneAlertChannel: 'telegram', telegramChatId: '42' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().email).toMatchObject({
+      phoneAlertChannel: { value: 'telegram', source: 'ui' }, telegramChatId: { value: '42', source: 'ui' },
+    });
+    expect((await patch({ phoneAlertChannel: 'sms' })).statusCode).toBe(400);
+    expect((await patch({ telegramChatId: '+55 11 99999-0000' })).statusCode).toBe(400);
+    expect((await patch({ telegramChatId: '1'.repeat(33) })).statusCode).toBe(400);
+  });
+
   it('shows every setting with its origin, under / and /api', async () => {
     build({ APP_SECRET: TEST_SECRET, AI_PROVIDER: 'openai', GREENHOUSE_BOARDS: 'acme' });
     const dto = await get();

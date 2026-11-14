@@ -193,26 +193,53 @@ describe('one application', () => {
     expect((await applicationForJob(db, jobId))!.shots).toEqual({ filled: 'shots/1/filled.jpg', confirmation: 'shots/1/confirmation.jpg' });
   });
 
-  it('skips a job the gate scores below the minimum and leaves the card where it is', async () => {
+  it('skips a job the gate scores below the minimum and sets the card aside in Descartada', async () => {
     overrides.apply_gate = () => ({ score: 69, reason: 'fraca', eligible: true, ineligibleReason: '' });
     const { id: jobId } = await candidate();
     await runUntilIdle(queue({ mode: 'real' }));
     expect(await applicationForJob(db, jobId)).toMatchObject({ status: 'skipped', reason: 'below_min_score', gateScore: 69 });
-    expect(await jobRow(jobId)).toMatchObject({ column: 'descobertas', appliedBy: null });
+    expect(await jobRow(jobId)).toMatchObject({ column: 'descartada', appliedBy: null });
+    expect(await lastEvent(jobId)).toMatchObject({ fromColumn: 'descobertas', toColumn: 'descartada', actor: 'ia' });
     expect(site.calls).toEqual([]);
   });
 
-  it('skips a job the gate finds not eligible', async () => {
+  it('skips a job the gate finds not eligible and sets the card aside in Descartada', async () => {
     overrides.apply_gate = () => ({ score: 90, reason: 'boa', eligible: false, ineligibleReason: 'exige cidadania' });
     const { id: jobId } = await candidate();
     await runUntilIdle(queue({ mode: 'real' }));
     expect(await applicationForJob(db, jobId)).toMatchObject({ status: 'skipped', reason: 'not_eligible', detail: 'exige cidadania' });
+    expect(await jobRow(jobId)).toMatchObject({ column: 'descartada' });
+    expect(await lastEvent(jobId)).toMatchObject({ toColumn: 'descartada', actor: 'ia' });
+  });
+
+  it('sets aside a job whose page says it is closed, but not one that sends to an outside site', async () => {
+    site.variants.closed = { open: async () => ({ kind: 'unavailable', reason: 'closed' }) };
+    site.variants.external = { open: async () => ({ kind: 'unavailable', reason: 'external' }) };
+    const { id: closed } = await candidate({ variant: 'closed' });
+    const { id: external } = await candidate({ variant: 'external' });
+    await runUntilIdle(queue({ mode: 'real' }));
+    expect(await applicationForJob(db, closed)).toMatchObject({ status: 'skipped', reason: 'closed' });
+    // A vaga passou pela conferência (Selecionadas) antes de o site dizer que fechou.
+    expect(await jobRow(closed)).toMatchObject({ column: 'descartada' });
+    expect(await lastEvent(closed)).toMatchObject({ fromColumn: 'selecionadas', toColumn: 'descartada', actor: 'ia' });
+    expect(await applicationForJob(db, external)).toMatchObject({ status: 'skipped', reason: 'external' });
+    expect((await jobRow(external)).column).not.toBe('descartada');
+  });
+
+  it('catches up on a job skipped before Descartada existed, on the next sweep', async () => {
+    const { id: jobId } = await candidate({ score: 40 });
+    const appId = (await createApplication(db, { jobId, site: 'fake', trigger: 'auto', mode: 'real' }, NOON - HOUR))!;
+    await db.update(applications).set({ status: 'skipped', reason: 'below_min_score' }).where(eq(applications.id, appId));
+    await runUntilIdle(queue({ mode: 'real' }));
+    expect(await jobRow(jobId)).toMatchObject({ column: 'descartada' });
+    expect(await lastEvent(jobId)).toMatchObject({ fromColumn: 'descobertas', toColumn: 'descartada', actor: 'ia' });
   });
 
   it('skips a blocked company without calling the model', async () => {
     const { id: jobId } = await candidate({ company: 'Acme Ltda' });
     await runUntilIdle(queue({ mode: 'real', cfg: { blockedCompanies: ['Acme'] } }));
     expect(await applicationForJob(db, jobId)).toMatchObject({ status: 'skipped', reason: 'blocked', detail: 'Acme' });
+    expect(await jobRow(jobId)).toMatchObject({ column: 'descobertas' });
     expect(tasks).toEqual([]);
   });
 

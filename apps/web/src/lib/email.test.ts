@@ -1,0 +1,207 @@
+import { describe, expect, it } from 'vitest';
+import { ALERT_KINDS, type AlertDto, type MailMessageDto } from '@kv/shared/client';
+import {
+  MAIL_LINKED_TOAST, MAIL_LIST_MAX, afterMailLinked, alertAction, alertBody, alertCanLink, alertTitle, alertsToNotify, draftGate, mailActions, mailBadgeLabel, mailListNotice,
+  mailPasswordProblem, replyStateLabel, selectedMail, summaryLine,
+} from './email';
+
+const alert = (over: Partial<AlertDto> = {}): AlertDto => ({
+  id: 1, kind: 'interview', jobId: 5, company: 'Acme', jobTitle: 'Dev', messageId: 9, replyId: null, subject: 'Olá', summary: null,
+  payload: {}, createdAt: 0, ...over,
+});
+
+const message = (over: Partial<MailMessageDto> = {}): MailMessageDto => ({
+  id: 1, messageId: 'm1@example.com', threadKey: 't', direction: 'in', fromAddress: 'rh@example.com', fromName: 'RH', toAddress: 'maria@example.com', subject: 'Olá',
+  sentAt: 0, body: '', kind: null, summary: null, lang: null, requests: [], jobId: 5, company: 'Acme', jobTitle: 'Dev', linkedBy: 'auto',
+  corrected: false, backfill: false, movedTo: null, canUndoMove: false, replyState: null, replyOrigin: null, replyApprovedBy: null,
+  alerted: false, ...over,
+});
+
+describe('alertTitle / alertBody / alertAction', () => {
+  it('titles every alert kind', () => {
+    for (const kind of ALERT_KINDS) expect(alertTitle(alert({ kind }))).not.toBe('');
+  });
+
+  it('names the company, or the subject when there is no card', () => {
+    expect(alertTitle(alert({ kind: 'interview', company: 'Acme' }))).toBe('Convite de entrevista: Acme');
+    expect(alertTitle(alert({ kind: 'offer', company: null, subject: 'Proposta' }))).toBe('Oferta: Proposta');
+    expect(alertTitle(alert({ kind: 'unmatched', company: null, subject: 'Próximos passos' }))).toBe('E-mail sem vaga: Próximos passos');
+    expect(alertTitle(alert({ kind: 'budget_waiting', payload: { waiting: 3 } }))).toBe(
+      '3 e-mails de vaga esperando classificação (limite diário de IA atingido)',
+    );
+    expect(alertTitle(alert({ kind: 'move_confirm', payload: { moveTo: 'aplicada' } }))).toBe('Mover Acme para Aplicada?');
+    expect(alertTitle(alert({ kind: 'missing_fact', company: 'Globex' }))).toBe('Globex pediu algo que você não salvou');
+    expect(alertTitle(alert({ kind: 'draft', replyId: 3 }))).toBe('Rascunho esperando você: Acme');
+    expect(alertTitle(alert({ kind: 'mailbox_error' }))).toBe('A caixa de e-mail parou');
+    expect(alertTitle(alert({ kind: 'backfill_summary' }))).toBe('Primeira leitura da caixa');
+  });
+
+  it('writes the body of each kind', () => {
+    expect(alertBody(alert({ summary: 'Resumo', subject: 'Assunto' }))).toBe('Resumo');
+    expect(alertBody(alert({ summary: null, subject: 'Assunto' }))).toBe('Assunto');
+    expect(alertBody(alert({ summary: null, subject: null }))).toBe('');
+    expect(alertBody(alert({ kind: 'missing_fact', payload: { missing: ['phone', 'salary'] } }))).toBe('Falta: Telefone, Pretensão salarial');
+    expect(alertBody(alert({ kind: 'backfill_summary', payload: { counts: { reprovacao: 2 }, total: 4 } }))).toBe('Li 4 e-mails de vagas: 2 reprovações.');
+    expect(alertBody(alert({ kind: 'backfill_summary' }))).toBe('Li 0 e-mails de vagas.');
+    expect(alertBody(alert({ kind: 'mailbox_error' }))).toBe('Abra Configurações > E-mail para reconectar.');
+    expect(alertBody(alert({ kind: 'mailbox_error', payload: { reason: 'Senha recusada.' } }))).toBe('Senha recusada.');
+  });
+
+  it('does not promise a draft when there is no reply, and says why on a second line', () => {
+    const noReply = 'Este e-mail não aceita resposta.';
+    expect(alertTitle(alert({ kind: 'draft', replyId: null }))).toBe('Acme pediu uma resposta sua');
+    expect(alertTitle(alert({ kind: 'draft', replyId: 7 }))).toBe('Rascunho esperando você: Acme');
+    expect(alertBody(alert({ kind: 'draft', replyId: null, summary: 'Pede o telefone', payload: { reason: noReply } })))
+      .toBe(`Pede o telefone\n${noReply}`);
+    expect(alertBody(alert({ kind: 'interview', summary: 'Entrevista na terça', payload: { reason: 'Sem rascunho da IA. Responda você mesmo.' } })))
+      .toBe('Entrevista na terça\nSem rascunho da IA. Responda você mesmo.');
+    expect(alertBody(alert({ kind: 'missing_fact', payload: { missing: ['phone'], reason: noReply } }))).toBe(`Falta: Telefone\n${noReply}`);
+    // Sem resumo e sem assunto, só o motivo; motivo em branco não acrescenta linha.
+    expect(alertBody(alert({ kind: 'draft', summary: null, subject: null, payload: { reason: noReply } }))).toBe(noReply);
+    expect(alertBody(alert({ kind: 'draft', summary: 'Pede o telefone', payload: { reason: '  ' } }))).toBe('Pede o telefone');
+    // Os outros tipos não ganham a linha.
+    expect(alertBody(alert({ kind: 'offer', summary: 'Proposta', payload: { reason: noReply } }))).toBe('Proposta');
+  });
+
+  it('offers to link any alert about a mail that has no card', () => {
+    expect(alertCanLink(alert({ kind: 'unmatched', jobId: null, messageId: 9 }))).toBe(true);
+    // Convite ou oferta de um e-mail sem card: o sino deixa ligá-lo a uma vaga.
+    expect(alertCanLink(alert({ kind: 'interview', jobId: null, messageId: 9 }))).toBe(true);
+    expect(alertCanLink(alert({ kind: 'offer', jobId: null, messageId: 9 }))).toBe(true);
+    expect(alertCanLink(alert({ kind: 'interview', jobId: 5, messageId: 9 }))).toBe(false);
+    expect(alertCanLink(alert({ kind: 'backfill_summary', jobId: null, messageId: null }))).toBe(false);
+  });
+
+  it('never ends a title in a bare colon, and names an unknown fact by its key', () => {
+    expect(alertTitle(alert({ kind: 'interview', company: null, subject: null }))).toBe('Convite de entrevista: (sem assunto)');
+    expect(alertTitle(alert({ kind: 'offer', company: ' ', subject: '  ' }))).toBe('Oferta: (sem assunto)');
+    expect(alertTitle(alert({ kind: 'unmatched', company: null, subject: null }))).toBe('E-mail sem vaga: (sem assunto)');
+    expect(alertBody(alert({ kind: 'missing_fact', payload: { missing: ['phone', 'shoe_size' as never] } }))).toBe('Falta: Telefone, shoe_size');
+  });
+
+  it('maps each kind to its action', () => {
+    expect(ALERT_KINDS.map((k) => alertAction(k))).toEqual([
+      'review_draft', 'open_job', 'answer_fact', 'review_draft', 'confirm_move', 'link', 'open_settings', 'open_list', 'classify_anyway',
+    ]);
+  });
+});
+
+describe('summaryLine', () => {
+  it('writes the first-read summary', () => {
+    expect(summaryLine({ reprovacao: 5, entrevista: 2, oferta: 1, recebimento: 6 }, 14)).toBe('Li 14 e-mails de vagas: 5 reprovações, 2 convites, 1 oferta.');
+    expect(summaryLine({ reprovacao: 1 }, 1)).toBe('Li 1 e-mail de vaga: 1 reprovação.');
+    expect(summaryLine({ pedido: 2, oferta: 2, entrevista: 1 }, 5)).toBe('Li 5 e-mails de vagas: 1 convite, 2 ofertas, 2 pedidos.');
+  });
+
+  it('ends after the total when there is nothing to list', () => {
+    expect(summaryLine({ recebimento: 3 }, 3)).toBe('Li 3 e-mails de vagas.');
+    expect(summaryLine({}, 0)).toBe('Li 0 e-mails de vagas.');
+  });
+});
+
+describe('alertsToNotify', () => {
+  it('notifies each interview or offer once', () => {
+    const list = [alert({ id: 1, kind: 'interview' }), alert({ id: 2, kind: 'draft' }), alert({ id: 3, kind: 'offer' })];
+    expect(alertsToNotify(list, new Set(['alert-1'])).map((a) => a.id)).toEqual([3]);
+    expect(alertsToNotify(list, new Set()).map((a) => a.id)).toEqual([1, 3]);
+  });
+});
+
+describe('labels', () => {
+  it('labels each reply state and badge', () => {
+    expect(replyStateLabel('aprovada')).toBe('Aprovada, na fila de envio');
+    expect(replyStateLabel('falhou')).toBe('O envio falhou');
+    expect(replyStateLabel('rascunho')).toBe('Rascunho');
+    expect(replyStateLabel('enviando')).toBe('Enviando');
+    expect(replyStateLabel('enviada')).toBe('Enviada');
+    expect(replyStateLabel('descartada')).toBe('Descartada');
+    expect(mailBadgeLabel('entrevista')).toBe('entrevista');
+    expect(mailBadgeLabel('oferta')).toBe('oferta');
+    expect(mailBadgeLabel('pedido')).toBe('pediu informação');
+  });
+});
+
+describe('mailPasswordProblem', () => {
+  it('checks an app password the way the server does', () => {
+    expect(mailPasswordProblem('abcd efgh ijkl mnop')).toBeNull();
+    expect(mailPasswordProblem('a b c')).not.toBeNull();
+    expect(mailPasswordProblem('   ')).not.toBeNull();
+    expect(mailPasswordProblem('a'.repeat(65))).not.toBeNull();
+    expect(mailPasswordProblem('a'.repeat(64))).toBeNull();
+    expect(mailPasswordProblem('abcdefgé12345')).not.toBeNull();
+  });
+});
+
+describe('mailActions', () => {
+  it('says what the app did with a mail', () => {
+    expect(mailActions(message({ movedTo: 'perdida' }))).toEqual(['moveu o card para Perdida']);
+    expect(mailActions(message({ replyState: 'enviada', replyApprovedBy: 'auto' }))).toEqual(['respondeu sozinho']);
+    expect(mailActions(message({ replyState: 'enviada', replyApprovedBy: 'owner' }))).toEqual(['respondeu com o seu OK']);
+    expect(mailActions(message({ movedTo: 'entrevista', replyState: 'rascunho', alerted: true }))).toEqual(['moveu o card para Entrevista', 'rascunho esperando você']);
+    expect(mailActions(message({ replyState: 'descartada' }))).toEqual(['resposta descartada']);
+    expect(mailActions(message({ replyState: 'falhou' }))).toEqual(['envio falhou']);
+    expect(mailActions(message({ alerted: true }))).toEqual(['alertou você']);
+    expect(mailActions(message({ corrected: true }))).toEqual(['classificação corrigida']);
+    expect(mailActions(message({}))).toEqual([]);
+  });
+});
+
+describe('draftGate', () => {
+  it('allows approving only the stored text, without a gap', () => {
+    expect(draftGate('Olá, tudo bem?', 'Olá, tudo bem?')).toEqual({ gap: false, unsaved: false, empty: false, canApprove: true, hint: null });
+  });
+
+  it('blocks a gap in the text and says how to fix it', () => {
+    const gate = draftGate('Posso às [[horário]].', 'Posso às [[horário]].');
+    expect(gate).toMatchObject({ gap: true, unsaved: false, canApprove: false });
+    expect(gate.hint).toBe('Preencha os trechos entre colchetes duplos.');
+  });
+
+  it('blocks unsaved edits, even when the edited text has no gap', () => {
+    const gate = draftGate('Posso às [[horário]].', 'Posso às 10h.');
+    expect(gate).toMatchObject({ gap: false, unsaved: true, canApprove: false });
+    expect(gate.hint).toBe('Salve a edição antes de enviar.');
+  });
+
+  it('judges the text in the box: a gap typed into a saved text blocks too', () => {
+    expect(draftGate('Posso às 10h.', 'Posso às [[x]].')).toMatchObject({ gap: true, unsaved: true, canApprove: false });
+  });
+
+  it('blocks an empty text', () => {
+    const gate = draftGate('', '  ');
+    expect(gate).toMatchObject({ empty: true, canApprove: false });
+    expect(gate.hint).toBe('Escreva o texto da resposta.');
+  });
+
+  it('compares exactly: a trailing space is an unsaved edit', () => {
+    expect(draftGate('Olá', 'Olá ').canApprove).toBe(false);
+  });
+});
+
+describe('the Painel mail list', () => {
+  it('says the list was cut only when exactly the API maximum came back', () => {
+    expect(MAIL_LIST_MAX).toBe(500);
+    expect(mailListNotice(500)).toBe('Mostrando os 500 mais recentes.');
+    expect(mailListNotice(499)).toBeNull();
+    expect(mailListNotice(0)).toBeNull();
+  });
+
+  it('reads the open mail from the current rows, and keeps the last one seen when it left the list', () => {
+    const before = message({ id: 7, jobId: null, company: null });
+    const after = message({ id: 7, jobId: 5, company: 'Acme' });
+    expect(selectedMail([message({ id: 1 }), after], 7, before)).toBe(after);
+    expect(selectedMail([message({ id: 1 })], 7, before)).toBe(before);
+    expect(selectedMail([after], null, before)).toBeNull();
+  });
+
+  it('closes the conversation after a link under "Sem vaga" and focuses the row that takes its place', () => {
+    // A linha ligada sai da lista: o foco vai para a seguinte, ou para a anterior se era a última.
+    expect(afterMailLinked([3, 7, 9], 7, true)).toEqual({ close: true, focusRowId: 9 });
+    expect(afterMailLinked([3, 7, 9], 9, true)).toEqual({ close: true, focusRowId: 7 });
+    // A lista ficou vazia: o foco vai para o filtro (null).
+    expect(afterMailLinked([7], 7, true)).toEqual({ close: true, focusRowId: null });
+    // Sem o filtro o e-mail continua na lista: a conversa fica aberta, já mostrando a vaga.
+    expect(afterMailLinked([3, 7, 9], 7, false)).toEqual({ close: false });
+    expect(MAIL_LINKED_TOAST).toBe('E-mail ligado à vaga.');
+  });
+});

@@ -12,6 +12,7 @@ import { AI_KEYS, useSaveSettings, useSettings } from '../useAi';
 import { isWorkerStale } from '../workerStale';
 import { CARD, ERROR, HINT, LABEL, SectionHeader, SettingsAiSection, SourceTag, type SettingsFieldIds } from './SettingsAiSection';
 import { SettingsApplySection } from './SettingsApplySection';
+import { SettingsEmailSection } from './SettingsEmailSection';
 import { Button } from './ui/button';
 import { Skeleton } from './ui/skeleton';
 import { TagInput } from './ui/tag-input';
@@ -238,6 +239,7 @@ function SettingsLoaded({ dto }: { dto: SettingsDto }) {
         <motion.div initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ ...spring, delay: 0.04 }} className="space-y-6">
           <SettingsAiSection dto={dto} form={form} errors={errors} showErrors={showErrors} dirty={dirty} ids={ids} onChange={change} />
           <SettingsApplySection dto={dto} form={form} errors={errors} showErrors={showErrors} dirty={dirty} ids={ids} onChange={change} />
+          <SettingsEmailSection dto={dto} form={form} onChange={change} />
 
           <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_25rem]">
             <section data-testid="settings-sources" aria-labelledby={sourcesTitle} className={cn(CARD, '@container min-w-0')}>

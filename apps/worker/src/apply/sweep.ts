@@ -3,6 +3,7 @@ import { dayStartMs } from '@kv/ai';
 import { capsLeft, siteFor, type ApplySite } from '@kv/apply';
 import { applications, applyCandidates, applyCountsSince, createApplication, type Db } from '@kv/db';
 import { APPLY_DEFAULTS, type ApplyConfig, type ApplySiteId } from '@kv/shared';
+import { discardSkippedCards } from './board';
 import { DAY_MS, nextMidnight } from './day';
 
 /** Candidatas lidas por varredura: bem mais do que cabe num dia (o total diário vai até 200 nas configurações). */
@@ -30,9 +31,11 @@ async function pendingForms(db: Db, dayStart: number, tomorrow: number): Promise
 /**
  * Cria candidaturas `queued` (gatilho `auto`, modo do site) para as vagas de `applyCandidates` que têm site e cabem nos
  * limites de hoje (por site, total e, no LinkedIn, vagas abertas), descontando o que já está na fila. Nota mais alta
- * primeiro. Devolve quantas criou.
+ * primeiro. Antes, põe em Descartada os cards de Descobertas pulados antes de essa coluna existir (`discardSkippedCards`).
+ * Devolve quantas candidaturas criou.
  */
 export async function sweepCandidates(db: Db, cfg: ApplyConfig, sites: ApplySite[], now: number): Promise<number> {
+  await discardSkippedCards(db, now);
   if (sites.length === 0) return 0;
   const dayStart = dayStartMs(now, cfg.timeZone);
   const counts = await applyCountsSince(db, dayStart);

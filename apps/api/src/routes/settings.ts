@@ -3,7 +3,7 @@ import { AiError, estimateCostUsd, testConnection } from '@kv/ai';
 import { recordUsage, resumeProviderWaits, type Db } from '@kv/db';
 import { EnvKeyError, SecretMissingError, SettingsValidationError } from '@kv/settings';
 import {
-  AI_PROVIDER_LABELS, AiProviderIdSchema, ApiKeyInputSchema, SettingsPatchSchema, type AiProviderId, type SettingsDto,
+  AI_PROVIDER_LABELS, AiProviderIdSchema, ApiKeyInputSchema, SettingsPatchSchema, emailAvailability, type AiProviderId, type SettingsDto,
   type TestConnectionDto, type TestConnectionOutcome,
 } from '@kv/shared';
 import { notConfigured, type AiContext } from '../ai-context';
@@ -43,6 +43,8 @@ const OUTCOME_MESSAGES: Record<TestConnectionOutcome, (label: string, model: str
 
 /** Campos de PATCH /settings que mudam qual provedor ou modelo atende as chamadas. */
 const PROVIDER_FIELDS = ['provider', 'modelFast', 'modelStrong'] as const;
+/** Campos de PATCH /settings do e-mail e do aviso no celular. */
+const EMAIL_FIELDS = /^(email[A-Z]\w*|phoneAlertChannel|telegramChatId)$/;
 
 export function settingsRoutes(app: FastifyInstance, db: Db, ctx: AiContext) {
   const dto = (): Promise<SettingsDto> => ctx.settings.dto(nextRunAt(ctx.now()));
@@ -52,6 +54,11 @@ export function settingsRoutes(app: FastifyInstance, db: Db, ctx: AiContext) {
 
   app.patch('/settings', async (req, reply) => {
     const patch = SettingsPatchSchema.parse(req.body);
+    // As configurações do e-mail e do aviso no celular só mudam com host local, como as rotas do e-mail.
+    if (Object.keys(patch).some((key) => EMAIL_FIELDS.test(key))) {
+      const { available, reason } = emailAvailability(process.env);
+      if (!available) return reply.code(409).send({ error: 'email_unavailable', message: reason });
+    }
     try {
       await ctx.settings.update(patch);
     } catch (e) {

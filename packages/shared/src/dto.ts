@@ -1,8 +1,9 @@
 import type { ApplicationStatus } from './apply-constants';
 import type { Column, Level } from './constants';
+import type { EmailKind, JobMailMarks } from './email-constants';
 import type { ProfileInput } from './schemas';
 
-export type Actor = 'ia' | 'humano' | 'sistema';
+export type Actor = 'ia' | 'humano' | 'sistema' | 'email';
 
 export interface JobDto {
   id: number;
@@ -31,6 +32,8 @@ export interface JobDto {
   descriptionFetchedAt: number | null;
   /** O estado da candidatura automática da vaga; nulo sem candidatura. */
   applicationStatus: ApplicationStatus | null;
+  /** Marcas dos e-mails da vaga no card (`NO_MAIL_MARKS` quando não há e-mail). */
+  mail: JobMailMarks;
 }
 
 /** Item de `GET /jobs` (o quadro): a vaga sem a descrição, que só vem em `GET /jobs/:id`. */
@@ -43,6 +46,8 @@ export interface JobEventDto {
   toColumn: Column;
   actor: Actor;
   createdAt: number;
+  /** O e-mail que causou o movimento (autor `email`); null nos outros eventos ou se a mensagem foi apagada. */
+  mail: { kind: EmailKind | null; subject: string } | null;
 }
 
 export interface JobDetailDto {

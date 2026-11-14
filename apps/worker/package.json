@@ -12,6 +12,7 @@
     "@kv/apply": "workspace:*",
     "@kv/connectors": "workspace:*",
     "@kv/db": "workspace:*",
+    "@kv/mail": "workspace:*",
     "@kv/resume": "workspace:*",
     "@kv/settings": "workspace:*",
     "@kv/shared": "workspace:*",

@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { aiKeys, closeDb, settings, type Db } from '@kv/db';
+import { aiKeys, closeDb, secretRow, settings, type Db } from '@kv/db';
 import { createTestDb, resetTestDb } from '@kv/db/testing';
 import { SecretMissingError } from './secret-box';
 import { EnvKeyError, SettingsValidationError, createSettingsService } from './service';
@@ -36,6 +36,7 @@ describe('precedence: screen > environment > code default', () => {
       greenhouseBoards: { value: ['gitlab', 'stripe', 'cloudflare', 'figma'], source: 'default' },
       leverCompanies: { value: ['palantir', 'spotify'], source: 'default' },
       apply: expect.any(Object),
+      email: expect.any(Object),
       budgetTimeZone: 'America/Sao_Paulo',
     });
   });
@@ -320,5 +321,67 @@ describe('partial apply settings merge with what is stored', () => {
     expect((await svc.applyConfig()).dailyCaps).toEqual({ linkedin: 5, greenhouse: 20, lever: 15, fake: 15, total: 30, linkedinViews: 30 });
     await svc.update({ applyDailyCaps: null });
     expect((await svc.applyConfig()).dailyCaps).toEqual({ linkedin: 10, greenhouse: 15, lever: 15, fake: 15, total: 30, linkedinViews: 30 });
+  });
+});
+
+describe('named secrets', () => {
+  const PASSWORD = 'abcdefghijklmnop';
+
+  it('stores a secret encrypted and reads it back', async () => {
+    const settings = service({ APP_SECRET: SECRET });
+    await settings.saveSecret('mail_password', PASSWORD);
+    expect(Buffer.from((await secretRow(db, 'mail_password'))!.sealed).toString('utf8')).not.toContain(PASSWORD);
+    expect(await settings.readSecret('mail_password')).toEqual({ value: PASSWORD });
+    expect(await settings.hasSecret('mail_password')).toBe(true);
+    expect(await settings.hasSecret('telegram_bot_token')).toBe(false);
+    await settings.saveSecret('mail_password', 'zyxwvutsrqponmlk');
+    expect(await settings.readSecret('mail_password')).toEqual({ value: 'zyxwvutsrqponmlk' });
+    await settings.deleteSecret('mail_password');
+    expect(await settings.hasSecret('mail_password')).toBe(false);
+  });
+
+  it('explains why a secret cannot be read', async () => {
+    expect(await service({ APP_SECRET: SECRET }).readSecret('mail_password')).toMatchObject({ value: null, code: 'none' });
+    await service({ APP_SECRET: SECRET }).saveSecret('mail_password', PASSWORD);
+    const other = await service({ APP_SECRET: 'outro-segredo-de-teste-com-mais-de-32-caracteres' }).readSecret('mail_password');
+    expect(other).toMatchObject({ value: null, code: 'undecryptable' });
+    const none = await service({}).readSecret('mail_password');
+    expect(none).toMatchObject({ value: null, code: 'no_secret' });
+    expect(JSON.stringify([other, none])).not.toContain(PASSWORD);
+  });
+
+  it('refuses to save without APP_SECRET and writes nothing', async () => {
+    await expect(service({}).saveSecret('mail_password', PASSWORD)).rejects.toThrow(SecretMissingError);
+    expect(await secretRow(db, 'mail_password')).toBeNull();
+  });
+
+  it('does not put the secret in the settings view', async () => {
+    const s = service({ APP_SECRET: SECRET });
+    await s.saveSecret('mail_password', PASSWORD);
+    expect(JSON.stringify(await s.dto(0))).not.toContain(PASSWORD);
+  });
+});
+
+describe('e-mail settings', () => {
+  it('resolves the e-mail settings with their defaults', async () => {
+    const s = service();
+    expect(await s.emailConfig()).toEqual({ enabled: true, moveMode: 'auto', factsMode: 'auto', aiDrafts: true });
+    expect((await s.get()).email.moveMode).toEqual({ value: 'auto', source: 'default' });
+    await s.update({ emailMoveMode: 'confirm', emailFactsMode: 'off' });
+    expect(await s.emailConfig()).toMatchObject({ moveMode: 'confirm', factsMode: 'off' });
+    expect((await s.dto(0)).email.factsMode).toEqual({ value: 'off', source: 'ui' });
+    await s.update({ emailMoveMode: null, emailEnabled: false, emailAiDrafts: false });
+    expect(await s.emailConfig()).toEqual({ enabled: false, moveMode: 'auto', factsMode: 'off', aiDrafts: false });
+  });
+
+  it('keeps the phone alert off by default and reads back a numeric chat id as text', async () => {
+    const s = service();
+    expect(await s.phoneAlertConfig()).toEqual({ channel: 'off', chatId: null });
+    expect((await s.dto(0)).email.telegramChatId).toEqual({ value: null, source: 'default' });
+    await s.update({ phoneAlertChannel: 'telegram', telegramChatId: '-1001234567890' });
+    expect(await s.phoneAlertConfig()).toEqual({ channel: 'telegram', chatId: '-1001234567890' });
+    expect((await s.dto(0)).email.phoneAlertChannel).toEqual({ value: 'telegram', source: 'ui' });
+    await s.update({ telegramChatId: null });
+    expect(await s.phoneAlertConfig()).toEqual({ channel: 'telegram', chatId: null });
   });
 });

@@ -2,6 +2,9 @@ import { z } from 'zod';
 import { APPLY_AI_ANSWER_MODES, APPLY_SITE_IDS } from './apply-constants';
 import { hasNul } from './constants';
 import {
+  EMAIL_FACTS_MODES, EMAIL_MOVE_MODES, PHONE_ALERT_CHANNELS, PHONE_ALERT_LIMITS, TELEGRAM_CHAT_ID_PATTERN,
+} from './email-constants';
+import {
   AI_PROVIDER_IDS, APPLY_SETTINGS_LIMITS, API_KEY_PATTERN, COMPANY_SLUG_PATTERN, MODEL_ID_PATTERN, SETTINGS_LIMITS, type SettingKey,
   type SettingsPatch,
 } from './settings-constants';
@@ -68,6 +71,17 @@ export const SETTING_SCHEMAS = {
   applyAiAnswers: z.enum(APPLY_AI_ANSWER_MODES),
   applyBlockedCompanies: blockList,
   applyBlockedTerms: blockList,
+  emailEnabled: z.boolean(),
+  emailMoveMode: z.enum(EMAIL_MOVE_MODES),
+  emailFactsMode: z.enum(EMAIL_FACTS_MODES),
+  emailAiDrafts: z.boolean(),
+  phoneAlertChannel: z.enum(PHONE_ALERT_CHANNELS),
+  // O texto "42" gravado em jsonb volta do banco como o número 42: ele vira texto de novo. Um id de chat do Telegram tem no
+  // máximo 52 bits significativos, então a ida e volta pelo número não perde nada.
+  telegramChatId: z.preprocess(
+    (v) => (typeof v === 'number' && Number.isSafeInteger(v) ? String(v) : v),
+    z.string().trim().min(1).max(PHONE_ALERT_LIMITS.chatIdMax).regex(TELEGRAM_CHAT_ID_PATTERN, 'id de chat do Telegram inválido'),
+  ),
 } satisfies Record<SettingKey, z.ZodType>;
 
 /** PATCH /settings: todos os campos opcionais; `null` apaga o valor gravado; campo desconhecido é recusado. */
@@ -91,6 +105,12 @@ export const SettingsPatchSchema: z.ZodType<SettingsPatch> = z
     applyAiAnswers: SETTING_SCHEMAS.applyAiAnswers.nullable(),
     applyBlockedCompanies: SETTING_SCHEMAS.applyBlockedCompanies.nullable(),
     applyBlockedTerms: SETTING_SCHEMAS.applyBlockedTerms.nullable(),
+    emailEnabled: SETTING_SCHEMAS.emailEnabled.nullable(),
+    emailMoveMode: SETTING_SCHEMAS.emailMoveMode.nullable(),
+    emailFactsMode: SETTING_SCHEMAS.emailFactsMode.nullable(),
+    emailAiDrafts: SETTING_SCHEMAS.emailAiDrafts.nullable(),
+    phoneAlertChannel: SETTING_SCHEMAS.phoneAlertChannel.nullable(),
+    telegramChatId: SETTING_SCHEMAS.telegramChatId.nullable(),
   })
   .partial();
 

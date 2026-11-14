@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from 'node:crypto';
-import { AI_PROVIDER_IDS, APP_SECRET_COMMAND, APP_SECRET_MIN_LENGTH, type AiProviderId } from '@kv/shared';
+import { AI_PROVIDER_IDS, APP_SECRET_COMMAND, APP_SECRET_MIN_LENGTH, type AiProviderId, type SecretName } from '@kv/shared';
 
 /**
  * Cifra das chaves de API gravadas pela aba Configurações. Só `node:crypto`.
@@ -18,6 +18,8 @@ import { AI_PROVIDER_IDS, APP_SECRET_COMMAND, APP_SECRET_MIN_LENGTH, type AiProv
  *   leitura do worker. A unicidade por gravação vem do nonce, não de sal por registro.
  * - Dados associados (AAD): `kv:ai-key:v1:<provedor>`. Um `sealed` copiado para a linha de outro provedor
  *   não decifra: a chave da OpenAI não pode ser trocada pela da Anthropic no banco.
+ * - Segredos nomeados (senha da caixa, token do bot): `sealSecret`/`openSecret` usam a mesma chave derivada e o
+ *   mesmo formato, e só diferem no AAD (`kv:secret:v1:<nome>`). `sealApiKey`/`openApiKey` não mudam.
  * - A versão permite trocar o esquema depois: `openApiKey` escolhe o caminho pelo primeiro byte.
  * - Comparação em tempo constante: a única comparação de segredo é a da tag do GCM, feita pelo OpenSSL
  *   dentro de `decipher.final()`. Este módulo não compara chaves nem segredos por conta própria.
@@ -71,9 +73,13 @@ export function appSecretProblem(secret: string | undefined): string | null {
 /** Argumento inválido para cifrar ou decifrar: chave de API vazia, ou provedor fora de `AI_PROVIDER_IDS`. */
 export class SecretInputError extends Error {
   override name = 'SecretInputError';
-  constructor(readonly reason: 'empty_key' | 'unknown_provider') {
+  constructor(readonly reason: 'empty_key' | 'unknown_provider' | 'unknown_name') {
     // A mensagem nunca inclui o valor recebido: ele pode ser (parte de) um segredo.
-    super(reason === 'empty_key' ? 'a chave de API está vazia' : `provedor de IA desconhecido (use ${AI_PROVIDER_IDS.join(', ')})`);
+    super(
+      reason === 'empty_key' ? 'a chave de API está vazia'
+        : reason === 'unknown_name' ? `nome de segredo desconhecido (use ${SECRET_NAMES.join(', ')})`
+        : `provedor de IA desconhecido (use ${AI_PROVIDER_IDS.join(', ')})`,
+    );
   }
 }
 
@@ -81,6 +87,13 @@ function assertProvider(provider: unknown): asserts provider is AiProviderId {
   if (typeof provider !== 'string' || !(AI_PROVIDER_IDS as readonly string[]).includes(provider)) {
     throw new SecretInputError('unknown_provider');
   }
+}
+
+/** Os nomes de segredo aceitos (o Record garante que a lista acompanha `SecretName`). */
+const SECRET_NAMES = Object.keys({ mail_password: 1, telegram_bot_token: 1 } satisfies Record<SecretName, 1>) as SecretName[];
+
+function assertName(name: unknown): asserts name is SecretName {
+  if (typeof name !== 'string' || !(SECRET_NAMES as readonly string[]).includes(name)) throw new SecretInputError('unknown_name');
 }
 
 function deriveKey(appSecret: string | undefined): Buffer {
@@ -97,6 +110,7 @@ function deriveKey(appSecret: string | undefined): Buffer {
 }
 
 const aad = (provider: AiProviderId) => Buffer.from(`kv:ai-key:v${VERSION}:${provider}`, 'utf8');
+const secretAad = (name: SecretName) => Buffer.from(`kv:secret:v${VERSION}:${name}`, 'utf8');
 
 /**
  * Cifra a chave de API de um provedor. Cada chamada usa um nonce novo. Lança SecretInputError (chave vazia
@@ -105,11 +119,15 @@ const aad = (provider: AiProviderId) => Buffer.from(`kv:ai-key:v${VERSION}:${pro
 export function sealApiKey(plaintext: string, provider: AiProviderId, appSecret: string | undefined): Buffer {
   assertProvider(provider);
   if (typeof plaintext !== 'string' || plaintext.trim() === '') throw new SecretInputError('empty_key');
+  return sealWith(plaintext, aad(provider), appSecret);
+}
+
+function sealWith(plaintext: string, aadBytes: Buffer, appSecret: string | undefined): Buffer {
   const key = deriveKey(appSecret);
   try {
     const nonce = randomBytes(NONCE_BYTES);
     const cipher = createCipheriv('aes-256-gcm', key, nonce, { authTagLength: TAG_BYTES });
-    cipher.setAAD(aad(provider));
+    cipher.setAAD(aadBytes);
     const ciphertext = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
     return Buffer.concat([Buffer.from([VERSION]), nonce, cipher.getAuthTag(), ciphertext]);
   } finally {
@@ -123,13 +141,17 @@ export function sealApiKey(plaintext: string, provider: AiProviderId, appSecret:
  */
 export function openApiKey(sealed: Uint8Array, provider: AiProviderId, appSecret: string | undefined): string {
   assertProvider(provider);
+  return openWith(sealed, aad(provider), appSecret);
+}
+
+function openWith(sealed: Uint8Array, aadBytes: Buffer, appSecret: string | undefined): string {
   const key = deriveKey(appSecret);
   const parts: Buffer[] = [];
   try {
     const buf = Buffer.from(sealed);
     if (buf.length <= HEADER_BYTES || buf[0] !== VERSION) throw new DecryptError();
     const decipher = createDecipheriv('aes-256-gcm', key, buf.subarray(1, 1 + NONCE_BYTES), { authTagLength: TAG_BYTES });
-    decipher.setAAD(aad(provider));
+    decipher.setAAD(aadBytes);
     decipher.setAuthTag(buf.subarray(1 + NONCE_BYTES, HEADER_BYTES));
     parts.push(decipher.update(buf.subarray(HEADER_BYTES)));
     parts.push(decipher.final());
@@ -143,4 +165,17 @@ export function openApiKey(sealed: Uint8Array, provider: AiProviderId, appSecret
     key.fill(0);
     for (const part of parts) part.fill(0);
   }
+}
+
+/** Cifra um segredo nomeado (AAD `kv:secret:v1:<nome>`). Lança SecretInputError (nome desconhecido, valor vazio) ou SecretMissingError. */
+export function sealSecret(plaintext: string, name: SecretName, appSecret: string | undefined): Buffer {
+  assertName(name);
+  if (typeof plaintext !== 'string' || plaintext.trim() === '') throw new SecretInputError('empty_key');
+  return sealWith(plaintext, secretAad(name), appSecret);
+}
+
+/** Decifra um segredo nomeado. Lança SecretInputError (nome desconhecido), SecretMissingError ou DecryptError. */
+export function openSecret(sealed: Uint8Array, name: SecretName, appSecret: string | undefined): string {
+  assertName(name);
+  return openWith(sealed, secretAad(name), appSecret);
 }

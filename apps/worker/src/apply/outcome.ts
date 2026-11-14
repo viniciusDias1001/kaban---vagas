@@ -5,7 +5,7 @@ import {
   type Transition,
 } from '@kv/db';
 import { APPLY_TIMING, type ApplicationStatus, type ApplySiteId, type SitePauseReason } from '@kv/shared';
-import { markAppliedByOwner, moveCardByAi, needsHumanText, setNeedsHuman } from './board';
+import { discardSkipped, markAppliedByOwner, moveCardByAi, needsHumanText, setNeedsHuman } from './board';
 import { nextMidnight } from './day';
 
 /** Estados gravados só antes do clique de envio. */
@@ -168,6 +168,7 @@ export async function recordResult(
     case 'skipped':
       status = await settle(db, row.id, { status: 'skipped', reason: result.reason }, now);
       if (status === 'skipped' && result.reason === 'already_applied') await markAppliedByOwner(db, row.jobId, now);
+      else if (status === 'skipped') await discardSkipped(db, row.jobId, result.reason, now);
       break;
     case 'cancelled':
       status = await settle(db, row.id, { status: 'cancelled', message: CANCELLED_MESSAGE }, now);

@@ -145,18 +145,19 @@ const ColumnView = memo(function ColumnView({ column, index, jobs, total, filter
       animate={{ opacity: 1, y: 0 }}
       transition={{ ...spring, delay: index * 0.045 }}
       style={{ '--col': COLUMN_COLOR[column] } as CSSProperties}
-      className="kv-column flex min-w-52 flex-1 basis-0 flex-col"
+      className="kv-column flex min-w-44 flex-1 basis-0 flex-col"
     >
-      <header className="flex items-center gap-2.5 px-3.5 pb-2.5 pt-3">
-        <span aria-hidden className="kv-dot" />
-        <h2 className="text-sm font-semibold text-ink">{label}</h2>
+      {/* O cabeçalho nunca é mais largo que a coluna: o título encolhe e corta; o botão de ordenar e a contagem não. */}
+      <header className="flex min-w-0 items-center gap-2.5 px-3.5 pb-2.5 pt-3">
+        <span aria-hidden className="kv-dot shrink-0" />
+        <h2 title={label} className="min-w-0 flex-1 truncate text-sm font-semibold text-ink">{label}</h2>
         {showSort && (
           <Tooltip label={byScore ? `Ordenado por nota. ${SORT_HINT}` : `Ordenar por nota. ${SORT_HINT}`}>
             <button
               type="button" data-testid={`sort-${column}`} aria-pressed={byScore} aria-label={`Ordenar ${label} por nota`}
               onClick={() => onToggleSort(column)}
               className={cn(
-                '-my-1 ml-auto grid size-7 shrink-0 cursor-pointer place-items-center rounded-lg transition-colors duration-150 active:scale-95',
+                '-my-1 grid size-7 shrink-0 cursor-pointer place-items-center rounded-lg transition-colors duration-150 active:scale-95',
                 'focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-accent/45',
                 byScore ? 'bg-(--col)/16 text-ink ring-1 ring-inset ring-(color:--col)/40' : 'text-faint hover:bg-surface-3 hover:text-ink',
               )}
@@ -165,7 +166,7 @@ const ColumnView = memo(function ColumnView({ column, index, jobs, total, filter
             </button>
           </Tooltip>
         )}
-        <span className={cn('kv-count', !showSort && 'ml-auto')}>
+        <span className="kv-count shrink-0">
           <span aria-hidden>{filtered ? `${jobs.length}/${total}` : total}</span>
           <span className="sr-only">
             {filtered ? `${jobs.length} de ${total} vagas com o filtro` : `${total} ${plural(total, 'vaga', 'vagas')}`}
@@ -173,7 +174,7 @@ const ColumnView = memo(function ColumnView({ column, index, jobs, total, filter
         </span>
       </header>
       {/* layoutScroll: o Motion desconta a rolagem ao animar a reordenação dos cards. */}
-      <motion.div layoutScroll className="flex min-h-24 flex-1 flex-col gap-2 overflow-y-auto px-2 pb-2 pt-0.5">
+      <motion.div layoutScroll className="flex min-h-24 flex-1 flex-col gap-2 overflow-y-auto overflow-x-hidden px-2 pb-2 pt-0.5">
         {visible.map((j, i) => (
           <JobCard
             key={j.id} job={j} onOpen={onOpen} order={i < LAYOUT_ANIMATED ? order : ''} index={i} compact={compact}
@@ -218,7 +219,7 @@ function BoardSkeleton() {
         <div
           key={c}
           style={{ '--col': COLUMN_COLOR[c] } as CSSProperties}
-          className="kv-column flex min-w-52 flex-1 basis-0 flex-col"
+          className="kv-column flex min-w-44 flex-1 basis-0 flex-col"
         >
           <div className="flex items-center gap-2.5 px-3.5 pb-2.5 pt-3">
             <span aria-hidden className="kv-dot opacity-50" />

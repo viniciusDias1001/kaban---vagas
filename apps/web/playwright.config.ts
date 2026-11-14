@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { defineConfig } from '@playwright/test';
 import { E2E_APPLY_DATA_DIR } from './e2e/apply-data';
 import { E2E_DATABASE_URL, e2eDatabaseName } from './e2e/database';
-import { E2E_API_PORT, E2E_WEB_URL } from './e2e/ports';
+import { E2E_API_PORT, E2E_WEB_PORT, E2E_WEB_URL } from './e2e/ports';
 
 // Falha já ao carregar a config se a URL apontar para um banco que não é de teste.
 e2eDatabaseName(E2E_DATABASE_URL);
@@ -32,8 +32,9 @@ export default defineConfig({
     // Passa pelo proxy do Vite até a API: só responde 200 quando os dois estão no ar. Qualquer API responderia aqui;
     // quem confere que é a do e2e é o globalSetup.
     url: `${E2E_WEB_URL}/api/meta`,
-    // Nunca reaproveita um servidor que já está no ar: com a 5173 ocupada (o `pnpm dev` do dono, por exemplo), o
-    // Playwright recusa começar. A porta do web não muda porque o vite.config.ts a fixa (strictPort) para o `pnpm dev`.
+    // Nunca reaproveita um servidor que já está no ar: com a porta do web ocupada (o `pnpm dev` do dono na 5173, por
+    // exemplo), o Playwright recusa começar. O vite.config.ts fixa a porta de WEB_PORT (strictPort): o Vite nunca troca
+    // de porta sozinho. Para rodar ao lado do `pnpm dev`, E2E_WEB_PORT e E2E_API_PORT (e2e/ports.ts) trocam as duas.
     reuseExistingServer: false,
     timeout: 120_000,
     // E2E_SERVER_LOGS=1 mostra a saída da api, do worker e do web também fora da CI (para investigar uma falha).
@@ -46,6 +47,7 @@ export default defineConfig({
       // O proxy do Vite lê a mesma variável.
       API_PORT: E2E_API_PORT,
       PORT: '',
+      WEB_PORT: E2E_WEB_PORT,
       FAKE_CONNECTORS: '1',
       // IA: nenhum provedor no ambiente (o teste escolhe pela aba Configurações). AI_ALLOW_FAKE só libera o
       // provedor falso entre as opções; ele não usa rede nem chave.
@@ -72,6 +74,9 @@ export default defineConfig({
       // Nunca vazia: sem ela, a API e o worker usariam a pasta de dados de verdade do dono (o perfil do navegador
       // dele). O preparo do banco esvazia esta pasta a cada execução.
       APPLY_DATA_DIR: E2E_APPLY_DATA_DIR,
+      // E-mail: a caixa falsa (um arquivo em `<APPLY_DATA_DIR>/fake-mail`, que o teste enche com `deliverFakeMail`) e o
+      // aviso no celular falso, no lugar do Gmail e do Telegram; a leitura roda a cada 3 s. Nada sai da máquina.
+      FAKE_MAIL: '1',
     },
   },
 });

@@ -1,6 +1,6 @@
 import {
   API_KEY_PATTERN, APPLY_SETTINGS_LIMITS, APPLY_SITE_IDS, COMPANY_SLUG_PATTERN, MODEL_ID_PATTERN, SETTINGS_LIMITS, type AiKeyMetaDto,
-  type ApplyAiAnswers, type ApplyDailyCaps, type ApplyMode, type ApplyResumeMode, type ApplySiteId, type SettingSource,
+  type ApplyAiAnswers, type ApplyDailyCaps, type EmailFactsMode, type EmailMoveMode, type PhoneAlertChannel, type ApplyMode, type ApplyResumeMode, type ApplySiteId, type SettingSource,
   type SettingsDto, type SettingsPatch, type TestConnectionOutcome,
 } from '@kv/shared/client';
 
@@ -44,6 +44,12 @@ export interface SettingsForm {
    * vazio quando o formulário é descartado ou relido, então o aviso reaparece se o modo não foi salvo.
    */
   applyRealConfirmed: ApplySiteId[];
+  emailEnabled: boolean;
+  emailMoveMode: EmailMoveMode;
+  emailFactsMode: EmailFactsMode;
+  emailAiDrafts: boolean;
+  /** O canal do aviso no celular. O token e o chat não estão aqui: têm botões próprios (o token nunca vira estado da tela). */
+  phoneAlertChannel: PhoneAlertChannel;
 }
 
 export const APPLY_CAP_KEYS = ['linkedin', 'greenhouse', 'lever', 'fake', 'total', 'linkedinViews'] as const satisfies readonly (keyof ApplyDailyCaps)[];
@@ -77,6 +83,11 @@ export function formFromSettings(dto: SettingsDto): SettingsForm {
     applyBlockedTerms: [...dto.apply.blockedTerms.value],
     applyBlockedTermsDraft: '',
     applyRealConfirmed: [],
+    emailEnabled: dto.email.enabled.value,
+    emailMoveMode: dto.email.moveMode.value,
+    emailFactsMode: dto.email.factsMode.value,
+    emailAiDrafts: dto.email.aiDrafts.value,
+    phoneAlertChannel: dto.email.phoneAlertChannel.value,
   };
 }
 
@@ -216,6 +227,7 @@ export function toSettingsPatch(form: SettingsForm, dto: SettingsDto): SettingsP
   if (!sameList(greenhouse, dto.sources.greenhouseBoards.value)) patch.greenhouseBoards = greenhouse;
   if (!sameList(lever, dto.sources.leverCompanies.value)) patch.leverCompanies = lever;
   addApplyChanges(form, dto, patch);
+  addEmailChanges(form, dto, patch);
   return patch;
 }
 
@@ -247,7 +259,17 @@ function addApplyChanges(form: SettingsForm, dto: SettingsDto, patch: SettingsPa
   if (!sameList(terms, apply.blockedTerms.value)) patch.applyBlockedTerms = terms;
 }
 
-export const isDirty = (form: SettingsForm, dto: SettingsDto): boolean => Object.keys(toSettingsPatch(form, dto)).length > 0;
+/** Os campos de e-mail que mudaram (duas chaves e três escolhas fechadas: sem erro de validação possível). */
+function addEmailChanges(form: SettingsForm, dto: SettingsDto, patch: SettingsPatch): void {
+  const email = dto.email;
+  if (form.emailEnabled !== email.enabled.value) patch.emailEnabled = form.emailEnabled;
+  if (form.emailMoveMode !== email.moveMode.value) patch.emailMoveMode = form.emailMoveMode;
+  if (form.emailFactsMode !== email.factsMode.value) patch.emailFactsMode = form.emailFactsMode;
+  if (form.emailAiDrafts !== email.aiDrafts.value) patch.emailAiDrafts = form.emailAiDrafts;
+  if (form.phoneAlertChannel !== email.phoneAlertChannel.value) patch.phoneAlertChannel = form.phoneAlertChannel;
+}
+
+export const isDirty =(form: SettingsForm, dto: SettingsDto): boolean => Object.keys(toSettingsPatch(form, dto)).length > 0;
 
 /** Rótulo da origem de um valor. */
 export const SOURCE_LABELS: Record<SettingSource, string> = {
